@@ -1,0 +1,21 @@
+[Unit]
+Description=Zog station production bounded controller evaluation (%i)
+Requires=zog-station-production-root-control.service
+After=zog-station-production-root-control.service
+ConditionPathExists=/etc/zog/station-production-%i.env
+
+[Service]
+Type=oneshot
+User=%i
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/zog/station-production-%i.env
+ExecStart=/usr/bin/python3.12 -B -m zog.host_deploy.station_production evaluate --directory ${ZOG_STATION_PLAN_DIRECTORY} --controller-binding ${ZOG_STATION_CONTROLLER_BINDING}
+TimeoutStartSec=90s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=no
+ReadWritePaths=%h
+StandardOutput=journal
+StandardError=journal

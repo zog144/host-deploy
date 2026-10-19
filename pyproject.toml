@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=80,<83"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "host-deploy"
+dynamic = ["version"]
+requires-python = ">=3.11"
+dependencies = ["boto3>=1.34,<2"]
+license = "BSD-3-Clause OR GPL-3.0-only"
+license-files = ["LICENSE", "LICENSES/*.txt", "THIRD-PARTY-NOTICES.md"]
+# Component build only; publishing this source is not a PyPI release.
+
+[project.scripts]
+host-deploy = "zog.host_deploy.cli:main"
+host-deploy-systemd = "zog.host_deploy.runner:main"
+host-deploy-gateway = "zog.host_deploy.gateway.consumer:main"
+host-deploy-compiler-rpc = "zog.host_deploy.gateway.compiler_rpc:main"
+host-deploy-station-production = "zog.host_deploy.station_production:main"
+host-deploy-rpc-identity-plan = "zog.host_deploy.compiler_rpc_identity:main"
+host-deploy-cert-delivery = "zog.host_deploy.certificate_delivery:main"
+host-deploy-cert-renewal = "zog.host_deploy.certificate_renewal_timer:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "zog.host_deploy.__version__"}
+
+[tool.setuptools.package-data]
+"zog.host_deploy" = ["beacon_sources.json", "beacon_installation/*", "station-portal@.service", "station-evaluator@.service", "station-evaluator@.timer", "host-deploy-cert-delivery@.service", "certificate-renewal@.service", "certificate-renewal@.timer"]
+"zog.host_deploy.gateway" = ["*.service"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["zog.host_deploy*"]
+namespaces = true

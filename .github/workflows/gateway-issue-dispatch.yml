@@ -1,0 +1,83 @@
+name: Gateway issue dispatcher
+on:
+  issues:
+    types: [opened]
+permissions:
+  contents: read
+# Deployment values are repository-admin configuration, never issue parameters.
+env:
+  ZOG_GATEWAY_DISPATCH_REVISION: ${{ vars.ZOG_GATEWAY_DISPATCH_REVISION }}
+  ZOG_GATEWAY_AUTHORIZED_ACTORS: ${{ vars.ZOG_GATEWAY_AUTHORIZED_ACTORS }}
+  ZOG_GATEWAY_ALLOWED_OPERATIONS: ${{ vars.ZOG_GATEWAY_ALLOWED_OPERATIONS }}
+  ZOG_GATEWAY_AWS_REGION: ${{ vars.ZOG_GATEWAY_AWS_REGION }}
+  ZOG_GATEWAY_ROLE_ARN: ${{ vars.ZOG_GATEWAY_ROLE_ARN }}
+  ZOG_GATEWAY_QUEUE_URL: ${{ vars.ZOG_GATEWAY_QUEUE_URL }}
+jobs:
+  validate:
+    if: github.run_attempt == 1 && contains(github.event.issue.body, '<!-- zog-gateway-request:v1 -->') && contains(fromJSON(vars.ZOG_GATEWAY_AUTHORIZED_ACTORS || '[]'), github.actor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require immutable dispatcher selection
+        shell: bash
+        run: '[[ "$ZOG_GATEWAY_DISPATCH_REVISION" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Checkout reviewed dispatcher
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          ref: ${{ vars.ZOG_GATEWAY_DISPATCH_REVISION }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, Node 24
+        with:
+          python-version: '3.12'
+      - name: Verify checkout and authorize configured request
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          test "$(git rev-parse HEAD)" = "$ZOG_GATEWAY_DISPATCH_REVISION"
+          python -B -m zog.host_deploy.gateway.github_configuration --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/zog-gateway-request.json"
+  submit:
+    needs: validate
+    if: github.run_attempt == 1 && vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Require immutable dispatcher selection
+        shell: bash
+        run: '[[ "$ZOG_GATEWAY_DISPATCH_REVISION" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Checkout reviewed dispatcher
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          ref: ${{ vars.ZOG_GATEWAY_DISPATCH_REVISION }}
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, Node 24
+        with:
+          python-version: '3.12'
+      - name: Verify checkout and authorize configured request
+        shell: bash
+        env:
+          PYTHONPATH: src
+        run: |
+          test "$(git rev-parse HEAD)" = "$ZOG_GATEWAY_DISPATCH_REVISION"
+          python -B -m zog.host_deploy.gateway.github_configuration --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/zog-gateway-request.json"
+      - name: Install pinned SQS client
+        run: python -m pip install 'boto3==1.43.114'
+      - name: Obtain short-lived submission credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.ZOG_GATEWAY_ROLE_ARN }}
+          aws-region: ${{ vars.ZOG_GATEWAY_AWS_REGION }}
+          role-duration-seconds: 900
+          role-session-name: zog-github-${{ github.run_id }}
+          mask-aws-account-id: true
+      - name: Submit the validated request once
+        env:
+          PYTHONPATH: src
+        run: python -B -m zog.host_deploy.gateway.github_dispatch submit --request "$RUNNER_TEMP/zog-gateway-request.json" --queue-url "$ZOG_GATEWAY_QUEUE_URL"

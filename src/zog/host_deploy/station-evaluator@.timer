@@ -1,0 +1,12 @@
+[Unit]
+Description=Zog station production controller reconciliation timer (%i)
+ConditionPathExists=/etc/zog/station-production-%i.env
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+AccuracySec=10s
+Unit=station-evaluator@%i.service
+
+[Install]
+WantedBy=timers.target

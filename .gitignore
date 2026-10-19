@@ -1,0 +1,9 @@
+
+# Generated Python distribution artifacts
+*.whl
+/dist/
+/build/
+*.egg-info/
+
+# Generate example transport payloads outside the checkout
+/examples/*.zip

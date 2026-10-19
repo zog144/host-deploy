@@ -1,0 +1,10 @@
+{
+  "image_id": "ami-REPLACE_WITH_REVIEWED_AMI",
+  "instance_type": "t3.micro",
+  "subnet_id": "subnet-REPLACE_WITH_SUBNET",
+  "security_group_id": "sg-REPLACE_WITH_SECURITY_GROUP",
+  "instance_profile": "REPLACE_WITH_APPROVED_INSTANCE_PROFILE",
+  "root_device": "/dev/xvda",
+  "volume_gib": 8,
+  "maximum_uptime_minutes": 30
+}

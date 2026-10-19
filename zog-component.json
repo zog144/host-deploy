@@ -1,0 +1,37 @@
+{
+  "schema": 2,
+  "program": "host-deploy",
+  "python_package": "zog.host_deploy",
+  "version": "0.10.6",
+  "scripts": {
+    "host-deploy": "zog.host_deploy.cli:main",
+    "host-deploy-systemd": "zog.host_deploy.runner:main",
+    "host-deploy-gateway": "zog.host_deploy.gateway.consumer:main",
+    "host-deploy-compiler-rpc": "zog.host_deploy.gateway.compiler_rpc:main",
+    "host-deploy-station-production": "zog.host_deploy.station_production:main",
+    "host-deploy-rpc-identity-plan": "zog.host_deploy.compiler_rpc_identity:main",
+    "host-deploy-cert-delivery": "zog.host_deploy.certificate_delivery:main",
+    "host-deploy-cert-renewal": "zog.host_deploy.certificate_renewal_timer:main"
+  },
+  "component_dependencies": [],
+  "external_dependencies": [
+    "boto3>=1.34,<2"
+  ],
+  "package_data": [
+    "beacon_sources.json",
+    "beacon_installation/*",
+    "station-portal@.service",
+    "station-evaluator@.service",
+    "station-evaluator@.timer",
+    "host-deploy-cert-delivery@.service",
+    "certificate-renewal@.service",
+    "certificate-renewal@.timer",
+    "gateway/*.service"
+  ],
+  "license_notice_paths": [
+    "LICENSE",
+    "LICENSES/BSD-3-Clause.txt",
+    "LICENSES/GPL-3.0-only.txt",
+    "THIRD-PARTY-NOTICES.md"
+  ]
+}
