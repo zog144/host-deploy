@@ -155,3 +155,14 @@ never supplies project paths, controller sockets, UID/GID values or resource lim
 This prevents a request for one lane from observing or resuming a project-local
 pipeline with the same 32-hex ID in another lane. Host-level diagnostics remain
 lane-independent.
+
+
+## 2026-10-19 generic pipeline restriction
+
+The finite `build.submit` task selector now permits only
+`xcb-support-image-v1`, representing five explicitly selected XCB support
+recipes under a reviewed schema-2 server-owned catalogue. Maintained workers
+(`stages`, `glibc-final`, `final-compiler`, etc.) cannot appear as
+generic task names. Callers may supply only the task key, exact image-build
+source commit and gateway lane; generation/recipes/targets/pin and stage IDs
+are controller-owned. See [Generic pipeline dispatch](GATEWAY-GENERIC-PIPELINE.md).

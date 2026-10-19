@@ -70,7 +70,7 @@ def gateway_request(workspace_id, operation="build.status", request_id=REQUEST_I
             "repository": "zog144/image-build",
             "commit": SOURCE_REVISION,
         }
-        value["parameters"] = {"lane": "lane-a", "task": "final-compiler"}
+        value["parameters"] = {"lane": "lane-a", "task": "xcb-support-image-v1"}
     return value
 
 
@@ -240,53 +240,81 @@ def test_prepare_image_build_dispatch_freezes_lane_host_and_remote_request(
     assert again_state["history"] == state["history"]
 
 
-def test_build_submit_is_disabled_until_recipe_snapshot_support(tmp_path):
-    gateway, workspace_id = prepared_gateway(tmp_path)
-    value = gateway_request(workspace_id, operation="build.submit")
-    admit(gateway, value)
-
-    with pytest.raises(RuntimeError, match="recipe-snapshot materialization"):
-        binding_for_request(gateway, value["request_id"])
-    assert load_dispatch(gateway, value["request_id"]) is None
-    assert load_request(gateway, value["request_id"])["states"]["dispatch"] == "not_started"
-
-
-def test_build_submit_remains_disabled_even_with_valid_task_catalogue(tmp_path):
-    gateway, workspace_id = prepared_gateway(tmp_path)
-    value = gateway_request(workspace_id, operation="build.submit")
-    admit(gateway, value)
-    path = tmp_path / "tasks.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema": 1,
-                "tasks": {
-                    "final-compiler": {
-                        "source_repository": "zog144/image-build",
-                        "source_revision": SOURCE_REVISION,
-                        "arguments": {
-                            "mode": "image",
-                            "selection": "e" * 64,
-                            "targets": ["gcc", "binutils"],
-                        },
-                    }
+def _reviewed_generic_catalogue(tmp_path):
+    value = {
+        "schema": 2,
+        "tasks": {
+            "xcb-support-image-v1": {
+                "source_repository": "zog144/image-build",
+                "source_revision": SOURCE_REVISION,
+                "lane": "lane-a",
+                "lane_owner": "host-a",
+                "monthly_pin_repository_path": MONTHLY_PIN_PATH,
+                "monthly_pin_identity": PIN,
+                "pin_date": "2026-10-01",
+                "entries": [
+                    {"id": name, "project": name.removesuffix("-final"),
+                     "recipe": name.removesuffix("-final") + "/stages/final"}
+                    for name in (
+                        "xcb-util-final", "xcb-util-image-final",
+                        "xcb-util-keysyms-final", "xcb-util-wm-final",
+                        "xcb-util-xrm-final",
+                    )
+                ],
+                "arguments": {
+                    "mode": "image",
+                    "selection": "e" * 64,
+                    "targets": [
+                        "xcb-util-final", "xcb-util-image-final",
+                        "xcb-util-keysyms-final", "xcb-util-wm-final",
+                        "xcb-util-xrm-final",
+                    ],
                 },
             }
-        )
-    )
-    catalogue, identity = load_task_catalogue(path)
+        },
+    }
+    path = tmp_path / "tasks.json"
+    path.write_text(json.dumps(value))
+    return load_task_catalogue(path)
 
-    with pytest.raises(RuntimeError, match="recipe-snapshot materialization"):
-        prepare_image_build_dispatch(
-            gateway,
-            value["request_id"],
-            task_catalogue=catalogue,
-            task_catalogue_identity=identity,
-            at="2026-10-09T12:00:02Z",
-        )
+
+def test_generic_submit_requires_reviewed_task_catalogue(tmp_path):
+    gateway, workspace_id = prepared_gateway(tmp_path)
+    value = gateway_request(workspace_id, operation="build.submit")
+    admit(gateway, value)
+    with pytest.raises(RuntimeError, match="reviewed task catalogue"):
+        binding_for_request(gateway, value["request_id"])
     assert load_dispatch(gateway, value["request_id"]) is None
-    assert load_request(gateway, value["request_id"])["states"]["dispatch"] == "not_started"
 
+
+def test_generic_submit_freezes_capability_first_and_bound_task(tmp_path):
+    gateway, workspace_id = prepared_gateway(tmp_path)
+    value = gateway_request(workspace_id, operation="build.submit")
+    admit(gateway, value)
+    catalogue, identity = _reviewed_generic_catalogue(tmp_path)
+    state, record = prepare_image_build_dispatch(
+        gateway, value["request_id"],
+        task_catalogue=catalogue, task_catalogue_identity=identity)
+    binding = record["binding"]
+    assert state["states"]["dispatch"] == "prepared"
+    assert binding["remote_request"]["operation"] == "capabilities.inspect"
+    assert binding["remote_request"]["arguments"] == {}
+    assert binding["task"]["arguments"]["targets"] == [
+        "xcb-util-final", "xcb-util-image-final",
+        "xcb-util-keysyms-final", "xcb-util-wm-final", "xcb-util-xrm-final",
+    ]
+    assert binding["task_catalogue_identity"] == identity
+    same_state, again = prepare_image_build_dispatch(
+        gateway, value["request_id"],
+        task_catalogue=catalogue, task_catalogue_identity=identity)
+    assert again == record
+    assert same_state["states"] == state["states"]
+    changed = json.loads(json.dumps(catalogue))
+    changed["tasks"]["xcb-support-image-v1"]["arguments"]["selection"] = "f"*64
+    with pytest.raises(LedgerConflict, match="different inputs"):
+        prepare_image_build_dispatch(
+            gateway, value["request_id"], task_catalogue=changed,
+            task_catalogue_identity="sha256:"+"f"*64)
 
 def test_prepared_dispatch_refuses_lane_or_host_substitution(tmp_path):
     gateway, workspace_id = prepared_gateway(tmp_path)

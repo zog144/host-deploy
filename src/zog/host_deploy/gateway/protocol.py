@@ -24,14 +24,8 @@ OPERATIONS = frozenset({
 
 # These are maintained image-build worker entry points. The later execution adapter
 # owns all host paths and argv construction; requests select a name only.
-BUILD_TASKS = frozenset({
-    "stages",
-    "native-stage",
-    "glibc-final",
-    "glibc-publish",
-    "final-math",
-    "final-compiler",
-})
+# Generic pipeline selections only; maintained image-build workers are excluded.
+BUILD_TASKS = frozenset({"xcb-support-image-v1"})
 
 DIAGNOSTICS = frozenset({"host.runtime", "build.pipeline"})
 

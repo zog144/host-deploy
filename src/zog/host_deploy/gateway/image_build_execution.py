@@ -382,6 +382,14 @@ summary = {
     "uncertainty": bool(result.get("uncertainty")),
     "allowed_next_operations": list(result.get("allowed_next_operations") or [])[:32],
     "missing_evidence_count": len(result.get("missing_evidence") or []),
+    "recipe_identity": result.get("recipe_identity"),
+    "artifacts": {
+        name: result.get("artifacts", {}).get(name)
+        for name in ("remote_capabilities", "recipe_snapshot", "contract",
+                     "pin_date", "monthly_identity", "inventory_digest")
+        if isinstance(result.get("artifacts"), dict)
+        and name in result["artifacts"]
+    },
 }
 receipt = {
     "schema": "host-deploy-image-build-receipt-v1",
@@ -517,6 +525,11 @@ def submit_prepared(gateway_root, request_id, *, host_factory=Host, at=None):
         raise RuntimeError(
             "dispatch is not safely submit-able; reconcile existing evidence instead"
         )
+    if binding["remote_request"]["operation"] == "capabilities.inspect":
+        raise RuntimeError(
+            "generic build requires supervised multi-stage advancement; "
+            "single SSM dispatch-submit is prohibited"
+        )
     if binding["schema"] != 3:
         raise RuntimeError(
             "legacy dependency-unbound dispatch cannot be newly submitted; "
@@ -622,10 +635,12 @@ def parse_receipt(text, binding):
         "allowed_next_operations",
         "missing_evidence_count",
     }
+    auxiliary = {"recipe_identity", "artifacts"}
     remote = binding["remote_request"]
     if (
         not isinstance(result, dict)
-        or set(result) != result_fields
+        or not result_fields.issubset(result)
+        or set(result) - result_fields - auxiliary
         or result["schema"] != "image-build-remote-result-v1"
         or result["operation_id"] != binding["request_id"]
         or result["operation_type"] != remote["operation"]
@@ -639,6 +654,13 @@ def parse_receipt(text, binding):
         or len(result["allowed_next_operations"]) > 32
     ):
         raise RuntimeError("image-build result summary differs from dispatch binding")
+    if ("recipe_identity" in result and result["recipe_identity"] is not None
+            and (not isinstance(result["recipe_identity"], str)
+                 or not re.fullmatch(r"sha256:[a-f0-9]{64}", result["recipe_identity"]))):
+        raise RuntimeError("invalid image-build snapshot identity")
+    if "artifacts" in result and (not isinstance(result["artifacts"], dict)
+            or len(_canonical(result["artifacts"])) > 32000):
+        raise RuntimeError("image-build receipt artifacts are not bounded")
     return receipt
 
 

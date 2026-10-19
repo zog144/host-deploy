@@ -51,10 +51,12 @@ The adapter maps:
 - `build.resume -> pipeline.resume`
 - `build.cancel -> pipeline.cancel`
 
-`build.submit` is intentionally rejected in this pass. Image-build has not yet
-published the producer-owned operation that materializes/selects an immutable
-recipe snapshot for remote submission, and maintained worker task names are not
-aliases for generic `pipeline.submit` target lists.
+`build.submit` is now a **source-gated generic pipeline task only**:
+`xcb-support-image-v1`. The generic coordinator freezes a separately
+approved catalogue, performs exact deployed `capabilities.inspect`, then
+`recipes.snapshot`, `pipeline.submit`, and `pipeline.inspect` with
+different durable operation IDs. See [Generic pipeline dispatch](GATEWAY-GENERIC-PIPELINE.md).
+Maintained worker task names remain forbidden.
 
 The image-build remote `operation_id` is the gateway `request_id`, so duplicate
 or recovered callers converge on the same image-build operation identity.
@@ -133,8 +135,11 @@ boundary. It requires an already-prepared binding and refuses a submitted,
 submitting, or uncertain record. `dispatch-observe` only inspects the previously
 recorded SSM `CommandId`.
 
-The persistent SQS consumer still does **not** automatically prepare or submit
-admitted requests.
+The persistent SQS consumer remains admission-only **by default**.
+It has a separate opt-in `--advance-reviewed-generic` mode requiring an
+absolute, root-owned finite catalogue. It advances at most one durable
+generic stage per polling iteration. No production instance is configured
+to use this opt-in by this source change.
 
 ## Remaining live gates
 

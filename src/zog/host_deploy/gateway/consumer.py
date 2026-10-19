@@ -29,6 +29,7 @@ from .adoption import (
 from .image_build_dispatch import prepare_image_build_dispatch
 from .image_build_execution import observe_submitted, submit_prepared
 from .task_catalogue import load as load_task_catalogue
+from .generic_pipeline import advance as advance_generic, status as generic_status
 from .protocol import RequestProtocolError, loads_request
 from .queues import (
     AWS_REGION,
@@ -58,12 +59,55 @@ def _receive_count(message):
 
 
 class GatewayConsumer:
-    def __init__(self, state_directory, primary_target, dead_letter_target, *, client):
+    def __init__(self, state_directory, primary_target, dead_letter_target, *,
+                 client, approved_generic_catalogue=None,
+                 approved_catalogue_identity=None):
         self.state_directory = Path(state_directory)
         self.client = client
         self.configuration = verify_queue_configuration(
             client, primary_target, dead_letter_target
         )
+        if ((approved_generic_catalogue is None)
+                != (approved_catalogue_identity is None)):
+            raise ValueError("reviewed generic catalogue must have exact digest")
+        self.approved_generic_catalogue = approved_generic_catalogue
+        self.approved_catalogue_identity = approved_catalogue_identity
+
+    def _advance_one_reviewed(self):
+        """At most one stage across durable admitted requests per iteration.
+
+        Operator-enabled only; status-only and external-observed-state jobs
+        continue using their separate explicit administrative commands.
+        """
+        if self.approved_generic_catalogue is None:
+            return None
+        root = self.state_directory / "requests"
+        if not root.exists():
+            return None
+        for candidate in sorted(root.iterdir()):
+            if not candidate.is_dir() or candidate.is_symlink():
+                raise RuntimeError("unsafe gateway request directory")
+            request_id = candidate.name
+            state = load_request(self.state_directory, request_id)
+            if (state["request"]["operation"] != "build.submit"
+                    or state["states"]["admission"] != "admitted"):
+                continue
+            dispatch = load_dispatch(self.state_directory, request_id)
+            if dispatch is None:
+                prepare_image_build_dispatch(
+                    self.state_directory, request_id,
+                    task_catalogue=self.approved_generic_catalogue,
+                    task_catalogue_identity=self.approved_catalogue_identity,
+                )
+                return {"request_id": request_id, "action": "prepared"}
+            if dispatch["phase"] != "prepared":
+                continue
+            current = generic_status(self.state_directory, request_id)
+            if current["phase"] in ("uncertain", "failed", "completed"):
+                continue
+            advance_generic(self.state_directory, request_id)
+            return {"request_id": request_id, "action": "advanced"}
+        return None
 
     @property
     def primary_url(self):
@@ -174,9 +218,11 @@ class GatewayConsumer:
         messages = response.get("Messages", [])
         if not messages:
             reconcile_all(self.state_directory)
+            self._advance_one_reviewed()
             return None
         result = self.handle_message(messages[0])
         reconcile_all(self.state_directory)
+        self._advance_one_reviewed()
         return result
 
     def run(self):
@@ -223,6 +269,14 @@ def main(argv=None):
         default=os.environ.get("ZOG_BUILD_DEAD_LETTER_QUEUE_URL"),
     )
     run.add_argument("--once", action="store_true")
+    run.add_argument(
+        "--advance-reviewed-generic", action="store_true",
+        help="Explicit reviewed-operator opt-in to supervised generic stages",
+    )
+    run.add_argument(
+        "--approved-task-catalogue",
+        help="Absolute root-owned, readonly finite generic build catalogue",
+    )
 
     status = commands.add_parser("queue-status")
     status.add_argument(
@@ -272,6 +326,11 @@ def main(argv=None):
     dispatch_observe = commands.add_parser("dispatch-observe")
     dispatch_observe.add_argument("request_id")
 
+    generic_step = commands.add_parser("generic-advance")
+    generic_step.add_argument("request_id")
+    generic_read = commands.add_parser("generic-status")
+    generic_read.add_argument("request_id")
+
     commands.add_parser("reconcile")
 
     arguments = parser.parse_args(argv)
@@ -293,8 +352,19 @@ def main(argv=None):
                 )
             )
             return
+        if arguments.approved_task_catalogue and not arguments.advance_reviewed_generic:
+            parser.error("reviewed generic catalogue requires explicit opt-in")
+        catalogue = None
+        digest = None
+        if arguments.advance_reviewed_generic:
+            if not arguments.approved_task_catalogue:
+                parser.error("opt-in requires approved task catalogue")
+            catalogue, digest = load_task_catalogue(
+                arguments.approved_task_catalogue, require_root_owned=True)
         consumer = GatewayConsumer(
-            state_directory, primary, dead_letter, client=client
+            state_directory, primary, dead_letter, client=client,
+            approved_generic_catalogue=catalogue,
+            approved_catalogue_identity=digest,
         )
         if arguments.once:
             with dispatcher_lock(state_directory):
@@ -378,7 +448,7 @@ def main(argv=None):
         catalogue_identity = None
         if arguments.task_catalogue:
             catalogue, catalogue_identity = load_task_catalogue(
-                arguments.task_catalogue
+                arguments.task_catalogue, require_root_owned=True
             )
         state, record = prepare_image_build_dispatch(
             state_directory,
@@ -430,6 +500,15 @@ def main(argv=None):
                 sort_keys=True,
             )
         )
+        return
+
+    if arguments.command in {"generic-advance", "generic-status"}:
+        # Intentional supervised operator action; no SQS consumer side effect.
+        with dispatcher_lock(state_directory):
+            value = (advance_generic(state_directory, arguments.request_id)
+                     if arguments.command == "generic-advance"
+                     else generic_status(state_directory, arguments.request_id))
+        print(json.dumps(value, sort_keys=True))
         return
 
     if arguments.command == "reconcile":

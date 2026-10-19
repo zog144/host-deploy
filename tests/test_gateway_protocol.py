@@ -39,7 +39,7 @@ def request(operation, parameters, **extra):
     return value
 
 
-def submit(task="final-compiler"):
+def submit(task="xcb-support-image-v1"):
     return request(
         "build.submit",
         {"lane": "rebuild-oct1", "task": task},
@@ -137,7 +137,7 @@ def test_request_digest_is_canonical_and_input_is_detached():
     assert request_digest(first) == request_digest(second)
     validated = validate_request(first)
     validated["parameters"]["task"] = "changed"
-    assert first["parameters"]["task"] == "final-compiler"
+    assert first["parameters"]["task"] == "xcb-support-image-v1"
 
 
 def test_initial_state_binds_exact_request_and_has_separate_stages():

@@ -30,7 +30,7 @@ def intent():
             "repository": "zog144/image-build",
             "commit": COMMIT,
         },
-        "parameters": {"lane": "rebuild-oct1", "task": "final-compiler"},
+        "parameters": {"lane": "rebuild-oct1", "task": "xcb-support-image-v1"},
     }
 
 

@@ -79,9 +79,28 @@ def _remote_request(
             "external observed state permits only build.status"
         )
     if operation == "build.submit":
-        raise RuntimeError(
-            "build.submit is disabled until image-build owns immutable recipe-snapshot materialization"
+        from .task_catalogue import select
+        if task_catalogue is None or task_catalogue_identity is None:
+            raise RuntimeError("generic pipeline submit requires reviewed task catalogue")
+        task = select(
+            task_catalogue, parameters["task"],
+            repository=source["repository"], revision=source["revision"],
+            lane=parameters["lane"],
+            monthly_pin_repository_path=lane_spec["monthly_pin_repository_path"],
+            monthly_pin_identity=lane_spec["monthly_pin_identity"],
         )
+        if task["lane_owner"] != lane_spec["provenance_host_id"]:
+            raise RuntimeError("generic pipeline task is not owned by managed lane")
+        if gateway_request["source"] != {
+            "repository": source["repository"], "commit": source["revision"]
+        }:
+            raise RuntimeError("generic task source differs from approved request")
+        return ({
+            "schema": REMOTE_SCHEMA,
+            "operation_id": gateway_request["request_id"],
+            "operation": "capabilities.inspect",
+            "source": source, "arguments": {},
+        }, {"task": task, "task_catalogue_identity": task_catalogue_identity})
 
 
     mapping = {
