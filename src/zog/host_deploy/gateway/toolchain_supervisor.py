@@ -13,7 +13,7 @@ from .image_build_execution import (
     CONTROL_TIMEOUT_SECONDS, parse_receipt, producer_runtime_preflight,
     remote_script,
 )
-from .ledger import request_lock
+from .ledger import request_lock, load_request
 from .toolchain_journal import (
     COMPLETE, PHASES, RECOVERY, binding, event, initial, persist, read,
     stage_binding,
@@ -179,11 +179,50 @@ def authorize_recovery(root, request_id):
         return persist(directory, journal)
 
 
+def _guard_lane(root, request_id, bound):
+    """A workspace/lane can have only one active typed compiler operation.
+
+    The dispatcher_lock is held by every operator/consumer mutation caller.
+    Completed jobs relinquish the lane; uncertain and failed jobs retain it
+    for explicit owner recovery rather than silently allowing replacement.
+    """
+    request_root = Path(root) / "requests"
+    if not request_root.exists():
+        return
+    for other in sorted(request_root.iterdir()):
+        if other.is_symlink() or not other.is_dir():
+            raise RuntimeError("unsafe lane admission directory")
+        if other.name == request_id:
+            continue
+        prior = load_request(root, other.name)
+        candidate = prior["request"]
+        if (prior["states"]["admission"] != "admitted"
+                or candidate["operation"] != "toolchain.submit"
+                or candidate["workspace_id"] != bound["workspace_id"]
+                or candidate["parameters"]["lane"] != bound["lane"]):
+            continue
+        path = other / "typed-toolchain.json"
+        if path.is_symlink():
+            raise RuntimeError("unsafe concurrent typed toolchain journal")
+        if path.exists():
+            other_bound = binding(root, other.name)
+            existing = read(other, other.name, other_bound)
+            if existing is None or existing["status"] != "completed":
+                raise RuntimeError(
+                    "workspace lane contains unfinished typed toolchain job"
+                )
+        elif other.name < request_id:
+            raise RuntimeError(
+                "earlier admitted typed toolchain task owns lane selection"
+            )
+
+
 def advance(root, request_id, *, host_factory=Host):
     bound = binding(root, request_id)
     with request_lock(root, request_id) as directory:
         journal = read(directory, request_id, bound)
         if journal is None:
+            _guard_lane(root, request_id, bound)
             return persist(directory, initial(request_id, bound))
         if journal["status"] in (*COMPLETE, "awaiting_recovery"):
             return journal
