@@ -239,3 +239,33 @@ def test_journal_tampering_blocks_recovery(tmp_path, monkeypatch):
     journal.persist(tmp_path, state)
     with pytest.raises(RuntimeError, match="integrity"):
         supervisor.advance(tmp_path, GATEWAY, host_factory=host)
+
+
+def test_same_workspace_lane_blocks_competing_toolchain(tmp_path, monkeypatch):
+    other_id = "b" * 32
+    current_id = "a" * 32
+    directory = tmp_path / "requests" / other_id
+    directory.mkdir(parents=True)
+    frozen = frozen_binding()
+    frozen["workspace_id"] = "c" * 32
+    frozen["lane"] = "compiler"
+    monkeypatch.setattr(
+        supervisor, "load_request",
+        lambda root, identity: {
+            "states": {"admission": "admitted"},
+            "request": {"operation": "toolchain.submit",
+                        "workspace_id": frozen["workspace_id"],
+                        "parameters": {"lane": frozen["lane"]}},
+        },
+    )
+    monkeypatch.setattr(supervisor, "binding", lambda root, identity: frozen)
+    active = journal.initial(other_id, frozen)
+    journal.persist(directory, active)
+    with pytest.raises(RuntimeError, match="unfinished"):
+        supervisor._guard_lane(tmp_path, current_id, frozen)
+    active["status"] = "completed"
+    journal.persist(directory, active)
+    supervisor._guard_lane(tmp_path, current_id, frozen)
+    (directory / journal.FILE).unlink()
+    with pytest.raises(RuntimeError, match="earlier"):
+        supervisor._guard_lane(tmp_path, "f" * 32, frozen)
