@@ -118,6 +118,7 @@ def fixture(tmp_path, monkeypatch):
         commands = {}
         sends = 0
         timeout = False
+        failure_publish = False
 
         def __init__(self, configuration):
             pass
@@ -128,7 +129,15 @@ def fixture(tmp_path, monkeypatch):
                 raise ConnectionError("caller connection lost during SendCommand")
             command = "ssm-" + str(self.__class__.sends)
             stage = json.loads(script)
-            self.__class__.commands[command] = fake_result(stage)
+            result = fake_result(stage)
+            if (self.__class__.failure_publish
+                    and stage["test_phase"] == "final-libc-publish"
+                    and stage["remote_request"]["operation"] == "toolchain.inspect"):
+                result["status"] = "failed"
+                result["terminal_outcome"] = "failure"
+                result["allowed_next_operations"] = [
+                    "toolchain.inspect", "toolchain.submit"]
+            self.__class__.commands[command] = result
             return command
 
         def inspect_command(self, command_id):
@@ -200,3 +209,33 @@ def test_explicit_resume_is_required(tmp_path, monkeypatch):
     assert event["request"]["operation"] == "toolchain.resume"
     assert event["request"]["arguments"] == {
         "operation_id": state["phases"][-1]["operation_id"]}
+
+
+def test_failed_libc_publication_requires_explicit_recovery(tmp_path, monkeypatch):
+    host = fixture(tmp_path, monkeypatch)
+    host.failure_publish = True
+    blocked = walk(
+        tmp_path, host, lambda j: j["status"] == "awaiting_recovery")
+    assert blocked["phases"][-1]["name"] == "final-libc-publish"
+    count = host.sends
+    for _ in range(2):
+        assert supervisor.advance(
+            tmp_path, GATEWAY, host_factory=host)["status"] == "awaiting_recovery"
+    assert host.sends == count
+    authorized = supervisor.authorize_recovery(tmp_path, GATEWAY)
+    assert authorized["recovery_authorized"] is True
+    completed = walk(tmp_path, host, lambda j: j["status"] == "completed")
+    assert [p["name"] for p in completed["phases"]] == (
+        list(journal.PHASES[:6]) + [journal.RECOVERY]
+        + list(journal.PHASES[6:]))
+    assert completed["phases"][6]["predecessor"] == blocked["phases"][-1][
+        "operation_id"]
+
+
+def test_journal_tampering_blocks_recovery(tmp_path, monkeypatch):
+    host = fixture(tmp_path, monkeypatch)
+    state = walk(tmp_path, host, lambda j: j["phases"])
+    state["binding_sha256"] = "0" * 64
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        supervisor.advance(tmp_path, GATEWAY, host_factory=host)
