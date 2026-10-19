@@ -1,0 +1,30 @@
+[Unit]
+Description=Zog host-deploy dedicated certificate delivery (%i)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/zog/cert-delivery-%i.json
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3.12 -B -m zog.host_deploy.certificate_delivery --owner-policy /etc/zog/cert-delivery-%i.json --listen
+RuntimeDirectory=host-deploy-cert-delivery
+RuntimeDirectoryMode=0755
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/host-deploy-cert-delivery /etc/zog/tls
+ReadOnlyPaths=/var/lib/zog-certify-manage /etc/zog
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

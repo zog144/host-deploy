@@ -1,0 +1,14 @@
+# Public source-review candidate: inert gateway. Retains gateway source code only.
+# Issue-triggered AWS dispatch requires a new, separately authorized activation.
+name: Gateway issue dispatcher (inactive source review)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inactive by design
+        run: echo 'Gateway issue submission is disabled in public source; no AWS dispatch or SQS submission is authorized.'

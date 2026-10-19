@@ -1,0 +1,65 @@
+{
+  "schema": "zog-host-deploy-public-publisher-v1",
+  "status": "SOURCE-REVIEW-ONLY",
+  "beacon_sources": "src/zog/host_deploy/beacon_sources.json",
+  "beacon_descriptor_git_blob_sha1": "dabe6a5bb6f3d9f5732fc18437f8f9b042ed3026",
+  "git_object_index": "docs/host-deploy/public-companion-git-objects-2026-10-18.json",
+  "packages": {
+    "root-control": {
+      "repository": "zog144/root-control",
+      "commit": "3a2dd9c935e332e811adaccedf04b16bd2de1ea7",
+      "tree_sha1": "3b2f846bf75c5a3ed4e4fe3c8ea95a9848f84f6d",
+      "tracked_file_count": 62
+    },
+    "box-control": {
+      "repository": "zog144/box-control",
+      "commit": "dec2def825a474675def51df44d75d534e76508f",
+      "tree_sha1": "89544f11c71cecccc1704b4b098c5c27867e97e0",
+      "tracked_file_count": 174
+    },
+    "image-build": {
+      "repository": "zog144/image-build",
+      "commit": "0fd3f00cafc7138d3bac9695c87a8ece65821868",
+      "tree_sha1": "25a7c640d531a05a37ec8271840b1aff424bce60",
+      "tracked_file_count": 1730
+    },
+    "host-identify": {
+      "repository": "zog144/host-identify",
+      "commit": "1a5eac0b255c995022db6a3a4c0051efffa748cc",
+      "tree_sha1": "e3c7a082cc80a51be380fa0b3892a09d6d4cd755",
+      "tracked_file_count": 34,
+      "beacon_sha256_file_count": 15
+    },
+    "host-discover": {
+      "repository": "zog144/host-discover",
+      "commit": "0f2c6fd5cb33528ed2fe9fd1c855d2f691db6f80",
+      "tree_sha1": "07baa68efa2fa0e05d5a45d91021cb3128bfa1e9",
+      "tracked_file_count": 79,
+      "beacon_sha256_file_count": 33
+    },
+    "host-install": {
+      "repository": "zog144/host-install",
+      "commit": "325b6c95320d04ad14b987f25e07c1361b7e6f04",
+      "tree_sha1": "e52c9830fb762e6627e7dad6d2ae120a5dfed41e",
+      "tracked_file_count": 108,
+      "beacon_sha256_file_count": 42
+    }
+  },
+  "beacon_versions": {
+    "host-identify": "0.3.4",
+    "host-discover": "0.4.9",
+    "host-install": "0.10.0"
+  },
+  "beacon_dependency_claims": {
+    "host-discover": [
+      "host-identify==0.3.4",
+      "host-install==0.10.0"
+    ]
+  },
+  "acceptance": {
+    "source_hashes": "computed-from-exact-commit",
+    "interoperability": "pending-independent-Work-acceptance",
+    "production_dispatch": "disabled",
+    "public_export": "not-authorized"
+  }
+}

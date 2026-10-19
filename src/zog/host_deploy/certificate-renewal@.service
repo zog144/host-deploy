@@ -1,0 +1,20 @@
+[Unit]
+Description=Zog authorized certificate renewal reconciliation (%i)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/zog/certificate-renewal-%i.json
+
+[Service]
+Type=oneshot
+User=%i
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3.12 -B -m zog.host_deploy.certificate_renewal_timer --policy /etc/zog/certificate-renewal-%i.json
+TimeoutStartSec=300s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=no
+ReadWritePaths=%h
+StandardOutput=journal
+StandardError=journal

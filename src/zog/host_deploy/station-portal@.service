@@ -1,0 +1,28 @@
+[Unit]
+Description=Zog station portal durable boot request (%i)
+Requires=zog-station-production-root-control.service
+After=zog-station-production-root-control.service
+ConditionPathExists=/etc/zog/station-production-%i.env
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=%i
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/zog/station-production-%i.env
+ExecStart=/usr/bin/python3.12 -B -m zog.host_deploy.station_production boot-request --directory ${ZOG_STATION_PLAN_DIRECTORY} --controller-binding ${ZOG_STATION_CONTROLLER_BINDING}
+Restart=on-failure
+RestartSec=20s
+TimeoutStartSec=90s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=no
+ReadWritePaths=%h
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Zog authorized certificate renewal timer (%i)
+ConditionPathExists=/etc/zog/certificate-renewal-%i.json
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=15min
+AccuracySec=5min
+Persistent=true
+Unit=certificate-renewal@%i.service
+
+[Install]
+WantedBy=timers.target
