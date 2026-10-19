@@ -383,10 +383,15 @@ summary = {
     "allowed_next_operations": list(result.get("allowed_next_operations") or [])[:32],
     "missing_evidence_count": len(result.get("missing_evidence") or []),
     "recipe_identity": result.get("recipe_identity"),
+    "selected_generation": result.get("selected_generation"),
+    "attempt_ids": list(result.get("attempt_ids") or [])[:24],
+    "controller_jobs": list(result.get("controller_jobs") or [])[:24],
+    "predecessor": result.get("predecessor"),
     "artifacts": {
         name: result.get("artifacts", {}).get(name)
         for name in ("remote_capabilities", "recipe_snapshot", "contract",
-                     "pin_date", "monthly_identity", "inventory_digest")
+                     "pin_date", "monthly_identity", "inventory_digest",
+                     "toolchain_specification", "toolchain_execution")
         if isinstance(result.get("artifacts"), dict)
         and name in result["artifacts"]
     },
@@ -635,7 +640,8 @@ def parse_receipt(text, binding):
         "allowed_next_operations",
         "missing_evidence_count",
     }
-    auxiliary = {"recipe_identity", "artifacts"}
+    auxiliary = {"recipe_identity", "artifacts", "selected_generation",
+                 "attempt_ids", "controller_jobs", "predecessor"}
     remote = binding["remote_request"]
     if (
         not isinstance(result, dict)
@@ -661,6 +667,19 @@ def parse_receipt(text, binding):
     if "artifacts" in result and (not isinstance(result["artifacts"], dict)
             or len(_canonical(result["artifacts"])) > 32000):
         raise RuntimeError("image-build receipt artifacts are not bounded")
+    if remote["operation"].startswith("toolchain."):
+        if (result.get("predecessor") != remote.get("predecessor")
+                or not isinstance(result.get("attempt_ids"), list)
+                or len(result["attempt_ids"]) > 24
+                or not isinstance(result.get("controller_jobs"), list)
+                or len(result["controller_jobs"]) > 24):
+            raise RuntimeError("toolchain evidence and predecessor are invalid")
+        artifacts = result.get("artifacts", {})
+        if remote["operation"] == "toolchain.specification.inspect":
+            if not isinstance(artifacts.get("toolchain_specification"), dict):
+                raise RuntimeError("missing producer toolchain specification")
+        elif not isinstance(artifacts.get("toolchain_execution"), dict):
+            raise RuntimeError("missing producer toolchain execution evidence")
     return receipt
 
 
