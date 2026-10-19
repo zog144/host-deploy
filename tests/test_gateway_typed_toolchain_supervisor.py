@@ -71,7 +71,9 @@ def fake_result(stage):
         "artifacts": {"toolchain_execution": {
             "contract": "image-build-toolchain-remote-execution-v1",
             "phase": phase, "operation_id": submission_id,
-            "specification": {"identity": SPEC},
+            "specification": {"identity": SPEC,
+                "contract": "image-build-toolchain-specification-v1",
+                "profile": "self-hosted-c-cxx-toolchain-v1"},
             "predecessor": predecessor, "controller_jobs": [
                 {"job_id": "controller-kept", "invocation_id": "invocation-kept"}
             ], "pipelines": [{"pipeline_id": "pipeline-kept"}],
