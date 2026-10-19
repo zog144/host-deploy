@@ -3,7 +3,10 @@
 import argparse
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from ..workspace import save as atomic_save
 
 from .ledger import (
     LedgerConflict,
@@ -45,6 +48,53 @@ from .queues import (
 DEFAULT_STATE_DIRECTORY = "/var/lib/host-deploy-gateway"
 VISIBILITY_TIMEOUT_SECONDS = 60
 LONG_POLL_SECONDS = 20
+REVIEWED_MINIMUM_ADVANCE_SECONDS = 15
+REVIEWED_ADVANCE_MARKER = "reviewed-generic-advance.json"
+
+
+def _reviewed_clock():
+    return datetime.now(timezone.utc)
+
+
+def _reserve_reviewed_advance(root, request_id, catalogue_identity):
+    """Durably bound one globally rate-limited supervisor action before work.
+
+    Called only while holding dispatcher_lock: per-poll SQS volume cannot
+    accelerate SSM mutation. A lost/restarted action retains its marker.
+    """
+    root = Path(root)
+    path = root / REVIEWED_ADVANCE_MARKER
+    now = _reviewed_clock().astimezone(timezone.utc)
+    if path.is_symlink():
+        raise RuntimeError("reviewed supervisor marker is a symlink")
+    if path.exists():
+        if not path.is_file() or path.stat().st_size > 4096:
+            raise RuntimeError("reviewed supervisor marker is unsafe")
+        try:
+            marker = json.loads(path.read_text())
+            when = datetime.fromisoformat(marker["reserved_at"])
+            if (type(marker) is not dict or set(marker) != {
+                    "schema", "reserved_at", "request_id", "catalogue_sha256"}
+                    or marker["schema"] != 1 or when.tzinfo is None
+                    or type(marker["request_id"]) is not str
+                    or len(marker["request_id"]) != 32
+                    or type(marker["catalogue_sha256"]) is not str
+                    or not marker["catalogue_sha256"].startswith("sha256:")):
+                raise ValueError("invalid marker")
+            when = when.astimezone(timezone.utc)
+        except (OSError, ValueError, KeyError, TypeError):
+            raise RuntimeError("reviewed supervisor marker is corrupted") from None
+        if when > now + timedelta(seconds=5):
+            raise RuntimeError("reviewed supervisor clock moved backwards")
+        if now - when < timedelta(seconds=REVIEWED_MINIMUM_ADVANCE_SECONDS):
+            return False
+    atomic_save(path, {
+        "schema": 1,
+        "reserved_at": now.isoformat(),
+        "request_id": request_id,
+        "catalogue_sha256": catalogue_identity,
+    })
+    return True
 
 
 def _receive_count(message):
@@ -105,6 +155,10 @@ class GatewayConsumer:
                 continue
             dispatch = load_dispatch(self.state_directory, request_id)
             if dispatch is None:
+                if not _reserve_reviewed_advance(
+                        self.state_directory, request_id,
+                        self.approved_catalogue_identity):
+                    return None
                 prepare_image_build_dispatch(
                     self.state_directory, request_id,
                     task_catalogue=self.approved_generic_catalogue,
@@ -127,6 +181,10 @@ class GatewayConsumer:
             current = generic_status(self.state_directory, request_id)
             if current["phase"] in ("uncertain", "failed", "completed"):
                 continue
+            if not _reserve_reviewed_advance(
+                    self.state_directory, request_id,
+                    self.approved_catalogue_identity):
+                return None
             advance_generic(self.state_directory, request_id)
             return {"request_id": request_id, "action": "advanced"}
         return None

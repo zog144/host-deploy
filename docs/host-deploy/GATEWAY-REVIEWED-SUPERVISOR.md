@@ -157,3 +157,17 @@ endpoint is introduced here.**
 **Live execution disposition: NO-GO** until these checks produce
 authoritative Work evidence. Source implementation is not a claim of
 completed EC2, SSM, box-control or image-build acceptance.
+
+## Global bounded unattended cadence
+
+In addition to one stage per SQS poll, the reviewed consumer now persists
+`reviewed-generic-advance.json` **before** each supervisor preparation or
+pipeline step. Its global minimum interval is **15 seconds** across
+restart and repeated queue messages. A malformed marker, symlink,
+unexpected backwards clock change or replaced catalogue blocks advancement.
+This is not an external timer or background build engine; it is a bounded
+operation of the single reviewed SQS consumer under its existing exclusive
+`dispatcher_lock`. A crash after reservation cannot authorize duplicate
+SSM submission because the per-request `submitting` journal independently
+fences uncertain replies. The marker is a safety cadence, not an indication
+that the remote build actually ran or completed.

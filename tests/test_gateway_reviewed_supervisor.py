@@ -108,3 +108,39 @@ def test_reviewed_override_is_explicit_not_a_second_consumer():
     assert "--advance-reviewed-generic" in reviewed
     assert "--approved-task-catalogue-sha256" in reviewed
     assert "REPLACE_WITH_OWNER_APPROVED_SHA256" in reviewed
+
+
+def test_durable_supervisor_rate_bound_prevents_sqs_flood_and_survives_restart(
+        tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    instant = datetime(2026, 10, 19, 18, 0, tzinfo=timezone.utc)
+    clock = [instant]
+    monkeypatch.setattr(consumer, "_reviewed_clock", lambda: clock[0])
+    rid = "a"*32
+    digest = "sha256:" + "a"*64
+    assert consumer._reserve_reviewed_advance(tmp_path, rid, digest) is True
+    marker = tmp_path / consumer.REVIEWED_ADVANCE_MARKER
+    original = marker.read_text()
+    assert consumer._reserve_reviewed_advance(tmp_path, rid, digest) is False
+    assert marker.read_text() == original
+    clock[0] += timedelta(seconds=consumer.REVIEWED_MINIMUM_ADVANCE_SECONDS + 1)
+    assert consumer._reserve_reviewed_advance(tmp_path, rid, digest) is True
+    assert json.loads(marker.read_text())["reserved_at"] == clock[0].isoformat()
+    clock[0] -= timedelta(minutes=2)
+    with pytest.raises(RuntimeError, match="clock moved backwards"):
+        consumer._reserve_reviewed_advance(tmp_path, rid, digest)
+
+
+def test_supervisor_marker_integrity_faults_block_new_action(tmp_path):
+    marker = tmp_path / consumer.REVIEWED_ADVANCE_MARKER
+    marker.write_text("{}")
+    with pytest.raises(RuntimeError, match="corrupted"):
+        consumer._reserve_reviewed_advance(
+            tmp_path, "a"*32, "sha256:"+"b"*64,
+        )
+    marker.unlink()
+    marker.symlink_to(tmp_path / "missing")
+    with pytest.raises(RuntimeError, match="symlink"):
+        consumer._reserve_reviewed_advance(
+            tmp_path, "a"*32, "sha256:"+"b"*64,
+        )
