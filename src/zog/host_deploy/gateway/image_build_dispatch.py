@@ -103,6 +103,47 @@ def _remote_request(
         }, {"task": task, "task_catalogue_identity": task_catalogue_identity})
 
 
+    if operation == "toolchain.submit":
+        from .toolchain_task import select
+        if task_catalogue is None or task_catalogue_identity is None:
+            raise RuntimeError("toolchain submission requires a protected task definition")
+        task = select(
+            task_catalogue, name=parameters["task"],
+            repository=source["repository"], revision=source["revision"],
+            lane=parameters["lane"],
+            lane_owner=lane_spec["provenance_host_id"],
+            monthly_pin_repository_path=lane_spec["monthly_pin_repository_path"],
+            monthly_pin_identity=lane_spec["monthly_pin_identity"],
+        )
+        if gateway_request["source"] != {
+            "repository": source["repository"], "commit": source["revision"]
+        }:
+            raise RuntimeError("toolchain source differs from approved request")
+        if observed_state is not None:
+            raise RuntimeError("toolchain execution requires managed controller state")
+        return ({
+            "schema": REMOTE_SCHEMA,
+            "operation_id": gateway_request["request_id"],
+            "operation": "toolchain.specification.inspect",
+            "source": source, "arguments": {},
+        }, {"task": task, "task_catalogue_identity": task_catalogue_identity})
+
+    if operation in {"toolchain.inspect", "toolchain.resume"}:
+        if observed_state is not None:
+            raise RuntimeError("typed toolchain inspection requires managed controller state")
+        # A separate trusted request may inspect an existing submission.
+        # Resume is deliberately not enabled as a one-shot dispatch: its
+        # authority requires the retained stage journal and controller evidence.
+        if operation == "toolchain.resume":
+            raise RuntimeError("toolchain resume requires reviewed durable phase recovery")
+        return ({
+            "schema": REMOTE_SCHEMA,
+            "operation_id": gateway_request["request_id"],
+            "operation": "toolchain.inspect",
+            "source": source,
+            "arguments": {"operation_id": parameters["operation_id"]},
+        }, None)
+
     mapping = {
         "build.status": "pipeline.inspect",
         "build.resume": "pipeline.resume",
