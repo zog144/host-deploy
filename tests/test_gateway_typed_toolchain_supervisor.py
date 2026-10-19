@@ -265,7 +265,8 @@ def test_same_workspace_lane_blocks_competing_toolchain(tmp_path, monkeypatch):
         supervisor._guard_lane(tmp_path, current_id, frozen)
     active["status"] = "completed"
     journal.persist(directory, active)
-    supervisor._guard_lane(tmp_path, current_id, frozen)
+    with pytest.raises(RuntimeError, match="unfinished"):
+        supervisor._guard_lane(tmp_path, current_id, frozen)
     (directory / journal.FILE).unlink()
     with pytest.raises(RuntimeError, match="earlier"):
         supervisor._guard_lane(tmp_path, "f" * 32, frozen)
