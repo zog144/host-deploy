@@ -1,0 +1,32 @@
+{
+  "schema": 2,
+  "tasks": {
+    "xcb-support-image-v1": {
+      "source_repository": "zog144/image-build",
+      "source_revision": "0fd3f00cafc7138d3bac9695c87a8ece65821868",
+      "lane": "REPLACE_WITH_REVIEWED_MANAGED_LANE",
+      "lane_owner": "REPLACE_WITH_VERIFIED_PROVENANCE_HOST_ID",
+      "monthly_pin_repository_path": "project/pins/2026-10-01/commit-pin.py",
+      "monthly_pin_identity": "sha256:REPLACE_WITH_VERIFIED_MONTHLY_PIN_CONTENT_HASH",
+      "pin_date": "2026-10-01",
+      "entries": [
+        {"id": "xcb-util-final", "project": "xcb-util", "recipe": "xcb-util/stages/final"},
+        {"id": "xcb-util-image-final", "project": "xcb-util-image", "recipe": "xcb-util-image/stages/final"},
+        {"id": "xcb-util-keysyms-final", "project": "xcb-util-keysyms", "recipe": "xcb-util-keysyms/stages/final"},
+        {"id": "xcb-util-wm-final", "project": "xcb-util-wm", "recipe": "xcb-util-wm/stages/final"},
+        {"id": "xcb-util-xrm-final", "project": "xcb-util-xrm", "recipe": "xcb-util-xrm/stages/final"}
+      ],
+      "arguments": {
+        "mode": "image",
+        "selection": "REPLACE_WITH_APPROVED_IMMUTABLE_BASE_GENERATION_64HEX",
+        "targets": [
+          "xcb-util-final",
+          "xcb-util-image-final",
+          "xcb-util-keysyms-final",
+          "xcb-util-wm-final",
+          "xcb-util-xrm-final"
+        ]
+      }
+    }
+  }
+}

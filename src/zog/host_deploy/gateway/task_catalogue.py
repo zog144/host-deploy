@@ -17,6 +17,16 @@ _RECIPE = re.compile(r"(?:[a-zA-Z0-9+_.-]+/)+[a-zA-Z0-9+_.-]+\Z")
 _LANE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MONTH = re.compile(r"\d{4}-\d{2}-01\Z")
 
+# Approved XCB support selection only. The operator supplies *identities*,
+# never new recipe paths or maintained-worker aliases through the catalogue.
+XCB_ENTRIES = (
+    ("xcb-util-final", "xcb-util", "xcb-util/stages/final"),
+    ("xcb-util-image-final", "xcb-util-image", "xcb-util-image/stages/final"),
+    ("xcb-util-keysyms-final", "xcb-util-keysyms", "xcb-util-keysyms/stages/final"),
+    ("xcb-util-wm-final", "xcb-util-wm", "xcb-util-wm/stages/final"),
+    ("xcb-util-xrm-final", "xcb-util-xrm", "xcb-util-xrm/stages/final"),
+)
+
 class TaskCatalogueError(ValueError):
     pass
 
@@ -65,6 +75,10 @@ def validate(value):
         if normalized != sorted(normalized, key=lambda e: e["id"]) or len(
                 {v["id"] for v in normalized}) != len(normalized):
             raise TaskCatalogueError("generic recipe entries must be unique and sorted")
+        if name == "xcb-support-image-v1" and normalized != [
+                {"id": identifier, "project": project, "recipe": recipe}
+                for identifier, project, recipe in XCB_ENTRIES]:
+            raise TaskCatalogueError("XCB recipe identities differ from reviewed selection")
         arguments = item["arguments"]
         if type(arguments) is not dict or arguments.get("mode") not in {
                 "bootstrap", "image", "native-check", "seed-check"}:
@@ -91,6 +105,10 @@ def validate(value):
                 or len(names) != len(set(names))
                 or not set(names).issubset({v["id"] for v in normalized})):
             raise TaskCatalogueError("pipeline targets are not unique selected recipes")
+        if name == "xcb-support-image-v1" and (
+                arguments["mode"] != "image"
+                or arguments.get("targets") != [entry[0] for entry in XCB_ENTRIES]):
+            raise TaskCatalogueError("XCB image targets differ from reviewed selection")
         output["tasks"][name] = json.loads(json.dumps(item))
     return output
 

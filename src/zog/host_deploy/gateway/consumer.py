@@ -30,6 +30,7 @@ from .image_build_dispatch import prepare_image_build_dispatch
 from .image_build_execution import observe_submitted, submit_prepared
 from .task_catalogue import load as load_task_catalogue
 from .generic_pipeline import advance as advance_generic, status as generic_status
+from .generic_reporting import progress as generic_progress
 from .protocol import RequestProtocolError, loads_request
 from .queues import (
     AWS_REGION,
@@ -61,7 +62,7 @@ def _receive_count(message):
 class GatewayConsumer:
     def __init__(self, state_directory, primary_target, dead_letter_target, *,
                  client, approved_generic_catalogue=None,
-                 approved_catalogue_identity=None):
+                 approved_catalogue_identity=None, approved_catalogue_path=None):
         self.state_directory = Path(state_directory)
         self.client = client
         self.configuration = verify_queue_configuration(
@@ -72,6 +73,7 @@ class GatewayConsumer:
             raise ValueError("reviewed generic catalogue must have exact digest")
         self.approved_generic_catalogue = approved_generic_catalogue
         self.approved_catalogue_identity = approved_catalogue_identity
+        self.approved_catalogue_path = approved_catalogue_path
 
     def _advance_one_reviewed(self):
         """At most one stage across durable admitted requests per iteration.
@@ -81,6 +83,15 @@ class GatewayConsumer:
         """
         if self.approved_generic_catalogue is None:
             return None
+        if getattr(self, "approved_catalogue_path", None):
+            current, identity = load_task_catalogue(
+                self.approved_catalogue_path, require_root_owned=True
+            )
+            if (identity != self.approved_catalogue_identity
+                    or current != self.approved_generic_catalogue):
+                raise RuntimeError(
+                    "reviewed generic catalogue changed: supervisor authorization revoked"
+                )
         root = self.state_directory / "requests"
         if not root.exists():
             return None
@@ -288,6 +299,10 @@ def main(argv=None):
         "--approved-task-catalogue",
         help="Absolute root-owned, readonly finite generic build catalogue",
     )
+    run.add_argument(
+        "--approved-task-catalogue-sha256",
+        help="Exact separately reviewed catalogue SHA-256; prevents silent repin on restart",
+    )
 
     status = commands.add_parser("queue-status")
     status.add_argument(
@@ -341,6 +356,8 @@ def main(argv=None):
     generic_step.add_argument("request_id")
     generic_read = commands.add_parser("generic-status")
     generic_read.add_argument("request_id")
+    progress_cmd = commands.add_parser("generic-progress")
+    progress_cmd.add_argument("request_id")
 
     commands.add_parser("reconcile")
 
@@ -352,8 +369,8 @@ def main(argv=None):
         dead_letter = _required(
             arguments.dead_letter_target, "dead-letter queue target"
         )
-        client = _client()
         if arguments.command == "queue-status":
+            client = _client()
             print(
                 json.dumps(
                     administrative_status(
@@ -363,19 +380,26 @@ def main(argv=None):
                 )
             )
             return
-        if arguments.approved_task_catalogue and not arguments.advance_reviewed_generic:
+        if (arguments.approved_task_catalogue or
+                arguments.approved_task_catalogue_sha256) and not arguments.advance_reviewed_generic:
             parser.error("reviewed generic catalogue requires explicit opt-in")
         catalogue = None
         digest = None
         if arguments.advance_reviewed_generic:
-            if not arguments.approved_task_catalogue:
-                parser.error("opt-in requires approved task catalogue")
+            if not (arguments.approved_task_catalogue and
+                    arguments.approved_task_catalogue_sha256):
+                parser.error("opt-in requires catalogue path and reviewed SHA-256")
             catalogue, digest = load_task_catalogue(
                 arguments.approved_task_catalogue, require_root_owned=True)
+            if digest != arguments.approved_task_catalogue_sha256:
+                parser.error("reviewed catalogue digest differs from supervisor policy")
+        # Do not allocate any AWS client until root-owned approval is verified.
+        client = _client()
         consumer = GatewayConsumer(
             state_directory, primary, dead_letter, client=client,
             approved_generic_catalogue=catalogue,
             approved_catalogue_identity=digest,
+            approved_catalogue_path=arguments.approved_task_catalogue,
         )
         if arguments.once:
             with dispatcher_lock(state_directory):
@@ -511,6 +535,13 @@ def main(argv=None):
                 sort_keys=True,
             )
         )
+        return
+
+    if arguments.command == "generic-progress":
+        print(json.dumps(
+            generic_progress(state_directory, arguments.request_id),
+            sort_keys=True,
+        ))
         return
 
     if arguments.command in {"generic-advance", "generic-status"}:

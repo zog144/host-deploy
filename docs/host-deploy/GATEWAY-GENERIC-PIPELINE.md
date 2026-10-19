@@ -146,3 +146,23 @@ recipe-content/materialization validation.
 
 **No live AWS command, build, root-control mutation, GitHub OIDC dispatch, or
 public workflow activation occurred in this Regular source pass.**
+
+## October 19 reviewed supervision and progress consumer
+
+The source now also has a finite exact XCB-entry check, a root-owned operator
+catalogue template, and an optional **same-service** systemd override with an
+independently pinned catalogue digest. A live catalogue change is checked
+before each automatic advancement and blocks further activity rather than
+silently accepting a new task. The default unit remains admission-only.
+
+For bounded, secret-free result retrieval use `host-deploy-gateway
+--state-directory /var/lib/host-deploy-gateway generic-progress
+ORIGINAL_REQUEST_ID`; it is read-only and projects original request and
+per-stage SSM identities, retained pipeline/snapshot ID, status and result
+digest without raw stdout or artifact values. Full privileged
+`generic-status` is not suitable for publishing to GitHub issues.
+
+**Detailed contract and Work gates:**
+[Reviewed gateway supervision and progress](GATEWAY-REVIEWED-SUPERVISOR.md).
+Unattended mode is source-complete but not installed or authorized for live
+AWS execution by this change; neither the issue trigger nor IAM is widened.
