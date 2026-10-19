@@ -74,3 +74,54 @@ submission. The existing generic pipeline is restricted to
 The `unstable` deployment remains unaffected by this feature-branch
 checkpoint. No real EC2, IAM, SQS, SSM, or image-build mutation has been
 performed by this branch.
+
+## Implemented supervisor follow-up (feature branch)
+
+The typed supervisor is now implemented in `gateway/toolchain_journal.py`
+and `gateway/toolchain_supervisor.py`, using the existing gateway
+`verify_current_target`, `producer_runtime_preflight`, `remote_script`,
+`parse_receipt`, SSM execution and owner lock. The review-only SSM wrapper
+retains allowlisted `toolchain_specification`, `toolchain_execution`,
+controller jobs and attempt IDs, instead of dropping these from the result.
+
+For each authorized request:
+
+- The immutable `typed-toolchain.json` journal binds its digest to the
+  approved dispatch/task and pins the producer specification identity.
+- Each phase submits using a deterministic operation ID. Subsequent
+  `toolchain.inspect` calls reference that same original submit ID,
+  while each inspection obtains a distinct deterministic observation ID.
+- Durable intent `submitting` precedes every SSM SendCommand. Missing
+  CommandId and interrupted send enter terminal uncertainty, never retry.
+- Each authenticated SSM receipt is archived separately under
+  `typed-toolchain-observations/<operation_id>.json` before advancing the
+  journal, preserving CommandId, operation/request hash and producer evidence.
+- `toolchain-authorize-resume` only permits a pending, evidenced phase to
+  execute the producer's `toolchain.resume` against its original ID.
+- `toolchain-authorize-recovery` permits `final-libc-recover` only after
+  an observed failed `final-libc-publish` explicitly advertises recovery.
+- Terminal `final-compiler` completion validates the producer's typed
+  artifact contract, selected immutable generation, specification,
+  verification identity and activation in the returned evidence.
+
+The consumer's `--advance-reviewed-toolchain` option is independently
+disabled by default. Enabling requires `--approved-toolchain-task` and
+`--approved-toolchain-task-sha256`, both checked before allocating AWS
+clients and rechecked against the protected file during supervision.
+The shared durable 15-second advancement reservation limits the rate
+across generic and toolchain work.
+
+### Test and acceptance boundary
+
+`tests/test_gateway_typed_toolchain_supervisor.py` covers phase lineage,
+SSM interruption, `submitting` recovery, explicit resume,
+final-libc recovery and journal tampering using isolated fake SSM.
+The PR's public-source CI also compiles all shipped Python and includes
+protocol, task and artifact receipt tests.
+
+**Important:** These source tests cannot establish the authenticity of a
+remote controller job or independently read the published generation manifest.
+A real trusted image-build inspection and direct producer manifest validation
+are still required for live GO. GitHub workflow operation and AWS role/queue
+allowlists remain untouched. Do not merge/activate as production-ready solely
+from green pytest.
