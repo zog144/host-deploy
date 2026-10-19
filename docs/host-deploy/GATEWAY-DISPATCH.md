@@ -79,7 +79,7 @@ Preparation alone never submits an SSM command. Use the separate
 `generic-advance`/supervised `--advance-reviewed-generic` pathway, with
 the four-stage durable journal, source-bound producer capabilities and
 preflight. The default SQS consumer remains admission-only, and the issue
-workflow remains inert. The opt-in supervised consumer refuses to
+workflow remains configuration-gated (GATEWAY-GITHUB.md). The opt-in supervised consumer refuses to
 continue a prepared job automatically if the approved catalogue's
 identity changes; the retained request remains available for an
 explicitly reviewed recovery decision. See

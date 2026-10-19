@@ -182,17 +182,10 @@ def test_sqs_incomplete_receipt_is_rejected():
         )
 
 
-def test_public_gateway_workflow_is_inert_even_when_repository_variables_change():
-    text = (
-        Path(__file__).resolve().parents[1]
-        / ".github/workflows/gateway-issue-dispatch.yml"
-    ).read_text()
+def test_gateway_workflow_does_not_execute_issue_text_or_pull_requests():
+    text = (Path(__file__).resolve().parents[1] / ".github/workflows/gateway-issue-dispatch.yml").read_text()
     assert "pull_request_target" not in text
-    assert "issues:" not in text and "- opened" not in text
-    assert "id-token: write" not in text
-    assert "ZOG_GATEWAY_SUBMIT_ENABLED" not in text
-    assert "aws-actions/configure-aws-credentials" not in text
-    assert "github_dispatch submit" not in text
+    assert "${{ github.event.issue.body }}" not in text
     assert "secrets." not in text
-    assert "workflow_dispatch:" in text
-    assert "contents: read" in text
+    assert "persist-credentials: false" in text
+    assert "GITHUB_EVENT_PATH" in text

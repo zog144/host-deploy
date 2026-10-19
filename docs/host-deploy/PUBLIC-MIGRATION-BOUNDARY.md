@@ -6,9 +6,9 @@ activation.**
 The GitHub issue/SQS gateway is an operational control plane:
 `issues: opened` can cause an OIDC role assumption and SQS message submission
 if `ZOG_GATEWAY_SUBMIT_ENABLED=true`. It must not become active merely by
-moving a source branch to default `main`. The initial public export needs to
-disable the issue trigger and require a separate owner-approved deployment
-change after security review and exact public companion acceptance.
+moving a source branch to default `main`. The initial public export disabled the issue trigger. The subsequently authorized
+configuration-gated workflow is described in GATEWAY-GITHUB.md. Publishing it does
+not set the live submission switch or authorize generic compilation.
 
 ## Separation of gates
 

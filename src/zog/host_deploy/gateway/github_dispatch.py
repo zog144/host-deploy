@@ -171,7 +171,9 @@ def submit_request(queue_url, request, client=None):
     request = validate_request(request)
     if client is None:
         import boto3
-        client = boto3.client("sqs", region_name=AWS_REGION)
+        from botocore.config import Config
+        client = boto3.client("sqs", region_name=AWS_REGION,
+                              config=Config(retries={"total_max_attempts": 1}))
     response = client.send_message(
         QueueUrl=queue_url,
         MessageBody=canonical_bytes(request).decode("ascii"),

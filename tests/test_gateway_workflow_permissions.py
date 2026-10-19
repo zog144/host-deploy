@@ -1,4 +1,4 @@
-"""Public migration: GitHub workflows must never dispatch AWS from issues."""
+"""Public dispatcher authorization remains separate from credential-free source CI."""
 from pathlib import Path
 import re
 
@@ -8,20 +8,24 @@ CHECKOUT = "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 SETUP_PYTHON = "ece7cb06caefa5fff74198d8649806c4678c61a1"
 
 
-def test_gateway_workflow_is_inert_regardless_of_old_variables():
+def test_gateway_submission_requires_prior_validation_and_explicit_configuration():
     text = (WORKFLOWS / "gateway-issue-dispatch.yml").read_text()
-    # This file is deliberately a manual, nonprivileged explanatory workflow;
-    # the gateway's strict parser remains source-only until owner activation.
-    assert re.search(r"(?m)^on:\s*$", text)
-    assert re.search(r"(?m)^  workflow_dispatch:\s*$", text)
-    assert not re.search(r"(?m)^\s*issues\s*:", text)
-    assert not re.search(r"(?m)^\s*id-token\s*:", text)
-    assert not re.search(r"(?m)^  submit\s*:", text)
-    assert "configure-aws-credentials" not in text
-    assert "github_dispatch submit" not in text
-    assert "ZOG_GATEWAY_SUBMIT_ENABLED" not in text
+    validate, submit = text.split("  submit:")
+    assert "issues:" in validate and "types: [opened]" in validate
+    assert "id-token:" not in validate
+    assert "needs: validate" in submit
+    assert "vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'" in submit
+    assert "id-token: write" in submit
+    assert "github.run_attempt == 1" in validate and "github.run_attempt == 1" in submit
+    assert "github_configuration --event" in validate and "github_configuration --event" in submit
+    assert submit.index("github_configuration --event") < submit.index("aws-actions/configure-aws-credentials@")
+    assert "fromJSON(vars.ZOG_GATEWAY_AUTHORIZED_ACTORS || '[]')" in validate
     assert "secrets." not in text
-    assert "sqs:SendMessage" not in text
+    assert "arn:aws:" not in text and "amazonaws.com" not in text
+    assert "${{ github.event.issue.body }}" not in text
+    assert "pull_request" not in text
+    assert "ref: ${{ vars.ZOG_GATEWAY_DISPATCH_REVISION }}" in text
+    assert "configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd" in text
 
 
 def test_source_ci_is_credential_free_and_does_not_install_private_pins():
@@ -38,7 +42,7 @@ def test_source_ci_is_credential_free_and_does_not_install_private_pins():
 
 
 def test_node24_actions_are_pinned_to_reviewed_immutable_shas():
-    for filename in ("pytest.yml", "certificate-renewal-contract.yml"):
+    for filename in ("pytest.yml", "certificate-renewal-contract.yml", "gateway-issue-dispatch.yml"):
         text = (WORKFLOWS / filename).read_text()
         checkout = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*actions/checkout@([^\s#]+)", text)
         python = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*actions/setup-python@([^\s#]+)", text)

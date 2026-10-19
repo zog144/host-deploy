@@ -8,7 +8,7 @@ command-center currently deploys the selected image-build commit.
 
 **Status:** source-only; SQS acceptance and existing status/resume/cancel remain
 intact. Mutating generic builds have **not** been authorized or run on EC2.
-The public GitHub issue workflow remains deliberately inert.
+The public issue workflow is configuration-gated; see GATEWAY-GITHUB.md.
 
 ## Finite protocol and server-side task
 
@@ -114,10 +114,9 @@ recipe-content/materialization validation.
   Actual service activation still requires a reviewed UID, IAM/SSM boundary,
   protected task file, rate bound and owner GO. Manual `generic-advance`
   is also available under the exclusive gateway dispatcher lock.
-- Issue-triggered AWS OIDC/SQS submission remains disabled in the public
-  workflow. A separate explicit review must enable a safe request trigger
-  with a scoped AWS role. Do not add \`id-token: write\` or new policies merely
-  because the source coordinator exists.
+- Issue-triggered AWS OIDC/SQS submission requires the explicit repository
+  deployment switch and reviewed OIDC/queue configuration in GATEWAY-GITHUB.md.
+  Phase A enables only build.status; generic build authorization remains separate.
 - Automatic retry, cancel, resume and manual \`pipeline.retry\` are distinct
   operations and **not** implemented as generic-submit continuation. Existing
   read-only/status and authorized \`build.cancel\`/\`build.resume\` remain

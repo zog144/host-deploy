@@ -1,77 +1,76 @@
-# GitHub issue dispatcher
+# Configurable public GitHub dispatcher
 
-This is implementation pass 2 of the GitHub-to-EC2 execution gateway. The workflow
-and helper code are developed on `unstable`. GitHub `issues` workflows execute
-from the repository default branch, which is currently `main`; therefore the
-dispatcher is inert until an explicitly authorized publication to `main`.
+The issue-opened workflow is public. It validates a bounded request with no AWS
+credentials first, then revalidates it in a separate submission job. Submission
+requires the repository-admin switch `ZOG_GATEWAY_SUBMIT_ENABLED=true`.
+Missing configuration fails closed. Public source CI never requests OIDC credentials.
 
-The first publication/test must run in **validation-only mode**. Leave repository
-variable `ZOG_GATEWAY_SUBMIT_ENABLED` unset or set to anything other than the
-exact string `true`. A matching issue will then be checked out, parsed,
-authorized, and validated, but the workflow will not invoke the AWS credential
-action, request an AWS OIDC token, or send SQS.
+## Repository deployment variables
 
-## Issue format and authorization
+Configure these under Settings → Secrets and variables → Actions → Variables:
 
-The workflow reacts only to an `issues: opened` event whose body contains the
-v1 marker. The body itself must consist only of the marker followed by one
-`json` code fence containing the pass-1 request. Extra prose and extra code
-fences are rejected.
+| Variable | Value |
+|---|---|
+| `ZOG_GATEWAY_DISPATCH_REVISION` | Reviewed immutable 40-character public host-deploy commit containing the dispatcher |
+| `ZOG_GATEWAY_AUTHORIZED_ACTORS` | JSON array of permitted GitHub logins |
+| `ZOG_GATEWAY_ALLOWED_OPERATIONS` | JSON array; use `["build.status"]` for read-only Phase A |
+| `ZOG_GATEWAY_AWS_REGION` | `us-east-1`, the currently supported gateway region |
+| `ZOG_GATEWAY_ROLE_ARN` | Deployment's OIDC submission IAM role ARN |
+| `ZOG_GATEWAY_QUEUE_URL` | Deployment's exact `zog-build-requests.fifo` URL or ARN |
+| `ZOG_GATEWAY_SUBMIT_ENABLED` | `false` until the deployment's AWS trust and queue are verified; `true` enables submission |
 
-The trusted GitHub event is authoritative for:
+These identifiers are configuration, not AWS credentials. No account number,
+instance, live queue URL, machine address or permitted person is built into the
+workflow. The existing transport contract deliberately still restricts the region
+and FIFO queue name; this change does not create arbitrary-endpoint dispatch.
+The role and queue account must agree. Changing allowed operations does not bypass
+server-owned lane/task authorization.
 
-- repository: `zog144/host-deploy`
-- issue number
-- triggering actor / issue creator
+The workflow checks out only the configured exact commit and verifies HEAD.
+Actions are pinned to immutable commits. No code from issue text, pull requests or
+caller-supplied source references is executed on the GitHub runner. The issue's
+source reference is input to the gateway protocol, not a checkout instruction.
+The actor must match the issue creator, event sender and execution actor. Only
+original opened events are accepted; manual workflow reruns cannot resend a request.
 
-A newly opened issue cannot know its assigned issue number in advance, so issue
-content deliberately omits the `origin` field. After actor authorization, the
-workflow constructs `origin` exclusively from the trusted event and then runs the
-complete pass-1 request validator. Supplying `origin` in issue content is rejected.
+## AWS console verification
 
-Authorized actors are repository-controlled in
-`.github/gateway-authorized-actors.json`. The initial list contains only
-`zog144`. There are no wildcard actors and issue text cannot add an actor.
-The issue marker, title, labels, and request contents are not authorization.
+In the deployment's AWS account, open **IAM → Roles**, select the role named in
+`ZOG_GATEWAY_ROLE_ARN`, then inspect **Trust relationships** and **Permissions**.
+The GitHub repository is a condition in the role's trust policy, not a separate
+AWS resource named after the repository. IAM is global, unlike the regional SQS queue.
 
-A duplicate request may cause another GitHub workflow invocation. The SQS FIFO
-submission uses `request_id` as `MessageDeduplicationId` and `workspace_id`
-as `MessageGroupId`, but the future persistent consumer must still enforce
-application-level request idempotency because the FIFO deduplication window is
-not a durable ledger.
+The trust must allow `sts:AssumeRoleWithWebIdentity` through
+`token.actions.githubusercontent.com`, constrain audience to `sts.amazonaws.com`,
+and bind the actual repository OIDC subject to the intended default branch or
+protected environment. Read the repository's actual OIDC subject configuration:
+new repositories may use immutable owner/repository IDs. Do not copy a legacy
+name-only subject or trust an organization-wide wildcard. Recreated repositories
+have different identities even when the name is reused.
 
-## Enabling the SQS test
+The role's permissions should allow `sqs:SendMessage` only to the intended primary
+queue. The GitHub role needs no SSM, EC2, IAM mutation or queue-consumption access.
+The gateway's EC2 instance role separately owns consumption and execution.
 
-Only after the validation-only issue succeeds, configure these repository
-Actions secrets and the explicit live-dispatch variable:
+If IAM reads are denied, have the authorized account administrator inspect and
+provide the exact trust policy and scoped permission evidence. Do not change trust
+or enable submissions based only on an assumed role name. No long-lived access key
+belongs in repository configuration.
 
-- secret `ZOG_GITHUB_DISPATCH_ROLE_ARN`: ARN of the existing
-  `zog-github-dispatch` IAM role.
-- secret `ZOG_BUILD_REQUEST_QUEUE_URL`: either the exact SQS queue ARN or exact
-  HTTPS queue URL for `zog-build-requests.fifo` in `us-east-1`.
-- variable `ZOG_GATEWAY_SUBMIT_ENABLED=true`: explicit live-dispatch gate.
+## Submission and recovery
 
-The queue target is canonicalized to
-`https://sqs.us-east-1.amazonaws.com/<12-digit-account>/zog-build-requests.fifo`.
-Only the exact `us-east-1` FIFO ARN/URL is accepted.
+Publish the reviewed workflow on the actual default branch before opening a new
+issue. Use the existing gateway issue template: only the v1 marker and fenced JSON
+envelope, with no caller-supplied origin. For Phase A allow only build.status and
+select the reviewed read-only lane and retained pipeline ID.
 
-The workflow uses GitHub OIDC and no stored AWS access key. Actor authorization
-and request validation occur before the AWS credentials step. The configured
-role must remain limited to `sqs:SendMessage` for the primary queue.
+The first job validates; only a successful validation and the explicit enabled
+switch can start the OIDC submission job. It obtains short-lived credentials,
+sends once with the request ID as FIFO deduplication ID, and prints a bounded
+receipt. SDK automatic submission retries are disabled. A lost result is uncertain:
+inspect the gateway ledger using the original request ID instead of rerunning Actions
+or creating a replacement request. Workflow success is not producer execution success.
 
-The AWS credential action is pinned to the immutable `v6.3.0` release tag.
-GitHub-owned checkout/setup actions currently follow the repository's existing
-major-version convention.
-
-## SQS message binding
-
-The SQS body is the canonical validated protocol JSON. Submission sets:
-
-- FIFO message group: exact `workspace_id`
-- FIFO deduplication ID: exact `request_id`
-
-The helper logs only a bounded request summary and the SQS FIFO receipt. It does
-not log arbitrary issue prose.
-
-No GitHub issue completion comment is produced in pass 2; reporting is a later
-gateway pass, and the issue is never the authoritative execution record.
+The command-center retains durable admission, ownership, operation identities and
+SSM results. Compilation is never hosted by this workflow. Generic automatic build
+advancement remains a separate opt-in; a gateway service upgrade does not enable it.
