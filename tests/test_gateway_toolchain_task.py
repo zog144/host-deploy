@@ -55,7 +55,7 @@ def test_exact_protected_toolchain_task_and_digest(tmp_path):
 @pytest.mark.parametrize("key,change", [
     ("source_revision", "d" * 40),
     ("seed_generation", "../seed"),
-    ("lane_owner", "other"),
+    ("lane_owner", "Invalid_Owner"),
     ("specification_identity", "not-a-sha"),
     ("monthly_pin_identity", "sha256:" + "0" * 63),
 ])
