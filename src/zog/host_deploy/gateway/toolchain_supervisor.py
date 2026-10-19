@@ -207,7 +207,12 @@ def _guard_lane(root, request_id, bound):
         if path.exists():
             other_bound = binding(root, other.name)
             existing = read(other, other.name, other_bound)
-            if existing is None or existing["status"] != "completed":
+            if (existing is None or existing["status"] != "completed"
+                    or not existing["phases"]
+                    or existing["phases"][-1]["name"] != "final-compiler"
+                    or not isinstance(existing["artifact_receipt"], dict)
+                    or existing["artifact_receipt"].get("contract")
+                       != "image-build-toolchain-artifact-v1"):
                 raise RuntimeError(
                     "workspace lane contains unfinished typed toolchain job"
                 )
