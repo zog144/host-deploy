@@ -65,13 +65,25 @@ Preparation requires an admitted request, gateway-owned workspace, active
 **managed** image-build lane, exact lane source revision/monthly-pin descriptor, and bound
 host identity. Reservation-only lanes cannot execute gateway operations.
 
-### Future build-submit task mapping
+### Reviewed generic build selection
 
-The repository retains validation helpers for a future server-owned task catalogue,
-but a valid catalogue does **not** currently authorize `build.submit`. The
-image-build producer must first define the immutable recipe-snapshot materialization
-boundary and the maintained-worker mapping. Until then, `dispatch-prepare` rejects
-every `build.submit` request, even when a catalogue is supplied.
+A valid and root-approved schema-2 task catalogue permits only the
+`xcb-support-image-v1` generic pipeline selection. The producer now
+advertises `recipes.snapshot`, `pipeline.submit`, and their distinct
+reconciliation operations; **maintained workers are not mapped to generic
+pipeline requests**. `dispatch-prepare` freezes the source revision,
+monthly pin, managed lane/owner, selected immutable base generation,
+exact recipe entries, mode and targets.
+
+Preparation alone never submits an SSM command. Use the separate
+`generic-advance`/supervised `--advance-reviewed-generic` pathway, with
+the four-stage durable journal, source-bound producer capabilities and
+preflight. The default SQS consumer remains admission-only, and the issue
+workflow remains inert. The opt-in supervised consumer refuses to
+continue a prepared job automatically if the approved catalogue's
+identity changes; the retained request remains available for an
+explicitly reviewed recovery decision. See
+[GATEWAY-GENERIC-PIPELINE.md](GATEWAY-GENERIC-PIPELINE.md).
 
 ## Exact deployed source verification
 
@@ -156,9 +168,12 @@ Before automatic gateway dispatch is enabled:
    `pipeline.inspect`.
 4. Perform the staged read-only `pipeline.inspect` SSM acceptance first.
 5. Exercise lost/restarted command observation without issuing a replacement.
-6. After image-build publishes immutable recipe-snapshot materialization and an
-   explicit maintained-task mapping, re-enable and test one deliberately small
-   `build.submit` before long compiler work.
+6. With the producer's implemented generic recipe snapshots and an independently
+   approved fixed task catalogue, exercise the small `xcb-support-image-v1`
+   task through `capabilities.inspect`, `recipes.snapshot`, `pipeline.submit`
+   and `pipeline.inspect`. Retain each SSM command and controller receipt
+   before considering longer compiler work. Maintained-worker mappings
+   remain intentionally unsupported.
 7. Add explicit gateway `build.retry` protocol semantics instead of treating retry
    as ordinary submit.
 8. Complete pass-5 issue reporting before making the workflow operational by

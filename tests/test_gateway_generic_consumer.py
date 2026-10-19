@@ -45,9 +45,28 @@ def test_existing_blocked_or_uncertain_stage_is_not_reissued(tmp_path,monkeypatc
         lambda root,rid:{"request":{"operation":"build.submit"},
                          "states":{"admission":"admitted"}})
     monkeypatch.setattr(consumer,"load_dispatch",
-                        lambda *args:{"phase":"prepared"})
+                        lambda *args:{"phase":"prepared","binding":{
+                            "task_catalogue_identity":obj.approved_catalogue_identity}})
     monkeypatch.setattr(consumer,"generic_status",
                         lambda *args:{"phase":"uncertain"})
     monkeypatch.setattr(consumer,"advance_generic",
                         lambda *args:pytest.fail("uncertain must not replay"))
     assert obj._advance_one_reviewed() is None
+
+
+def test_automatic_generic_progress_refuses_replaced_task_policy(tmp_path,monkeypatch):
+    obj=setup(tmp_path)
+    obj.approved_generic_catalogue={"schema":2,"tasks":{"xcb-support-image-v1":{}}}
+    obj.approved_catalogue_identity="sha256:"+"f"*64
+    monkeypatch.setattr(consumer,"load_request",
+        lambda root,rid:{"request":{"operation":"build.submit"},
+                         "states":{"admission":"admitted"}})
+    monkeypatch.setattr(consumer,"load_dispatch",
+        lambda *args:{"phase":"prepared","binding":{
+            "task_catalogue_identity":"sha256:"+"e"*64}})
+    monkeypatch.setattr(consumer,"generic_status",
+        lambda *args:pytest.fail("revoked task must not be readied"))
+    monkeypatch.setattr(consumer,"advance_generic",
+        lambda *args:pytest.fail("revoked task must not reach SSM"))
+    with pytest.raises(RuntimeError,match="catalogue changed"):
+        obj._advance_one_reviewed()

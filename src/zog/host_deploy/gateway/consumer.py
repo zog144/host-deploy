@@ -102,6 +102,17 @@ class GatewayConsumer:
                 return {"request_id": request_id, "action": "prepared"}
             if dispatch["phase"] != "prepared":
                 continue
+            # A retained dispatch is immutable, but automatic permission to
+            # advance it is revocable: replacement of the protected task
+            # catalogue must not continue an old job in the background.
+            approved = dispatch.get("binding")
+            if (type(approved) is not dict
+                    or approved.get("task_catalogue_identity")
+                    != self.approved_catalogue_identity):
+                raise RuntimeError(
+                    "reviewed generic catalogue changed since dispatch preparation; "
+                    "manual owner reconciliation required"
+                )
             current = generic_status(self.state_directory, request_id)
             if current["phase"] in ("uncertain", "failed", "completed"):
                 continue
