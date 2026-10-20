@@ -14,12 +14,12 @@ def definition():
         "task": {
             "name": toolchain_task.TASK_NAME,
             "source_repository": "zog144/image-build",
-            "source_revision": toolchain_task.PRODUCER_REVISION,
+            "source_revision": toolchain_task.RESTORED_PRODUCER_REVISION,
             "lane": "compiler",
             "lane_owner": "compiler",
             "seed_generation": "a" * 64,
             "monthly_pin_repository_path": "project/pins/2026-10-01/commit-pin.py",
-            "monthly_pin_identity": "sha256:" + "b" * 64,
+            "monthly_pin_identity": toolchain_task.RESTORED_MONTHLY_PIN_IDENTITY,
             "pin_date": "2026-10-01",
             "specification_identity": "sha256:" + "c" * 64,
         },
@@ -36,7 +36,7 @@ def test_exact_protected_toolchain_task_and_digest(tmp_path):
     assert toolchain_task.select(
         value, name=toolchain_task.TASK_NAME,
         repository="zog144/image-build",
-        revision=toolchain_task.PRODUCER_REVISION,
+        revision=toolchain_task.RESTORED_PRODUCER_REVISION,
         lane="compiler", lane_owner="compiler",
         monthly_pin_repository_path=value["task"]["monthly_pin_repository_path"],
         monthly_pin_identity=value["task"]["monthly_pin_identity"],
@@ -45,7 +45,7 @@ def test_exact_protected_toolchain_task_and_digest(tmp_path):
         toolchain_task.select(
             value, name=toolchain_task.TASK_NAME,
             repository="zog144/image-build",
-            revision=toolchain_task.PRODUCER_REVISION,
+            revision=toolchain_task.RESTORED_PRODUCER_REVISION,
             lane="wrong", lane_owner="compiler",
             monthly_pin_repository_path=value["task"]["monthly_pin_repository_path"],
             monthly_pin_identity=value["task"]["monthly_pin_identity"],
@@ -85,7 +85,7 @@ def test_protocol_only_accepts_reviewed_typed_selector():
                    "issue_number": 123, "trigger_actor": "operator"},
         "parameters": {"lane": "compiler", "task": toolchain_task.TASK_NAME},
         "source": {"repository": "zog144/image-build",
-                   "commit": toolchain_task.PRODUCER_REVISION},
+                   "commit": toolchain_task.RESTORED_PRODUCER_REVISION},
     }
     assert validate_request(req) == req
     bad = copy.deepcopy(req)
@@ -103,3 +103,31 @@ def test_protocol_only_accepts_reviewed_typed_selector():
     assert validate_request(bad) == bad
     bad["operation"] = "toolchain.resume"
     assert validate_request(bad) == bad
+
+
+def test_historical_frozen_task_retains_identity_but_cannot_submit_new():
+    frozen = definition()
+    frozen["task"]["source_revision"] = toolchain_task.PRODUCER_REVISION
+    frozen["task"]["monthly_pin_identity"] = "sha256:" + "b" * 64
+    assert toolchain_task.validate(frozen) == frozen
+    with pytest.raises(toolchain_task.ToolchainTaskError, match="historical"):
+        toolchain_task.select(
+            frozen, name=toolchain_task.TASK_NAME,
+            repository="zog144/image-build",
+            revision=toolchain_task.PRODUCER_REVISION,
+            lane="compiler", lane_owner="compiler",
+            monthly_pin_repository_path=frozen["task"]["monthly_pin_repository_path"],
+            monthly_pin_identity=frozen["task"]["monthly_pin_identity"],
+        )
+
+
+@pytest.mark.parametrize("key,value", [
+    ("monthly_pin_identity", "sha256:" + "b" * 64),
+    ("monthly_pin_repository_path", "project/pins/2025-10-01/commit-pin.py"),
+    ("pin_date", "2025-10-01"),
+])
+def test_restored_producer_requires_exact_october_lock(key, value):
+    candidate = definition()
+    candidate["task"][key] = value
+    with pytest.raises(toolchain_task.ToolchainTaskError):
+        toolchain_task.validate(candidate)
