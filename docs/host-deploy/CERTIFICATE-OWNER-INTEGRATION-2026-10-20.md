@@ -68,14 +68,16 @@ branch. Direct provider token delivery/rotation is not enabled.
 
 ## Cross-owner blocks for native acceptance
 
-1. **box-control Regular:** pinned reader revision
-   `dec2def825a474675def51df44d75d534e76508f` and root-control
-   `3a2dd9c935e332e811adaccedf04b16bd2de1ea7`. The inspected
-   `box-control/issuer_lifecycle_client.py` currently includes
-   `inspect` in launch but only `renew,stage,None` in
-   `application_request_result`, rejecting the genuine inspected
-   operation. The producer owner must correct and test this before native
-   integration. Controller service UID must be approved by host-install.
+1. **box-control producer corrected (source gate PASS):** 
+   `zog144/box-control@a3e939b7a22ef6277ae9712961ffbd5a18ccac39`
+   now admits `inspect` in the exact request result reader and rejects
+   borrowed identities or malformed program values. Previous source
+   checkpoint `dec2def825a474675def51df44d75d534e76508f` is superseded
+   for this **new** selected-inspection source binding, not rewritten in
+   historical deployments. root-control remains pinned for separate native
+   acceptance at `3a2dd9c935e332e811adaccedf04b16bd2de1ea7`.
+   Controller UID, installed checkout identity and invocation-bound systemd
+   observations still require host-install/Work Gate B.
 2. **host-deploy Regular:** the existing renewal timer's selected-broker
    entrypoint is still deliberately guarded by
    `_require_approved_native_inspection`; connect the newly authenticated
@@ -136,3 +138,36 @@ A separate cross-owner issue is tracked as
 the controller lifecycle result client accepts renew/stage but not inspect,
 even though the broker can launch inspect. Native selected-inspect Gate B
 remains blocked until this producer fix is reviewed and pinned.
+
+## Exact box-control producer correction and independent source acceptance
+
+**New reviewed selected-inspection source pin:**
+`zog144/box-control@a3e939b7a22ef6277ae9712961ffbd5a18ccac39`
+(source file `box-control/src/zog/box_control/issuer_lifecycle_client.py`).
+
+The host-deploy adapter now records the reviewed commit in
+`ISSUER_LIFECYCLE_BOX_CONTROL_REVISION`; the certificate-controller
+workflow explicitly checks out that **full SHA** and refuses a different
+Git HEAD. `tests/test_certificate_box_control_source_pin.py` loads and
+executes the genuine checked-out `issuer_lifecycle_client.py`,
+`role_broker_client.py` and its inspection-evidence sanitizer, with an
+isolated transport/broker contract stub to exclude unrelated image-build
+package dependencies. It checks exact source-file location, selected
+`inspect` request/result, saved request-ID correlation, malformed/borrowed
+IDs, sanitized invocation evidence, and rejection of the inspection reader
+without an authenticated controller UID. The stub is **not a native
+SO_PEERCRED, systemd, issuer or nginx acceptance test**.
+
+The workflow runs the new pinned-source acceptance under both Python
+3.11 and 3.12. The historical production service paths, old source pin,
+completed request identities, and renewal journals have **not** been
+rebound. The selected-broker timer's explicit native inspection guard
+remains, pending the separately approved root-control/installed controller
+Gate B and end-to-end certificate Gate C.
+
+**Next host-deploy Work checks:** verify exact box-control source and
+installed immutable generation on an isolated host; confirm actual
+SO_PEERCRED owner UID, distinct durable renew/inspect IDs,
+controller-owned boot/invocation and journal evidence, 15-minute freshness,
+recovery across interruption/reboot, and approved stage/nginx SNI delivery.
+Do not enable production renewal or change ports 80/443.
