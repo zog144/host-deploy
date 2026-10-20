@@ -5,9 +5,13 @@ revision hard-pinned in certificate_issuer_lifecycle. This imports the REAL
 upstream client rather than substituting a fake controller implementation.
 """
 from datetime import datetime, timedelta, timezone
+import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
+import sys
+import types
 
 import pytest
 
@@ -32,11 +36,42 @@ def _pinned_client():
     assert resolved == ISSUER_LIFECYCLE_BOX_CONTROL_REVISION, (
         "unreviewed box-control source revision"
     )
-    import zog.box_control.issuer_lifecycle_client as imported
+    # Load the actual checked-out producer client and transport source, while
+    # excluding unrelated box-control package initialization (the complete
+    # box-control package requires the image-build runtime). The isolated
+    # broker contract stub carries no production grant or transport.
     expected = (checkout / ISSUER_LIFECYCLE_CLIENT_MODULE).resolve(strict=True)
-    assert Path(imported.__file__).resolve(strict=True) == expected, (
-        "unexpected box-control module on Python import path"
-    )
+    src_dir = expected.parent
+    prefix = "_host_deploy_pinned_issuer"
+    pkg = types.ModuleType(prefix)
+    pkg.__path__ = [str(src_dir)]
+    sys.modules[prefix] = pkg
+    role = types.ModuleType(prefix + ".role_broker")
+    class RoleBrokerError(ValueError):
+        def __init__(self, message, *, code="blocked"):
+            super().__init__(message)
+            self.code = code
+    role.RoleBrokerError = RoleBrokerError
+    role.SCHEMA = "zog-application-role-broker-v1"
+    role._REQUEST = re.compile(r"[A-Za-z0-9-]{1,200}\\Z")
+    role._RUNTIME = re.compile(r"[A-Za-z0-9-]{1,40}\\Z")
+    role._APPLICATION = re.compile(r"[A-Za-z0-9-]{1,64}\\Z")
+    role._decode = lambda raw, *args, **kwargs: raw
+    role._json_bytes = lambda raw, *args: b""
+    role._peer_uid = lambda connection: 23001
+    sys.modules[role.__name__] = role
+
+    def load_real_module(module_name, path):
+        spec = importlib.util.spec_from_file_location(prefix + "." + module_name,
+                                                       path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    load_real_module("role_broker_client", src_dir / "role_broker_client.py")
+    imported = load_real_module("issuer_lifecycle_client", expected)
+    assert Path(imported.__file__).resolve(strict=True) == expected
     client = imported.IssuerLifecycleClient(
         "/run/zog/certify-lifecycle.sock", controller_uid=23001
     )
