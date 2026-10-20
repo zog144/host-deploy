@@ -175,6 +175,9 @@ def observe_request(policy, *, request_id, issued_at, controller_result,
         "request_id": request_id, "runtime_id": runtime_id,
         "certificate_id": policy["certificate_id"],
         "policy_sha256": policy["policy_sha256"],
+        # Preserve the independently pinned root/host policy digest. The
+        # selected inspector must not infer this value from issuer-owned state.
+        "host_policy_digest": policy["host_policy_digest"],
         "certificate_fingerprint_sha256": evidence["certificate_fingerprint_sha256"],
         "outcome": evidence["outcome"], "journal_updated_at": updated.isoformat(),
         "storage_id": policy["storage_id"], "grant_id": policy["grant_id"],
