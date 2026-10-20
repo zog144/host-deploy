@@ -16,6 +16,7 @@ on:
       - 'tests/test_certificate_renewal_timer.py'
       - 'tests/test_certificate_renewal_publication.py'
       - 'tests/test_certificate_issuer_observer.py'
+      - 'tests/test_certificate_root_observation_binding.py'
       - 'tests/test_certificate_issuer_lifecycle.py'
       - 'tests/test_certificate_box_control_source_pin.py'
       - 'tests/test_certificate_authenticated_inspection.py'
@@ -39,6 +40,7 @@ on:
       - 'tests/test_certificate_renewal_timer.py'
       - 'tests/test_certificate_renewal_publication.py'
       - 'tests/test_certificate_issuer_observer.py'
+      - 'tests/test_certificate_root_observation_binding.py'
       - 'tests/test_certificate_issuer_lifecycle.py'
       - 'tests/test_certificate_box_control_source_pin.py'
       - 'tests/test_certificate_authenticated_inspection.py'
@@ -73,11 +75,11 @@ jobs:
       - name: Install offline test dependency
         run: python -m pip install 'pytest>=8,<10'
       - name: Compile standalone renewal coordinator
-        run: python -m compileall -q src/zog/host_deploy/certificate_renewal.py src/zog/host_deploy/certificate_renewal_timer.py src/zog/host_deploy/certificate_renewal_publication.py src/zog/host_deploy/certificate_issuer_observer.py src/zog/host_deploy/certificate_issuer_lifecycle.py src/zog/host_deploy/certificate_issuer_inspection.py src/zog/host_deploy/certificate_selected_inspection.py tests/test_certificate_renewal.py tests/test_certificate_renewal_timer.py tests/test_certificate_renewal_publication.py tests/test_certificate_issuer_observer.py tests/test_certificate_issuer_lifecycle.py tests/test_certificate_issuer_inspection.py tests/test_certificate_selected_inspection.py
+        run: python -m compileall -q src/zog/host_deploy/certificate_renewal.py src/zog/host_deploy/certificate_renewal_timer.py src/zog/host_deploy/certificate_renewal_publication.py src/zog/host_deploy/certificate_issuer_observer.py src/zog/host_deploy/certificate_issuer_lifecycle.py src/zog/host_deploy/certificate_issuer_inspection.py src/zog/host_deploy/certificate_selected_inspection.py tests/test_certificate_renewal.py tests/test_certificate_renewal_timer.py tests/test_certificate_renewal_publication.py tests/test_certificate_issuer_observer.py tests/test_certificate_root_observation_binding.py tests/test_certificate_issuer_lifecycle.py tests/test_certificate_issuer_inspection.py tests/test_certificate_selected_inspection.py
       - name: Verify deterministic controller request replay
         env:
           PYTHONPATH: src
-        run: python -m pytest -q tests/test_certificate_renewal.py tests/test_certificate_renewal_timer.py tests/test_certificate_renewal_publication.py tests/test_certificate_issuer_observer.py tests/test_certificate_issuer_lifecycle.py tests/test_certificate_issuer_inspection.py tests/test_certificate_selected_inspection.py
+        run: python -m pytest -q tests/test_certificate_renewal.py tests/test_certificate_renewal_timer.py tests/test_certificate_renewal_publication.py tests/test_certificate_issuer_observer.py tests/test_certificate_root_observation_binding.py tests/test_certificate_issuer_lifecycle.py tests/test_certificate_issuer_inspection.py tests/test_certificate_selected_inspection.py
       - name: Verify pinned producer inspect client and authenticated reader
         env:
           PYTHONPATH: src:pinned-box-control/box-control/src
