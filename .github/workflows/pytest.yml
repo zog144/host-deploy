@@ -21,6 +21,32 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
         with:
           persist-credentials: false
+      - name: Checkout exact image-build producer with restored monthly pin
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          repository: zog144/image-build
+          ref: 31e6121cdf9fd05336286529666e2c35cdbe0831
+          path: pinned-image-build
+          persist-credentials: false
+      - name: Verify immutable toolchain source and October pin before tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import subprocess
+          root = Path("pinned-image-build")
+          revision = subprocess.check_output(
+              ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+              text=True).strip()
+          assert revision == "31e6121cdf9fd05336286529666e2c35cdbe0831"
+          lock = root / "project/pins/2026-10-01/commit-pin.py"
+          assert lock.is_file() and not lock.is_symlink()
+          digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+          assert digest == "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
+          active = root / "project/pins/current.py"
+          assert active.is_file() and active.read_text() == (
+              "# Explicit active monthly set.\n{'date': '2026-10-01'}\n")
+          PY
       - name: Python 3.12
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6, Node 24
         with:
