@@ -172,7 +172,7 @@ def _original_renewal(fd, scope, original_id):
 
 
 def tick(directory, controller, scope, *, original_renewal_id=None,
-         trusted_reader=None, trusted_renewal_observation=None, now=None):
+         trusted_reader=None, trusted_renewal_observation=None,\n         host_policy_digest=None, now=None):
     """Single bounded pass; no client-supplied issuer JSON may become evidence.
 
     trusted_reader, when implemented by controller/root-control, must derive
@@ -267,7 +267,7 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
             checked = correlate(
                 scope, ident, runtime_id, evidence,
                 original_renewal_id=original_renewal_id,
-                renewal_observation=trusted_renewal_observation, now=current,
+                renewal_observation=trusted_renewal_observation,\n                host_policy_digest=host_policy_digest, now=current,
             )
         else:
             checked = correlate(scope, ident, runtime_id, evidence,
