@@ -10,7 +10,15 @@ import stat
 from pathlib import Path
 
 CONTRACT = "host-deploy-toolchain-task-v1"
+# Retained historical producer: existing immutable dispatches must still decode.
 PRODUCER_REVISION = "857bb454e64102afa51a93ce0b9f8cce5924b67c"
+# New source-owned, reviewed monthly pin restoration. Only this pair may
+# authorize a NEW compiler submission; never retarget the historical pin.
+RESTORED_PRODUCER_REVISION = "31e6121cdf9fd05336286529666e2c35cdbe0831"
+RESTORED_MONTHLY_PIN_PATH = "project/pins/2026-10-01/commit-pin.py"
+RESTORED_MONTHLY_PIN_IDENTITY = (
+    "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
+)
 TASK_NAME = "self-hosted-c-cxx-toolchain-v1"
 _SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _GENERATION = re.compile(r"[0-9a-f]{64}\Z")
@@ -42,7 +50,12 @@ def validate(value):
     task = value["task"]
     if (task["name"] != TASK_NAME
             or task["source_repository"] != "zog144/image-build"
-            or task["source_revision"] != PRODUCER_REVISION
+            or task["source_revision"] not in (
+                PRODUCER_REVISION, RESTORED_PRODUCER_REVISION)
+            or (task["source_revision"] == RESTORED_PRODUCER_REVISION
+                and (task["monthly_pin_repository_path"] != RESTORED_MONTHLY_PIN_PATH
+                     or task["monthly_pin_identity"] != RESTORED_MONTHLY_PIN_IDENTITY
+                     or task["pin_date"] != "2026-10-01"))
             or type(task["lane"]) is not str or not _LANE.fullmatch(task["lane"])
             or type(task["lane_owner"]) is not str
             or not _LANE.fullmatch(task["lane_owner"])
@@ -109,6 +122,11 @@ def load(path, *, require_root_owned=False):
 def select(protected, *, name, repository, revision, lane,
            lane_owner, monthly_pin_repository_path, monthly_pin_identity):
     task = validate(protected)["task"]
+    # Historical task bindings remain inspectable for idempotency/recovery,
+    # but their source had no reviewed public monthly lock and therefore
+    # cannot authorize any NEW compiler dispatch.
+    if task["source_revision"] != RESTORED_PRODUCER_REVISION:
+        raise ToolchainTaskError("historical toolchain producer cannot accept new work")
     if (name != TASK_NAME
             or repository != task["source_repository"]
             or revision != task["source_revision"]
