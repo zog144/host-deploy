@@ -226,8 +226,9 @@ def binding_for_request(
             companion, project_root=lane_spec["project_root"]
         )
         if (companion["producer_revision"] != lane_spec["source_revision"]
-                or companion["revision"] != image_build_lanes.BUILD_RECORD_COMPATIBILITY):
-            raise RuntimeError("runtime companion is not the producer compatibility checkpoint")
+                or companion["revision"] != image_build_lanes.expected_build_record_revision(
+                    lane_spec["source_revision"])):
+            raise RuntimeError("runtime companion is not the source-bound producer checkpoint")
         remote_request, task_binding = _remote_request(
             request,
             lane_spec,
@@ -235,6 +236,19 @@ def binding_for_request(
             task_catalogue_identity=task_catalogue_identity,
         )
         project_root = Path(lane_spec["project_root"])
+        controller_companion = lane_record.get("controller_companion")
+        if controller_companion is not None:
+            controller_companion = image_build_lanes.validate_controller_companion(
+                controller_companion, project_root=lane_spec["project_root"])
+            if (controller_companion["producer_revision"]
+                    != lane_spec["source_revision"]):
+                raise RuntimeError("controller companion belongs to different producer")
+        if (lane_spec["source_revision"] ==
+                image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+                and lane_spec["observed_state_dir"] is None
+                and controller_companion is None):
+            raise RuntimeError("new producer requires explicit reviewed controller companion")
+
         remote_root = project_root / "gateway-requests" / request_id
         request_path = remote_root / "request.json"
         result_path = remote_root / "result.json"
@@ -262,7 +276,8 @@ def binding_for_request(
             "controller": "--controller-config" in argv,
             "external_observed_state": "--observed-state-dir" in argv,
             "controller_revision": (
-                image_build_lanes.BOX_CONTROL_COMPATIBILITY
+                (controller_companion["revision"] if controller_companion is not None
+                 else image_build_lanes.BOX_CONTROL_COMPATIBILITY)
                 if "--controller-config" in argv else None
             ),
             "controller_source_root": (
@@ -290,6 +305,8 @@ def binding_for_request(
         "remote_request": remote_request,
         "remote_request_sha256": hashlib.sha256(request_bytes).hexdigest(),
     }
+    if controller_companion is not None and "--controller-config" in argv:
+        binding["controller_companion"] = controller_companion
     if task_binding is not None:
         binding["task"] = task_binding["task"]
         binding["task_catalogue_identity"] = task_binding[
@@ -356,6 +373,16 @@ def verify_current_target(gateway_root, binding):
         current = lane_record.get("runtime_companion")
         if current != binding.get("runtime_companion"):
             raise RuntimeError("runtime companion differs from frozen dispatch")
+        if "controller_companion" in binding:
+            selected = image_build_lanes.validate_controller_companion(
+                binding["controller_companion"], project_root=binding["project_root"])
+            if (lane_record.get("controller_companion") != selected
+                    or selected["producer_revision"] != binding["source"]["revision"]):
+                raise RuntimeError("controller companion differs from frozen dispatch")
+        elif (binding["source"]["revision"] ==
+              image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+              and binding["runtime_profile"]["controller"]):
+            raise RuntimeError("new producer dispatch lacks reviewed controller binding")
     if lane_record["source_root"] != binding["source_root"]:
         raise RuntimeError("image-build lane source path differs from prepared dispatch")
     expected_argv = image_build_lanes.remote_operation_argv(
