@@ -53,9 +53,9 @@ def _pinned_client():
             self.code = code
     role.RoleBrokerError = RoleBrokerError
     role.SCHEMA = "zog-application-role-broker-v1"
-    role._REQUEST = re.compile(r"[A-Za-z0-9-]{1,200}\\Z")
-    role._RUNTIME = re.compile(r"[A-Za-z0-9-]{1,40}\\Z")
-    role._APPLICATION = re.compile(r"[A-Za-z0-9-]{1,64}\\Z")
+    role._REQUEST = re.compile(r"[A-Za-z0-9-]{1,200}\Z")
+    role._RUNTIME = re.compile(r"[A-Za-z0-9-]{1,40}\Z")
+    role._APPLICATION = re.compile(r"[A-Za-z0-9-]{1,64}\Z")
     role._decode = lambda raw, *args, **kwargs: raw
     role._json_bytes = lambda raw, *args: b""
     role._peer_uid = lambda connection: 23001
