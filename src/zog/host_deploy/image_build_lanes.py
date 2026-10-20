@@ -397,19 +397,24 @@ BOX_CONTROL_COMPATIBILITY = "c8e65abde37d6e2d9ce6fd3622e289826a253642"
 # producer. The historical constants above MUST NOT be silently repointed:
 # already prepared dispatch bindings use those exact revisions.
 TOOLCHAIN_PRODUCER_REVISION = "857bb454e64102afa51a93ce0b9f8cce5924b67c"
+# A separate, restored-lock producer; no historical lane or compatibility
+# record is rewritten. The producer's runtime requirements were byte-identical.
+RESTORED_TOOLCHAIN_PRODUCER_REVISION = "31e6121cdf9fd05336286529666e2c35cdbe0831"
 TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
 TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
 CONTROLLER_COMPANION_SCHEMA = 1
 
 
 def expected_build_record_revision(producer_revision):
-    if producer_revision == TOOLCHAIN_PRODUCER_REVISION:
+    if producer_revision in (
+            TOOLCHAIN_PRODUCER_REVISION, RESTORED_TOOLCHAIN_PRODUCER_REVISION):
         return TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
     return BUILD_RECORD_COMPATIBILITY
 
 
 def expected_controller_revision(producer_revision):
-    if producer_revision == TOOLCHAIN_PRODUCER_REVISION:
+    if producer_revision in (
+            TOOLCHAIN_PRODUCER_REVISION, RESTORED_TOOLCHAIN_PRODUCER_REVISION):
         return TOOLCHAIN_BOX_CONTROL_COMPATIBILITY
     return BOX_CONTROL_COMPATIBILITY
 
