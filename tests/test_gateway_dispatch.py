@@ -1281,7 +1281,7 @@ def test_reviewed_toolchain_companion_must_be_bound_explicitly(tmp_path):
     with pytest.raises(ValueError, match="unreviewed"):
         _binding({**prepared, "binding": {
             **binding, "controller_companion": current["controller_companion"]}})
-    with pytest.raises(ValueError, match="unreviewed"):
+    with pytest.raises(RuntimeError, match="controller companion differs"):
         verify_current_target(gateway, binding)
 
 
