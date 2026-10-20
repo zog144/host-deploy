@@ -94,12 +94,14 @@ def _binding(record):
             )
             if selected_controller["producer_revision"] != binding["source"]["revision"]:
                 raise RuntimeError("controller companion is bound to another producer")
-        elif (binding["source"]["revision"] ==
-              image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+        elif (binding["source"]["revision"] in (
+                  image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
+                  image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
               and "--controller-config" in binding["argv"]):
             raise RuntimeError("new producer requires explicit controller selection")
-        if (binding["source"]["revision"] ==
-                image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+        if (binding["source"]["revision"] in (
+                    image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
+                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
                 and companion["revision"] !=
                 image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY):
             raise RuntimeError("new producer requires its exact build-record companion")
