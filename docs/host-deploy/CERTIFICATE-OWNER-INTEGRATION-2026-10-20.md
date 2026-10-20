@@ -111,3 +111,28 @@ Publication/delivery gates remain distinct:
 `issuer-verified` -> `staged` -> `delivered` ->
 `nginx-loaded` -> `browser-verified`.
 No command-center or nonterminating relay receives a TLS private key.
+
+## Post-interruption continuation: authority-gated root delivery mode
+
+The reviewed branch now adds `--owner-authority /absolute/root/owned.json`
+to the certificate-delivery CLI and `serve(policy_path,
+authority_path=...)` for a **separately selected versioned local
+consumer mode**. The protected `zog-host-deploy-certificate-owner-authority-v1`
+receipt is validated before opening the Unix socket, then reloaded and
+validated on every issuer request before invoking the unchanged root-owned
+certificate generation, nginx test/reload and local SNI probe.
+
+This opt-in path does not change the already installed legacy listener,
+does not authorize public port 80/443 routing and does not give a
+command-center or network-traverse relay access to the private key.
+`tests/test_certificate_hostname_authority.py` exercises rejection before
+socket bind, CLI selection, and rejection of a foreign consumer. The
+protected authority receipt must ultimately be installed by the approved
+host-owner producer and correlated with the **local** host and installation
+identities; no caller-supplied unsigned web assignment is sufficient.
+
+A separate cross-owner issue is tracked as
+[zog144/box-control#9](https://github.com/zog144/box-control/issues/9):
+the controller lifecycle result client accepts renew/stage but not inspect,
+even though the broker can launch inspect. Native selected-inspect Gate B
+remains blocked until this producer fix is reviewed and pinned.
