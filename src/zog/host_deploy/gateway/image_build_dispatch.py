@@ -243,8 +243,9 @@ def binding_for_request(
             if (controller_companion["producer_revision"]
                     != lane_spec["source_revision"]):
                 raise RuntimeError("controller companion belongs to different producer")
-        if (lane_spec["source_revision"] ==
-                image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+        if (lane_spec["source_revision"] in (
+                    image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
+                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
                 and lane_spec["observed_state_dir"] is None
                 and controller_companion is None):
             raise RuntimeError("new producer requires explicit reviewed controller companion")
@@ -379,8 +380,9 @@ def verify_current_target(gateway_root, binding):
             if (lane_record.get("controller_companion") != selected
                     or selected["producer_revision"] != binding["source"]["revision"]):
                 raise RuntimeError("controller companion differs from frozen dispatch")
-        elif (binding["source"]["revision"] ==
-              image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+        elif (binding["source"]["revision"] in (
+                  image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
+                  image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
               and binding["runtime_profile"]["controller"]):
             raise RuntimeError("new producer dispatch lacks reviewed controller binding")
     if lane_record["source_root"] != binding["source_root"]:
