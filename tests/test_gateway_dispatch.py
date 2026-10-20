@@ -1288,13 +1288,23 @@ def test_reviewed_toolchain_companion_must_be_bound_explicitly(tmp_path):
 def test_real_preflight_accepts_reviewed_source_bound_controller(tmp_path):
     from zog.host_deploy.gateway.image_build_execution import _binding
     from zog.host_deploy.gateway.toolchain_task import PRODUCER_REVISION
+    requirements_path = (Path(__file__).parent / "fixtures" /
+        "image-build-toolchain-runtime-requirements-857bb454.json")
+    pinned = json.loads(requirements_path.read_text())
+    assert pinned["source"] == {
+        "repository": "zog144/image-build", "revision": PRODUCER_REVISION
+    }
+    assert pinned["box_control"]["validated_revision"] == (
+        image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY)
+    assert pinned["build_record"]["validated_revision"] == (
+        image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
     gateway, request, task, lane_path, record = _pinned_toolchain_workspace(tmp_path)
     spec = record["specification"]
     image_build_lanes.bind_controller_companion(
         lane_path.parent.parent, "lane-a",
         producer_revision=PRODUCER_REVISION,
         repository="zog144/box-control",
-        revision="644170fc441863307092f329bf7e23cb64eb33e2",
+        revision=pinned["box_control"]["validated_revision"],
         source_root=spec["project_root"] + "/companions/box-control",
         expected_specification_sha256=image_build_lanes.specification_sha256(spec),
     )
@@ -1311,10 +1321,10 @@ def test_real_preflight_accepts_reviewed_source_bound_controller(tmp_path):
             assert profile["operation"] == "toolchain.specification.inspect"
             checks = []
             for component, revision, root, module in (
-                ("build-record", binding["runtime_companion"]["revision"],
+                ("build-record", pinned["build_record"]["validated_revision"],
                  binding["runtime_companion"]["source_root"],
                  "src/zog/build_record/__init__.py"),
-                ("box-control", profile["controller_revision"],
+                ("box-control", pinned["box_control"]["validated_revision"],
                  profile["controller_source_root"],
                  "box-control/src/zog/box_control/__init__.py"),
             ):
@@ -1346,6 +1356,18 @@ def test_real_preflight_accepts_reviewed_source_bound_controller(tmp_path):
     assert image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY in scripts[0]
     assert image_build_lanes.BOX_CONTROL_COMPATIBILITY not in scripts[0]
     assert image_build_lanes.BUILD_RECORD_COMPATIBILITY not in scripts[0]
+
+    class WrongControllerHost(SourceBoundHost):
+        def command(self, script, seconds):
+            response = json.loads(super().command(script, seconds))
+            for item in response["checks"]:
+                if item["component"] == "box-control":
+                    item["validated_revision"] = (
+                        image_build_lanes.BOX_CONTROL_COMPATIBILITY)
+            return json.dumps(response)
+
+    with pytest.raises(RuntimeError, match="did not verify bound box-control"):
+        REAL_PRODUCER_PREFLIGHT(WrongControllerHost(), binding)
 
 
 def test_historical_controller_profile_unmodified_by_new_producer(tmp_path):
