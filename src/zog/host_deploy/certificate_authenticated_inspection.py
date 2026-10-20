@@ -39,8 +39,9 @@ def correlate(scope, inspect_id, runtime_id, evidence, *,
     fields = {"schema", "request_id", "runtime_id", "program", "boot_id",
               "invocation_id", "storage_id", "grant_id", "issuer_uid", "issuer_gid",
               "host_policy_digest", "inspection", "status", "tls_ready"}
-    if host_policy_digest is None and isinstance(renewal_observation, dict):
-        host_policy_digest = renewal_observation.get("host_policy_digest")
+    # This expected digest must be provided from separately approved local
+    # root-owner policy, never learned from the observation being checked.
+    # In particular a station-owned UID-970 projection cannot select it.
     if (type(evidence) is not dict or set(evidence) != fields
             or len(json.dumps(evidence, sort_keys=True)) > 8192
             or evidence["schema"] != TRUSTED
