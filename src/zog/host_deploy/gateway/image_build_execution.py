@@ -73,7 +73,7 @@ def _binding(record):
         "remote_request",
         "remote_request_sha256",
     }
-    optional = {"task", "task_catalogue_identity"}
+    optional = {"task", "task_catalogue_identity", "controller_companion"}
     if binding.get("schema") in {2, 3}:
         required.add("python_executable")
         image_build_lanes.validate_python_executable(binding.get("python_executable"))
@@ -85,6 +85,24 @@ def _binding(record):
             binding.get("runtime_companion"), project_root=binding["project_root"]
         )
         profile = binding.get("runtime_profile")
+        selected_controller = binding.get("controller_companion")
+        if selected_controller is not None:
+            if "--controller-config" not in binding["argv"]:
+                raise RuntimeError("controller companion requires managed controller")
+            selected_controller = image_build_lanes.validate_controller_companion(
+                selected_controller, project_root=binding["project_root"]
+            )
+            if selected_controller["producer_revision"] != binding["source"]["revision"]:
+                raise RuntimeError("controller companion is bound to another producer")
+        elif (binding["source"]["revision"] ==
+              image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+              and "--controller-config" in binding["argv"]):
+            raise RuntimeError("new producer requires explicit controller selection")
+        if (binding["source"]["revision"] ==
+                image_build_lanes.TOOLCHAIN_PRODUCER_REVISION
+                and companion["revision"] !=
+                image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY):
+            raise RuntimeError("new producer requires its exact build-record companion")
         expected_profile = {
             "schema": 1,
             "operation": binding["remote_request"]["operation"],
@@ -92,7 +110,8 @@ def _binding(record):
             "controller": "--controller-config" in binding["argv"],
             "external_observed_state": "--observed-state-dir" in binding["argv"],
             "controller_revision": (
-                image_build_lanes.BOX_CONTROL_COMPATIBILITY
+                (selected_controller["revision"] if selected_controller is not None
+                 else image_build_lanes.BOX_CONTROL_COMPATIBILITY)
                 if "--controller-config" in binding["argv"] else None
             ),
             "controller_source_root": (
@@ -104,6 +123,8 @@ def _binding(record):
             raise RuntimeError("unsupported image-build runtime profile")
         if companion["producer_revision"] != binding["source"]["revision"]:
             raise RuntimeError("runtime companion is bound to different producer")
+    if binding.get("schema") != 3 and "controller_companion" in binding:
+        raise RuntimeError("legacy dispatch cannot have controller companion")
     if set(binding) - required - optional or not required.issubset(binding):
         raise RuntimeError("image-build dispatch binding fields are invalid")
     if ("task" in binding) != ("task_catalogue_identity" in binding):
