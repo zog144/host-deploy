@@ -1197,7 +1197,8 @@ def test_companion_changes_after_dispatch_preparation_are_refused(tmp_path):
 def _pinned_toolchain_workspace(tmp_path):
     """Prepared fixture emulates the exact pinned producer's compatibility inputs."""
     from zog.host_deploy.gateway.toolchain_task import (
-        PRODUCER_REVISION, CONTRACT, TASK_NAME,
+        RESTORED_PRODUCER_REVISION as PRODUCER_REVISION, CONTRACT, TASK_NAME,
+        RESTORED_MONTHLY_PIN_IDENTITY,
     )
     gateway, workspace_id = prepared_gateway(tmp_path)
     lane_path = (gateway / "workspaces" / workspace_id
@@ -1205,6 +1206,7 @@ def _pinned_toolchain_workspace(tmp_path):
     record = json.loads(lane_path.read_text())
     record["schema"] = image_build_lanes.SCHEMA
     record["specification"]["source_revision"] = PRODUCER_REVISION
+    record["specification"]["monthly_pin_identity"] = RESTORED_MONTHLY_PIN_IDENTITY
     record["runtime_companion"]["producer_revision"] = PRODUCER_REVISION
     record["runtime_companion"]["revision"] = (
         image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
@@ -1217,7 +1219,7 @@ def _pinned_toolchain_workspace(tmp_path):
             "lane": "lane-a", "lane_owner": "host-a",
             "seed_generation": "a" * 64,
             "monthly_pin_repository_path": MONTHLY_PIN_PATH,
-            "monthly_pin_identity": PIN,
+            "monthly_pin_identity": RESTORED_MONTHLY_PIN_IDENTITY,
             "pin_date": "2026-10-01",
             "specification_identity":
                 "sha256:ba8986219065627c939adf49ee0bf200bfc94f85b0bbe280aecdaff8349ffc1c",
@@ -1235,7 +1237,7 @@ def _pinned_toolchain_workspace(tmp_path):
 
 def test_reviewed_toolchain_companion_must_be_bound_explicitly(tmp_path):
     from zog.host_deploy.gateway.image_build_execution import _binding
-    from zog.host_deploy.gateway.toolchain_task import PRODUCER_REVISION
+    from zog.host_deploy.gateway.toolchain_task import RESTORED_PRODUCER_REVISION as PRODUCER_REVISION
     gateway, request, task, lane_path, record = _pinned_toolchain_workspace(tmp_path)
     approval = "sha256:" + "e" * 64
     with pytest.raises(RuntimeError, match="explicit reviewed controller"):
@@ -1287,9 +1289,9 @@ def test_reviewed_toolchain_companion_must_be_bound_explicitly(tmp_path):
 
 def test_real_preflight_accepts_reviewed_source_bound_controller(tmp_path):
     from zog.host_deploy.gateway.image_build_execution import _binding
-    from zog.host_deploy.gateway.toolchain_task import PRODUCER_REVISION
+    from zog.host_deploy.gateway.toolchain_task import RESTORED_PRODUCER_REVISION as PRODUCER_REVISION
     requirements_path = (Path(__file__).parent / "fixtures" /
-        "image-build-toolchain-runtime-requirements-857bb454.json")
+        "image-build-toolchain-runtime-requirements-31e6121c.json")
     pinned = json.loads(requirements_path.read_text())
     assert pinned["source"] == {
         "repository": "zog144/image-build", "revision": PRODUCER_REVISION
