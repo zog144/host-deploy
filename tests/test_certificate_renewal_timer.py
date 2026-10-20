@@ -331,6 +331,7 @@ def test_selected_broker_committed_result_uses_authenticated_journal_time(tmp_pa
             "schema": "zog-trusted-issuer-observation-v1",
             "status": "journal-ready", "request_id": request_id,
             "certificate_id": "station-web", "policy_sha256": "a"*64,
+            "host_policy_digest": "sha256:" + "d"*64,
             "certificate_fingerprint_sha256": "e"*64, "outcome": "unchanged",
             "journal_updated_at": shared_completion.isoformat(),
             "tls_ready": False,
