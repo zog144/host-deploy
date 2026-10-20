@@ -255,7 +255,8 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
         record["phase"] = "awaiting-evidence"
         _save(fd, record)
         authenticated = hasattr(controller, "inspect_issuer_result")
-        if trusted_reader is None and authenticated:
+        if authenticated:
+            # An injected callback must never replace a UID-pinned client.
             trusted_reader = controller.inspect_issuer_result
         if trusted_reader is None:
             return dict(record)
