@@ -264,8 +264,8 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
         evidence = (trusted_reader(ident) if authenticated
                     else trusted_reader(ident, runtime_id))
         if authenticated:
-            from .certificate_authenticated_inspection import correlate
-            checked = correlate(
+            from .certificate_authenticated_inspection import correlate as correlate_authenticated
+            checked = correlate_authenticated(
                 scope, ident, runtime_id, evidence,
                 original_renewal_id=original_renewal_id,
                 renewal_observation=trusted_renewal_observation,
