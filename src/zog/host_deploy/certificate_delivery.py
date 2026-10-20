@@ -466,6 +466,34 @@ def publish(policy, fingerprint, *, execute=_run, probe=_probe):
         os.close(fd)
 
 
+def publish_authorized(policy, fingerprint, *, authority_path, execute=_run,
+                       probe=_probe):
+    """Versioned host-owner gate around the unchanged v1 root delivery bridge.
+
+    Caller provides only a root-owned authority receipt path, not web-supplied
+    authorization. The receipt binds this machine's local HTTPS service and
+    exact staged issuer policy. The bridge never delivers keys to a relay.
+    """
+    from .certificate_hostname_authority import (
+        read_owned, authorize_consumer, AuthorityBlocked,
+    )
+    if os.geteuid() != 0:
+        raise DeliveryBlocked("not-authorized")
+    policy = policy_validate(policy)
+    try:
+        authority = read_owned(authority_path, now=datetime.now(timezone.utc).timestamp())
+        selection = authorize_consumer(authority, policy,
+                    now=datetime.now(timezone.utc).timestamp())
+        if selection["consumer"] != policy["service_id"]:
+            raise AuthorityBlocked("not-local-consumer")
+    except (AuthorityBlocked, OSError, TypeError, ValueError):
+        raise DeliveryBlocked("hostname-authority-unavailable") from None
+    # Time-of-check versus publication authority revocation must be handled by
+    # the protected policy owner during deployment. No network/web receipt
+    # is ever treated as the privileged authority.
+    return publish(policy, fingerprint, execute=execute, probe=probe)
+
+
 def recover_previous(policy, *, execute=_run, probe=_probe):
     """Explicit root-operator recovery of an uncertain publication.
 
