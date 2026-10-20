@@ -122,3 +122,46 @@ def test_delivery_wrapper_refuses_unprivileged_invocation(monkeypatch):
     with pytest.raises(delivery.DeliveryBlocked, match="not-authorized"):
         delivery.publish_authorized(
             {}, "e" * 64, authority_path="/etc/zog/authority.json")
+
+
+def test_versioned_listener_refuses_expired_authority_before_binding(monkeypatch):
+    from zog.host_deploy import certificate_delivery as delivery
+    a = authority()
+    policy = {
+        "service_id": a["service_id"], "certificate_id": a["certificate_id"],
+        "hostnames": a["hostnames"], "policy_sha256": a["policy_sha256"]
+    }
+    monkeypatch.setattr(delivery, "read_policy", lambda _: policy)
+    def refuse(path, *, now):
+        raise auth.AuthorityBlocked("stale-assignment")
+    monkeypatch.setattr(auth, "read_owned", refuse)
+    class MustNotBind:
+        def __init__(self, *args, **kwargs):
+            pytest.fail("rejected authority must not allocate socket")
+    monkeypatch.setattr(delivery, "_Server", MustNotBind)
+    with pytest.raises(auth.AuthorityBlocked, match="stale-assignment"):
+        delivery.serve("/etc/zog/issuer-policy.json",
+                       authority_path="/etc/zog/authority.json")
+
+
+def test_owner_authority_cli_selects_versioned_publisher(monkeypatch, capsys):
+    from zog.host_deploy import certificate_delivery as delivery
+    monkeypatch.setattr(delivery, "read_policy", lambda path: {"approved": path})
+    published = []
+    monkeypatch.setattr(delivery, "publish",
+        lambda *args, **kwargs: pytest.fail("legacy publisher used"))
+    def accepted(policy, fp, *, authority_path, **kwargs):
+        published.append((policy, fp, authority_path))
+        return {"schema": delivery.SCHEMA, "state": "browser-verified"}
+    monkeypatch.setattr(delivery, "publish_authorized", accepted)
+    result = delivery.main([
+        "--owner-policy", "/etc/zog/delivery.json",
+        "--owner-authority", "/etc/zog/authority.json",
+        "--fingerprint", "e" * 64,
+    ])
+    assert result == 0
+    assert published == [
+        ({"approved": "/etc/zog/delivery.json"}, "e" * 64,
+         "/etc/zog/authority.json")
+    ]
+    assert "browser-verified" in capsys.readouterr().out
