@@ -80,3 +80,41 @@ def test_revocation_stale_and_credentials_cannot_appear_in_receipt():
         auth.compare_revision(
             {**revoked, "revision": 2, "operation_id": str(uuid.UUID(int=5))},
             {**a, "revision": 3, "operation_id": str(uuid.UUID(int=6))})
+
+
+def test_authority_delivery_wrapper_denies_foreign_consumer_and_uses_root_receipt(monkeypatch):
+    from zog.host_deploy import certificate_delivery as delivery
+    a = authority()
+    authorized = {
+        "service_id": a["service_id"], "certificate_id": a["certificate_id"],
+        "hostnames": a["hostnames"], "policy_sha256": a["policy_sha256"],
+    }
+    monkeypatch.setattr(delivery.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(delivery, "policy_validate", lambda policy: policy)
+    queried = []
+    def root_owned(path, *, now):
+        queried.append(path)
+        return a
+    monkeypatch.setattr(auth, "read_owned", root_owned)
+    deliveries = []
+    monkeypatch.setattr(delivery, "publish",
+                        lambda policy, fp, **kw: deliveries.append((policy, fp)) or
+                        {"state": "browser-verified"})
+    result = delivery.publish_authorized(
+        authorized, "e" * 64, authority_path="/etc/zog/authority.json")
+    assert result["state"] == "browser-verified"
+    assert queried == ["/etc/zog/authority.json"]
+    assert deliveries == [(authorized, "e" * 64)]
+    with pytest.raises(delivery.DeliveryBlocked, match="hostname-authority"):
+        delivery.publish_authorized(
+            {**authorized, "service_id": "unapproved"},
+            "e" * 64, authority_path="/etc/zog/authority.json")
+    assert len(deliveries) == 1
+
+
+def test_delivery_wrapper_refuses_unprivileged_invocation(monkeypatch):
+    from zog.host_deploy import certificate_delivery as delivery
+    monkeypatch.setattr(delivery.os, "geteuid", lambda: 1000)
+    with pytest.raises(delivery.DeliveryBlocked, match="not-authorized"):
+        delivery.publish_authorized(
+            {}, "e" * 64, authority_path="/etc/zog/authority.json")
