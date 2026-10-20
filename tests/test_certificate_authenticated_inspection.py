@@ -100,17 +100,22 @@ class Broker:
         assert path == "/run/zog/certify-lifecycle.sock"
         assert controller_uid == 23001
         self.last = None
+        self.launched = False
 
     def issue_application_request_id(self):
         return ID
 
     def launch_application(self, application, *, program_name, request_id):
         self.last = (application, program_name, request_id)
+        self.launched = True
         return SimpleNamespace(application="certify-manage",
                                selected_program=program_name,
                                runtime_id="RUNTIME01")
 
     def application_request_result(self, request_id):
+        if not self.launched:
+            return {"request_id": request_id, "program": None,
+                    "status": "unknown", "runtime_id": None}
         return {"request_id": request_id, "program": "inspect",
                 "status": "satisfied", "runtime_id": "RUNTIME01"}
 
