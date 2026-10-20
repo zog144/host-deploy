@@ -9,6 +9,16 @@ from types import SimpleNamespace
 
 from .certificate_renewal import REQUEST_ID, RenewalBlocked
 
+# Source-review compatibility checkpoint for the fixed, one-shot controller
+# result reader. It does NOT attest a live installed checkout: Work must
+# independently verify the deployed box-control source and broker UID.
+ISSUER_LIFECYCLE_BOX_CONTROL_REPOSITORY = "zog144/box-control"
+ISSUER_LIFECYCLE_BOX_CONTROL_REVISION = "a3e939b7a22ef6277ae9712961ffbd5a18ccac39"
+ISSUER_LIFECYCLE_CLIENT_MODULE = (
+    "box-control/src/zog/box_control/issuer_lifecycle_client.py"
+)
+
+
 class SelectedIssuerController:
     """Compatibility adapter to the original durable renewal/stage coordinator.
 
