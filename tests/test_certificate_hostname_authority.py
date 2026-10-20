@@ -84,7 +84,11 @@ def test_revocation_stale_and_credentials_cannot_appear_in_receipt():
 
 def test_authority_delivery_wrapper_denies_foreign_consumer_and_uses_root_receipt(monkeypatch):
     from zog.host_deploy import certificate_delivery as delivery
+    from datetime import datetime, timezone
     a = authority()
+    actual_now = int(datetime.now(timezone.utc).timestamp())
+    a["approved_at"] = actual_now - 3600
+    a["expires_at"] = actual_now + 86400
     authorized = {
         "service_id": a["service_id"], "certificate_id": a["certificate_id"],
         "hostnames": a["hostnames"], "policy_sha256": a["policy_sha256"],
