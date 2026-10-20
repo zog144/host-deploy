@@ -1,0 +1,18 @@
+{
+  "source": {
+    "repository": "zog144/image-build",
+    "revision": "31e6121cdf9fd05336286529666e2c35cdbe0831"
+  },
+  "source_file": "src/zog/image_build/runtime_requirements.py",
+  "contract": "image-build-runtime-dependencies-v1",
+  "build_record": {
+    "repository": "zog144/build-record",
+    "validated_revision": "a866c9c4b0dd385045f00ce2de7d809f5b67c104",
+    "source_subdir": "src"
+  },
+  "box_control": {
+    "repository": "zog144/box-control",
+    "validated_revision": "644170fc441863307092f329bf7e23cb64eb33e2",
+    "source_subdir": "box-control/src"
+  }
+}
