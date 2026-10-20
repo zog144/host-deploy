@@ -455,7 +455,8 @@ def bind_controller_companion(
             raise RuntimeError("controller companion requires regular lane record")
         record = json.loads(path.read_text())
         spec = validate(record.get("specification"))
-        if (record.get("lane") != lane or spec["lane"] != lane
+        if (record.get("schema") != SCHEMA
+                or record.get("lane") != lane or spec["lane"] != lane
                 or record.get("state") != "active"
                 or spec["schema"] != SCHEMA or spec["mode"] != "managed"):
             raise RuntimeError("controller companion requires active managed schema-4 lane")
