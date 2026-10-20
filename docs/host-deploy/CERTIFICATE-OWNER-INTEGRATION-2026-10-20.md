@@ -171,3 +171,28 @@ SO_PEERCRED owner UID, distinct durable renew/inspect IDs,
 controller-owned boot/invocation and journal evidence, 15-minute freshness,
 recovery across interruption/reboot, and approved stage/nginx SNI delivery.
 Do not enable production renewal or change ports 80/443.
+
+## Root observation to local certificate policy — Regular correction
+
+The root-owned issuer observer consumer now retains `host_policy_digest`
+in the secret-free `zog-trusted-issuer-observation-v1` projection rather
+than dropping it. In `certificate_renewal_timer._authenticated_issuer_evidence`,
+a ready root observation must bind the exact retained request ID,
+`certificate_id`, and `policy_sha256` from the independently selected
+local host-deploy timer policy, and the digest from the root-owned observer
+approval. The selected-inspection correlator cannot derive the
+**expected** host digest from a returned observation. No station-access
+UID-970 state, private station signing key or station home path is read.
+
+Regression tests reject a mismatched root observation, foreign certificate
+or local policy, swapped request ID, TLS-ready overclaim and missing
+expected digest. Certificate-controller CI and public source-only CI passed
+on the reviewed follow-up, but neither signs nor installs a root authority
+receipt. Station-access is responsible for the authenticated producer and
+signing-key side; host-install must install the reviewed protected root pin,
+service identities and native broker. The timer's
+`_require_approved_native_inspection` **remains intact**.
+
+Review this correction only as the consumer-side binding gate. Native
+Gate B and local HTTPS Gate C remain NO-GO until those external
+producer/install prerequisites have independent evidence.
