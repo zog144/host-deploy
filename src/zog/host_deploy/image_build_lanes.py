@@ -393,6 +393,88 @@ BUILD_RECORD_COMPATIBILITY = "771af9429e83da40fd503625a6b4ba8329acee35"
 BOX_CONTROL_REPOSITORY = "zog144/box-control"
 BOX_CONTROL_COMPATIBILITY = "c8e65abde37d6e2d9ce6fd3622e289826a253642"
 
+# Source-bound acceptance checkpoint for the reviewed unattended toolchain
+# producer. The historical constants above MUST NOT be silently repointed:
+# already prepared dispatch bindings use those exact revisions.
+TOOLCHAIN_PRODUCER_REVISION = "857bb454e64102afa51a93ce0b9f8cce5924b67c"
+TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
+TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
+CONTROLLER_COMPANION_SCHEMA = 1
+
+
+def expected_build_record_revision(producer_revision):
+    if producer_revision == TOOLCHAIN_PRODUCER_REVISION:
+        return TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
+    return BUILD_RECORD_COMPATIBILITY
+
+
+def expected_controller_revision(producer_revision):
+    if producer_revision == TOOLCHAIN_PRODUCER_REVISION:
+        return TOOLCHAIN_BOX_CONTROL_COMPATIBILITY
+    return BOX_CONTROL_COMPATIBILITY
+
+
+def validate_controller_companion(value, *, project_root=None):
+    """Exact producer-specific, lane-owned controller checkout binding."""
+    if (not isinstance(value, dict) or set(value) != {
+            "schema", "repository", "revision", "source_root",
+            "producer_revision"} or value["schema"] != CONTROLLER_COMPANION_SCHEMA
+            or value["repository"] != BOX_CONTROL_REPOSITORY
+            or not isinstance(value["producer_revision"], str)
+            or not _REVISION.fullmatch(value["producer_revision"])
+            or not isinstance(value["revision"], str)
+            or value["revision"] != expected_controller_revision(
+                value["producer_revision"])):
+        raise ValueError("unreviewed producer/controller companion compatibility")
+    source_root = value["source_root"]
+    if (not isinstance(source_root, str) or not source_root.startswith("/")
+            or any(ord(char) < 33 or ord(char) == 127 for char in source_root)
+            or any(part in {"", ".", ".."} for part in source_root.split("/")[1:])
+            or str(PurePosixPath(source_root)) != source_root):
+        raise ValueError("controller companion source root must be normalized absolute")
+    if (project_root is not None
+            and source_root != str(PurePosixPath(project_root) /
+                                   "companions/box-control")):
+        raise ValueError("controller companion must use owned lane controller checkout")
+    return json.loads(json.dumps(value, sort_keys=True))
+
+
+def bind_controller_companion(
+    directory, lane, *, producer_revision, repository,
+    revision, source_root, expected_specification_sha256,
+):
+    """One-time explicit controller binding; leave all prior lanes untouched."""
+    expected = {
+        "schema": CONTROLLER_COMPANION_SCHEMA,
+        "repository": repository, "revision": revision,
+        "source_root": source_root, "producer_revision": producer_revision,
+    }
+    with locked(directory) as root:
+        path = _path(root, lane)
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("controller companion requires regular lane record")
+        record = json.loads(path.read_text())
+        spec = validate(record.get("specification"))
+        if (record.get("lane") != lane or spec["lane"] != lane
+                or record.get("state") != "active"
+                or spec["schema"] != SCHEMA or spec["mode"] != "managed"):
+            raise RuntimeError("controller companion requires active managed schema-4 lane")
+        candidate = validate_controller_companion(
+            expected, project_root=spec["project_root"])
+        if (specification_sha256(spec) != expected_specification_sha256
+                or spec["source_revision"] != producer_revision):
+            raise ValueError("controller companion differs from frozen lane source")
+        current = record.get("controller_companion")
+        if current is not None:
+            if validate_controller_companion(
+                current, project_root=spec["project_root"]) != candidate:
+                raise ValueError("controller companion already bound differently")
+            return record
+        record["controller_companion"] = candidate
+        save(path, record)
+        return record
+
+
 
 
 def validate_runtime_companion(value, *, project_root=None):
