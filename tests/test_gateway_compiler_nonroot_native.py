@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -37,7 +38,9 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
     for args in (["groupadd", "-g", str(gid), owner_name],
                  ["groupadd", "-g", str(build_gid), build_name]):
         subprocess.run(args, check=True)
-    home = tmp_path / "controller-home"
+    base = Path(tempfile.mkdtemp(prefix="zog-ci-compiler-", dir="/tmp"))
+    os.chmod(base, 0o755)
+    home = base / "controller-home"
     home.mkdir()
     os.chown(home, uid, gid)
     project = home / "project"
@@ -122,3 +125,4 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
             subprocess.run(["userdel", name], check=False)
         for name in (build_name, owner_name):
             subprocess.run(["groupdel", name], check=False)
+        shutil.rmtree(base)
