@@ -415,6 +415,7 @@ def verify_current_target(gateway_root, binding):
             build_record_revision=binding["runtime_companion"]["revision"],
             box_control_revision=binding["controller_companion"]["revision"],
             task_identity=binding["task_catalogue_identity"],
+            allow_historical=True,
         )
         if lane_record.get("compiler_execution_identity") != checked:
             raise RuntimeError("compiler UID/GID/home/socket identity changed after preparation")
