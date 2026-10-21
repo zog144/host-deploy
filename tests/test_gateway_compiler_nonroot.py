@@ -35,6 +35,7 @@ def identity():
         "box_control_revision": CONTROLLER,
         "python_executable": PYTHON,
         "task_catalogue_identity": TASK,
+        "root_control_revision": execution.ROOT_CONTROL_REVISION,
     }
 
 
@@ -86,6 +87,8 @@ def test_no_home_spoof_or_implicit_controller_socket():
     ("build_record_revision", "a" * 40),
     ("box_control_revision", "b" * 40),
     ("task_catalogue_identity", "sha256:" + "f" * 64),
+    ("root_control_revision", "62dca363d27a043a4b573e5b687f68ab5a16adeb"),
+    ("root_control_revision", execution.ROOT_CONTROL_REVIEW_HEAD),
 ])
 def test_execution_identity_cannot_repin_component_or_task(key, other):
     data = identity()
@@ -141,3 +144,17 @@ def test_exact_frozen_request_uses_sealed_fd_in_nonroot_wrapper():
     assert 'atomic(request_path, payload)' in source
     assert 'atomic(result_path, result_bytes)' in source
     assert "subprocess.run(\n        argv," not in source
+
+
+def test_historical_v1_is_readable_only_with_explicit_history_permission():
+    frozen = identity()
+    frozen["schema"] = execution.LEGACY_SCHEMA
+    del frozen["root_control_revision"]
+    with pytest.raises(ValueError, match="schema"):
+        verify(frozen)
+    assert execution.validate(
+        frozen, project_root=PROJECT, python_executable=PYTHON,
+        source_revision=SOURCE, build_record_revision=RECORD,
+        box_control_revision=CONTROLLER, task_identity=TASK,
+        allow_historical=True) == frozen
+    assert execution.ROOT_CONTROL_REVISION != execution.ROOT_CONTROL_REVIEW_HEAD
