@@ -1397,3 +1397,61 @@ def test_historical_controller_profile_unmodified_by_new_producer(tmp_path):
         image_build_lanes.BUILD_RECORD_COMPATIBILITY)
     assert verify_current_target(gateway, binding)["workspace_id"] == (
         request["workspace_id"])
+
+
+def test_compiler_identity_is_immutable_through_inspection_and_resume(tmp_path):
+    from zog.host_deploy.gateway import toolchain_journal as journal
+    from zog.host_deploy.gateway.image_build_execution import _binding
+    from zog.host_deploy.gateway.toolchain_task import (
+        RESTORED_PRODUCER_REVISION,
+    )
+    gateway, request, task, lane_path, record = _pinned_toolchain_workspace(tmp_path)
+    spec = record["specification"]
+    workspace = lane_path.parent.parent
+    image_build_lanes.bind_controller_companion(
+        workspace, "lane-a",
+        producer_revision=RESTORED_PRODUCER_REVISION,
+        repository="zog144/box-control",
+        revision=image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY,
+        source_root=spec["project_root"] + "/companions/box-control",
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec),
+    )
+    identity = record["compiler_execution_identity"]
+    current = json.loads(lane_path.read_text())
+    del current["compiler_execution_identity"]
+    save(lane_path, current)
+    selected = image_build_lanes.bind_compiler_execution_identity(
+        workspace, "lane-a", identity=identity,
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec))
+    assert selected["compiler_execution_identity"] == identity
+    assert image_build_lanes.bind_compiler_execution_identity(
+        workspace, "lane-a", identity=identity,
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec)
+    ) == selected
+    with pytest.raises(RuntimeError, match="already frozen"):
+        image_build_lanes.bind_compiler_execution_identity(
+            workspace, "lane-a", identity={**identity, "controller_uid": 16001},
+            expected_specification_sha256=image_build_lanes.specification_sha256(spec))
+    frozen = binding_for_request(
+        gateway, request["request_id"], task_catalogue=task,
+        task_catalogue_identity="sha256:" + "e"*64)
+    _binding({"phase": "prepared", "binding": frozen})
+    state = journal.initial(request["request_id"], frozen)
+    state["phases"] = [{"operation_id": "a"*32}]
+    events = (
+        journal.event(frozen, state, "specification", "specification"),
+        journal.event(frozen, state, "submit", "cross-bootstrap"),
+        journal.event(frozen, state, "inspect", "cross-bootstrap", ordinal=1),
+        journal.event(frozen, state, "resume", "cross-bootstrap", ordinal=1),
+    )
+    for operation in events:
+        staged = journal.stage_binding(frozen, operation)
+        assert staged["compiler_execution_identity"] == identity
+        assert staged["task_catalogue_identity"] == "sha256:"+"e"*64
+        assert staged["source"]["revision"] == RESTORED_PRODUCER_REVISION
+        assert staged["remote_request"]["operation_id"] == operation["operation_id"]
+    modified = json.loads(lane_path.read_text())
+    modified["compiler_execution_identity"]["controller_gid"] += 1
+    save(lane_path, modified)
+    with pytest.raises(RuntimeError, match="UID/GID/home/socket identity changed"):
+        verify_current_target(gateway, frozen)
