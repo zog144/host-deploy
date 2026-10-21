@@ -250,7 +250,12 @@ def binding_for_request(
                 and controller_companion is None):
             raise RuntimeError("new producer requires explicit reviewed controller companion")
 
-        remote_root = project_root / "gateway-requests" / request_id
+        remote_root = (
+            Path("/var/lib/host-deploy/typed-toolchain-requests")
+            / request["workspace_id"] / request_id
+            if request["operation"] == "toolchain.submit"
+            else project_root / "gateway-requests" / request_id
+        )
         request_path = remote_root / "request.json"
         result_path = remote_root / "result.json"
         argv = image_build_lanes.remote_operation_argv(
