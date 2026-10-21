@@ -12,6 +12,7 @@ import shlex
 
 from ..runner import Host
 from .. import image_build_lanes
+from .compiler_execution_identity import validate as validate_execution_identity, IDENTITY_RUNTIME
 from .image_build_dispatch import REMOTE_SCHEMA, verify_current_target
 from .ledger import (
     load_dispatch,
@@ -73,7 +74,8 @@ def _binding(record):
         "remote_request",
         "remote_request_sha256",
     }
-    optional = {"task", "task_catalogue_identity", "controller_companion"}
+    optional = {"task", "task_catalogue_identity", "controller_companion",
+                "compiler_execution_identity"}
     if binding.get("schema") in {2, 3}:
         required.add("python_executable")
         image_build_lanes.validate_python_executable(binding.get("python_executable"))
@@ -127,6 +129,24 @@ def _binding(record):
             raise RuntimeError("runtime companion is bound to different producer")
     if binding.get("schema") != 3 and "controller_companion" in binding:
         raise RuntimeError("legacy dispatch cannot have controller companion")
+    if "compiler_execution_identity" in binding:
+        if (binding["schema"] != 3 or binding["source"]["revision"] !=
+                image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION
+                or "task" not in binding or "controller_companion" not in binding):
+            raise RuntimeError("compiler nonroot identity is not bound to protected task")
+        validate_execution_identity(
+            binding["compiler_execution_identity"],
+            project_root=binding["project_root"],
+            python_executable=binding["python_executable"],
+            source_revision=binding["source"]["revision"],
+            build_record_revision=binding["runtime_companion"]["revision"],
+            box_control_revision=binding["controller_companion"]["revision"],
+            task_identity=binding["task_catalogue_identity"],
+        )
+    elif (binding.get("task")
+          and binding["source"]["revision"] ==
+          image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION):
+        raise RuntimeError("restored toolchain requires nonroot execution identity")
     if set(binding) - required - optional or not required.issubset(binding):
         raise RuntimeError("image-build dispatch binding fields are invalid")
     if ("task" in binding) != ("task_catalogue_identity" in binding):
@@ -240,7 +260,12 @@ monthly_pin_repository_path = sys.argv[5]
 monthly_pin_identity = sys.argv[6]
 request_sha256 = sys.argv[7]
 payload = base64.b64decode(sys.argv[8], validate=True)
-argv = sys.argv[9:]
+identity = None
+if len(sys.argv) > 9 and sys.argv[9].startswith("identity-v1:"):
+    identity = json.loads(base64.b64decode(sys.argv[9].split(":", 1)[1], validate=True))
+    argv = sys.argv[10:]
+else:
+    argv = sys.argv[9:]
 
 def fail(message):
     raise SystemExit(message)
@@ -329,12 +354,28 @@ if result_path.exists():
         fail("retained gateway result is unsafe")
     result_bytes = result_path.read_bytes()
 else:
-    completed = subprocess.run(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=300,
-    )
+    if identity is None:
+        completed = subprocess.run(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300,
+        )
+    else:
+        import fcntl
+        if argv[-1] != str(request_path):
+            fail("frozen compiler request path changed")
+        # Root retains the durable 0700 journal. The controller is given
+        # only sealed, read-only immutable request bytes, never root registry
+        # directory permissions or a writable request/result pathname.
+        descriptor = os.memfd_create("zog-compiler-request", os.MFD_ALLOW_SEALING)
+        try:
+            os.write(descriptor, payload)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS,
+                fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW |
+                fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+            completed = _as_controller(
+                identity, argv, request_fd=descriptor, timeout=300)
+        finally:
+            os.close(descriptor)
     if len(completed.stdout) > MAX_STDIO or len(completed.stderr) > MAX_STDIO:
         fail("image-build remote operation output exceeds control-plane limit")
     if completed.returncode:
@@ -436,10 +477,12 @@ def remote_script(binding):
     binding = _binding({"phase": "prepared", "binding": binding})
     request_bytes = _canonical(binding["remote_request"])
     payload = base64.b64encode(request_bytes).decode("ascii")
+    execution = binding.get("compiler_execution_identity")
+    wrapper = (IDENTITY_RUNTIME + "\n" + _WRAPPER) if execution else _WRAPPER
     arguments = [
         (binding["python_executable"] if binding["schema"] in {2, 3} else "python3"),
         "-c",
-        _WRAPPER,
+        wrapper,
         binding["remote_request_path"],
         binding["remote_result_path"],
         binding["source_root"],
@@ -448,6 +491,10 @@ def remote_script(binding):
         binding["monthly_pin_identity"],
         binding["remote_request_sha256"],
         payload,
+        *(
+            ["identity-v1:" + base64.b64encode(_canonical(execution)).decode("ascii")]
+            if execution else []
+        ),
         *binding["argv"],
     ]
     return " ".join(shlex.quote(value) for value in arguments)
