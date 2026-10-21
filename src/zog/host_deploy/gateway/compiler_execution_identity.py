@@ -166,8 +166,7 @@ def _trusted_identity(value, source, record_root, controller_root):
         raise RuntimeError("root-control socket is linked")
     st = sock.stat()
     if (not stat.S_ISSOCK(st.st_mode) or st.st_uid != 0
-            or st.st_gid != owner_gid or not (st.st_mode & 0o020)
-            or (st.st_mode & 0o002)):
+            or st.st_gid != owner_gid or stat.S_IMODE(st.st_mode) != 0o660):
         raise RuntimeError("root-control socket lacks exact nonroot peer grant")
     if not Path(value["python_executable"]).is_file():
         raise RuntimeError("bound producer interpreter missing")
