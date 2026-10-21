@@ -143,6 +143,10 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
         with pytest.raises(RuntimeError, match="socket"):
             transition(data, producer)
         os.chmod(socket_path, 0o660)
+        os.chmod(socket_path, 0o770)
+        with pytest.raises(RuntimeError, match="socket"):
+            transition(data, producer)
+        os.chmod(socket_path, 0o660)
         os.chmod(project / "source", 0o777)
         with pytest.raises(RuntimeError, match="ownership"):
             transition(data, producer)
@@ -185,6 +189,19 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
         with pytest.raises(RuntimeError, match="unreadable"):
             transition(data, producer)
         os.chmod(source_file, 0o644)
+        # Both pinned companion trees receive the same recursive checks
+        # as image-build, not only protected checkout top-level directories.
+        for companion in ("build-record", "box-control"):
+            subdir = project / "companions" / companion / "nested"
+            subdir.mkdir()
+            nested_file = subdir / "module.py"
+            nested_file.write_text("build-code")
+            os.chmod(nested_file, 0o666)
+            with pytest.raises(RuntimeError, match="immutable source tree"):
+                transition(data, producer)
+            os.chmod(nested_file, 0o644)
+            nested_file.unlink()
+            subdir.rmdir()
         assert transition(data, producer).returncode == 0
         with pytest.raises(RuntimeError, match="root-control pin"):
             transition({**data, "root_control_revision":
