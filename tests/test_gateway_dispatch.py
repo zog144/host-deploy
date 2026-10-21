@@ -1222,6 +1222,7 @@ def _pinned_toolchain_workspace(tmp_path):
         "box_control_revision": image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY,
         "python_executable": record["specification"]["python_executable"],
         "task_catalogue_identity": "sha256:" + "e"*64,
+        "root_control_revision": "e4f25110c854c000bdde5ec564c8119370da9a52",
     }
     save(lane_path, record)
     task = {
