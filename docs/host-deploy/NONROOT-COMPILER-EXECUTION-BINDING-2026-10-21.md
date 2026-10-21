@@ -75,6 +75,23 @@ AWS credentials, LD_PRELOAD, inherited HOME and supplementary groups
 cannot enter the producer. No general sudo/shell/runuser callback is
 accepted from GitHub.
 
+### Host-owned durable request registry
+
+A source security review tightened the new typed binding: its immutable
+request/result path is now fixed beneath
+`/var/lib/host-deploy/typed-toolchain-requests/<workspace_id>/<operation_id>/`,
+**not** beneath the controller-owned Project. The root wrapper creates any
+missing registry directories as root with 0700 permissions, checks each
+parent for no symlinks, root ownership and no group/other write, and
+atomically fsyncs each request and result. Only the exact sealed request
+bytes are inherited by the controller process; no root registry directory
+descriptor or writable path crosses the UID boundary.
+
+Historical prepared requests without the new identity retain their
+original `<Project>/gateway-requests/<operation_id>` paths. The new
+registry selection is frozen in the dispatch and preserved by each
+typed phase (specification, submit, inspect, resume).
+
 For producer runtime preflight, the root transport checks the checkout
 first; then it runs the real image-build
 `zog.image_build.runtime_preflight` under those nonroot credentials and
