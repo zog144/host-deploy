@@ -308,6 +308,21 @@ def binding_for_request(
     }
     if controller_companion is not None and "--controller-config" in argv:
         binding["controller_companion"] = controller_companion
+    if request["operation"] == "toolchain.submit":
+        from .compiler_execution_identity import validate as validate_execution
+        if task_binding is None:
+            raise RuntimeError("nonroot toolchain requires reviewed protected task")
+        approved_identity = lane_record.get("compiler_execution_identity")
+        if approved_identity is None:
+            raise RuntimeError("nonroot toolchain execution identity not installed")
+        binding["compiler_execution_identity"] = validate_execution(
+            approved_identity, project_root=lane_spec["project_root"],
+            python_executable=lane_spec["python_executable"],
+            source_revision=lane_spec["source_revision"],
+            build_record_revision=companion["revision"],
+            box_control_revision=controller_companion["revision"],
+            task_identity=task_catalogue_identity,
+        )
     if task_binding is not None:
         binding["task"] = task_binding["task"]
         binding["task_catalogue_identity"] = task_binding[
@@ -385,6 +400,22 @@ def verify_current_target(gateway_root, binding):
                   image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
               and binding["runtime_profile"]["controller"]):
             raise RuntimeError("new producer dispatch lacks reviewed controller binding")
+    if "compiler_execution_identity" in binding:
+        from .compiler_execution_identity import validate as validate_execution
+        checked = validate_execution(
+            binding["compiler_execution_identity"],
+            project_root=binding["project_root"],
+            python_executable=binding["python_executable"],
+            source_revision=binding["source"]["revision"],
+            build_record_revision=binding["runtime_companion"]["revision"],
+            box_control_revision=binding["controller_companion"]["revision"],
+            task_identity=binding["task_catalogue_identity"],
+        )
+        if lane_record.get("compiler_execution_identity") != checked:
+            raise RuntimeError("compiler UID/GID/home/socket identity changed after preparation")
+    elif binding.get("task") and binding["source"]["revision"] == (
+            image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION):
+        raise RuntimeError("restored compiler dispatch missing nonroot binding")
     if lane_record["source_root"] != binding["source_root"]:
         raise RuntimeError("image-build lane source path differs from prepared dispatch")
     expected_argv = image_build_lanes.remote_operation_argv(
