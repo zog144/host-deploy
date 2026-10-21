@@ -79,6 +79,8 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
             "build_uid": build_uid, "build_gid": build_gid,
             "socket_path": str(socket_path),
             "python_executable": sys.executable,
+            "schema": "host-deploy-compiler-execution-v2",
+            "root_control_revision": "e4f25110c854c000bdde5ec564c8119370da9a52",
         }
         pythonpath = (
             str(project / "source/src") + ":" +
@@ -145,6 +147,48 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
         with pytest.raises(RuntimeError, match="ownership"):
             transition(data, producer)
         os.chmod(project / "source", 0o755)
+        # The kernel launcher must validate the *primary group* on the
+        # home AND Project, not only the UID that owns the directories.
+        os.chown(home, uid, build_gid)
+        with pytest.raises(RuntimeError, match="Project UID/GID"):
+            transition(data, producer)
+        os.chown(home, uid, gid)
+        os.chown(project, uid, build_gid)
+        with pytest.raises(RuntimeError, match="Project UID/GID"):
+            transition(data, producer)
+        os.chown(project, uid, gid)
+        nested = project / "source" / "nested" / "module"
+        nested.mkdir(parents=True)
+        source_file = nested / "compiler.py"
+        source_file.write_text("print('pinned source')")
+        os.chown(source_file, 0, 0)
+        # A root-owned root directory is insufficient if a descendant
+        # becomes writable by the controller or build identity.
+        os.chmod(source_file, 0o666)
+        with pytest.raises(RuntimeError, match="immutable source tree"):
+            transition(data, producer)
+        os.chmod(source_file, 0o644)
+        os.chown(source_file, uid, gid)
+        with pytest.raises(RuntimeError, match="immutable source tree"):
+            transition(data, producer)
+        os.chown(source_file, 0, 0)
+        linked = nested / "substituted.py"
+        linked.symlink_to(source_file)
+        with pytest.raises(RuntimeError, match="immutable source tree"):
+            transition(data, producer)
+        linked.unlink()
+        os.chmod(nested, 0o777)
+        with pytest.raises(RuntimeError, match="immutable source tree"):
+            transition(data, producer)
+        os.chmod(nested, 0o755)
+        os.chmod(source_file, 0o600)
+        with pytest.raises(RuntimeError, match="unreadable"):
+            transition(data, producer)
+        os.chmod(source_file, 0o644)
+        assert transition(data, producer).returncode == 0
+        with pytest.raises(RuntimeError, match="root-control pin"):
+            transition({**data, "root_control_revision":
+                        "62dca363d27a043a4b573e5b687f68ab5a16adeb"}, producer)
         with pytest.raises(RuntimeError, match="passwd home"):
             transition({**data, "controller_home": "/root"}, producer)
     finally:
