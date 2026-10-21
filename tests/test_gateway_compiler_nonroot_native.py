@@ -4,6 +4,7 @@ Run as root on an isolated GitHub-hosted CI runner only. No real root-control
 server, AWS host, managed project or compiler bootstrap is touched.
 """
 import json
+import fcntl
 import os
 from pathlib import Path
 import pwd
@@ -104,6 +105,36 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
             "home": str(home), "cwd": str(home),
             "path": pythonpath, "root_env": None, "user": owner_name,
         }
+        # The controller receives a *sealed inherited descriptor* for the
+        # exact request. It cannot write root-owned gateway request/result
+        # files, and its descriptor cannot mutate the input after review.
+        payload_bytes = b'{"selected":"same-operation"}'
+        fd = os.memfd_create("zog-ci-request", os.MFD_ALLOW_SEALING)
+        try:
+            os.write(fd, payload_bytes)
+            os.lseek(fd, 0, os.SEEK_SET)
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
+                        fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW |
+                        fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
+            reader = (
+                "from pathlib import Path; import os,sys,json,fcntl; "
+                "fd=int(sys.argv[1].rsplit('/',1)[-1]); "
+                "print(json.dumps({'payload':Path(sys.argv[1]).read_text(),"
+                "'uid':os.geteuid(), 'write_sealed':bool("
+                "fcntl.fcntl(fd,fcntl.F_GET_SEALS)&fcntl.F_SEAL_WRITE)}))"
+            )
+            inherited = transition(
+                data, ["env", "PYTHONPATH=" + pythonpath, sys.executable,
+                       "-c", reader, "frozen-request-placeholder"],
+                request_fd=fd,
+            )
+            assert inherited.returncode == 0, inherited.stderr
+            assert json.loads(inherited.stdout) == {
+                "payload": payload_bytes.decode(),
+                "uid": uid, "write_sealed": True,
+            }
+        finally:
+            os.close(fd)
         # Kernel-bound ownership, socket ACL, and passwd home must all
         # reject before any further producer process can start.
         os.chmod(socket_path, 0o666)
