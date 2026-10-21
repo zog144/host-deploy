@@ -1436,6 +1436,10 @@ def test_compiler_identity_is_immutable_through_inspection_and_resume(tmp_path):
         gateway, request["request_id"], task_catalogue=task,
         task_catalogue_identity="sha256:" + "e"*64)
     _binding({"phase": "prepared", "binding": frozen})
+    registry = ("/var/lib/host-deploy/typed-toolchain-requests/"
+                + request["workspace_id"] + "/")
+    assert frozen["remote_request_path"].startswith(registry)
+    assert not frozen["remote_request_path"].startswith(spec["project_root"])
     state = journal.initial(request["request_id"], frozen)
     state["phases"] = [{"operation_id": "a"*32}]
     events = (
@@ -1450,6 +1454,9 @@ def test_compiler_identity_is_immutable_through_inspection_and_resume(tmp_path):
         assert staged["task_catalogue_identity"] == "sha256:"+"e"*64
         assert staged["source"]["revision"] == RESTORED_PRODUCER_REVISION
         assert staged["remote_request"]["operation_id"] == operation["operation_id"]
+        assert staged["remote_request_path"].startswith(registry)
+        assert staged["remote_result_path"].startswith(registry)
+        assert staged["remote_request_path"] != frozen["remote_request_path"]
     modified = json.loads(lane_path.read_text())
     modified["compiler_execution_identity"]["controller_gid"] += 1
     save(lane_path, modified)
