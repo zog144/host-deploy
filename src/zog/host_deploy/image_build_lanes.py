@@ -483,6 +483,53 @@ def bind_controller_companion(
 
 
 
+def bind_compiler_execution_identity(
+    directory, lane, *, identity, expected_specification_sha256,
+):
+    """One-time approved nonroot owner binding for a NEW typed compiler lane.
+
+    No history rewrite, no UID inference, no defaults and no identity rotation.
+    The actual host passwd/socket/source DAC is checked separately by the
+    fixed, root-controlled SSM transition before each producer invocation.
+    """
+    from .gateway.compiler_execution_identity import validate as validate_identity
+    with locked(directory) as root:
+        path = _path(root, lane)
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("nonroot compiler requires regular lane record")
+        record = json.loads(path.read_text())
+        spec = validate(record.get("specification"))
+        companion = validate_runtime_companion(
+            record.get("runtime_companion"), project_root=spec["project_root"])
+        controller = validate_controller_companion(
+            record.get("controller_companion"), project_root=spec["project_root"])
+        if (record.get("schema") != SCHEMA or record.get("lane") != lane
+                or record.get("state") != "active"
+                or spec["schema"] != SCHEMA or spec["mode"] != "managed"
+                or spec["source_revision"] != RESTORED_TOOLCHAIN_PRODUCER_REVISION
+                or spec["observed_state_dir"] is not None
+                or controller["producer_revision"] != spec["source_revision"]
+                or companion["producer_revision"] != spec["source_revision"]
+                or specification_sha256(spec) != expected_specification_sha256):
+            raise RuntimeError("nonroot compiler requires reviewed separate managed lane")
+        expected = validate_identity(
+            identity, project_root=spec["project_root"],
+            python_executable=spec["python_executable"],
+            source_revision=spec["source_revision"],
+            build_record_revision=companion["revision"],
+            box_control_revision=controller["revision"],
+            task_identity=identity["task_catalogue_identity"],
+        )
+        existing = record.get("compiler_execution_identity")
+        if existing is not None:
+            if existing != expected:
+                raise RuntimeError("compiler execution identity already frozen differently")
+            return record
+        record["compiler_execution_identity"] = expected
+        save(path, record)
+        return record
+
+
 def validate_runtime_companion(value, *, project_root=None):
     """Immutable lane-owned exact build-record source identity."""
     if not isinstance(value, dict) or set(value) != {
