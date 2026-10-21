@@ -121,8 +121,10 @@ directly as root or substitute for root-control's build-identity grant.
   `sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`;
 - box-control: `644170fc441863307092f329bf7e23cb64eb33e2`;
 - build-record: `a866c9c4b0dd385045f00ce2de7d809f5b67c104`;
-- candidate root-control: `62dca363d27a043a4b573e5b687f68ab5a16adeb`
-  (reviewed in producer handoff, **not installed or approved for live use**);
+- corrected root-control executable: `e4f25110c854c000bdde5ec564c8119370da9a52`;
+- root-control documentation-only review head:
+  `8a9583924109ef324eb80071953151c8c7e20b33`
+  (not a substitute for the pinned executable commit);
 - toolchain specification:
   `sha256:ba8986219065627c939adf49ee0bf200bfc94f85b0bbe280aecdaff8349ffc1c`;
 - retained seed generation:
@@ -218,3 +220,54 @@ This review is an **owner dependency**, not implied approval from local CI.
 
 **Gate:** isolated native owner/peer acceptance is still **NO-GO** until
 box-control/root-control Regular review plus host-deploy Work evidence.
+
+## Corrected root-control and recursive protected source — October 21 follow-up
+
+Root-control's [review of the original launcher](https://github.com/zog144/root-control/issues/8#issuecomment-6322028776)
+identified the previously proposed `62dca363...` socket implementation
+as incompatible with the new root-owned primary-group socket contract.
+Root-control corrected its group listener to **root:controller-primary-GID
+0660**, checked the exact passwd primary GID before changing socket
+ownership, and kept strict Linux `SO_PEERCRED` admission limited to the
+configured **nonroot controller UID**. Its executable source is pinned to
+`e4f25110c854c000bdde5ec564c8119370da9a52`; the subsequent
+`8a9583924109ef324eb80071953151c8c7e20b33` only records the
+source review and native checklist.
+
+Host-deploy now publishes `host-deploy-compiler-execution-v2`. The new
+version explicitly binds `root_control_revision` to that exact corrected
+executable commit. An attempted different root-control pin, including
+the former incompatible source or documentation head, is rejected before
+new submission. The earlier `host-deploy-compiler-execution-v1` can
+still be validated **only for frozen historical reads**; the fixed
+producer launcher refuses to run new work with v1. There is no
+in-place migration or request ID reassignment.
+
+The kernel identity check now verifies both **UID and primary GID** of
+the actual passwd home, the Project and every intervening Project
+directory. None may be a symlink or group/other writable. Every
+descendant in the root-owned image-build, build-record and box-control
+checkout trees is scanned with `lstat`: only immutable root-owned
+regular files or directories are admitted, all must be non-writable to
+group/others, readable by the nonroot controller, with directory
+traversal permitted. Symlinks anywhere under these trees, special
+nodes, writable subdirectories, files owned by the controller, missing
+readability or overly large traversal fail closed. The companion
+parent directories are separately protected, and the root-controlled
+request/result registry remains outside the controller's Project.
+
+Isolated source tests assert wrong source revision and historical
+version rejection, and real Linux CI with temporary accounts exercises
+mismatched home and Project GIDs, writable or UID-substituted nested
+source files, symlink substitution, unreadable files, and valid
+recursive ownership under actual UID/GID switching.
+
+**Native limitation:** these checks do not attest that the installed
+root-control daemon's executable bytes really match `e4f25110...`,
+nor do they prove immutable bind mounts prevent the controller from
+renaming a top-level checkout under an owner-controlled parent after
+a successful traversal. Before native acceptance, host-install and
+host-deploy Work must verify immutable mounting and installation
+provenance, actual NSS, socket SO_PEERCRED, Project ancestry,
+separate build grants and the original preserved operation identities.
+No live toolchain or root-control activation follows from green CI.
