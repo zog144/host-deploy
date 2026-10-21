@@ -547,7 +547,29 @@ def producer_runtime_preflight(host, binding):
             'test -z "$(git -C ' + shlex.quote(box_root)
             + ' status --porcelain=v1 --untracked-files=all)"',
         ))
-    script.append(shlex.join(cli))
+    identity = binding.get("compiler_execution_identity")
+    if identity is not None:
+        # The root SSM shell only verifies pinned checkout/ownership; the
+        # image-build preflight itself executes as the actual nonroot owner.
+        reduced = ["env", cli[2], python, *cli[4:]]
+        guarded = IDENTITY_RUNTIME + """
+import json
+import subprocess
+import sys
+identity = json.loads(sys.argv[1])
+producer = json.loads(sys.argv[2])
+observed = _as_controller(identity, producer, timeout=120)
+if observed.returncode:
+    sys.stderr.buffer.write(observed.stderr[-2048:])
+    raise SystemExit("nonroot image-build preflight failed")
+sys.stdout.buffer.write(observed.stdout)
+"""
+        script.append(shlex.join([
+            python, "-c", guarded,
+            _canonical(identity).decode("ascii"), _canonical(reduced).decode("ascii"),
+        ]))
+    else:
+        script.append(shlex.join(cli))
     raw = host.command("\n".join(script), seconds=120)
     if not isinstance(raw, str) or len(raw) > 32768:
         raise RuntimeError("producer preflight evidence is not bounded")
