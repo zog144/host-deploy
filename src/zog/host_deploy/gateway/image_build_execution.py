@@ -142,6 +142,7 @@ def _binding(record):
             build_record_revision=binding["runtime_companion"]["revision"],
             box_control_revision=binding["controller_companion"]["revision"],
             task_identity=binding["task_catalogue_identity"],
+            allow_historical=True,
         )
     elif (binding.get("task")
           and binding["source"]["revision"] ==
