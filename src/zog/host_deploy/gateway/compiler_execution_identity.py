@@ -113,8 +113,8 @@ def _trusted_identity(value, source, record_root, controller_root):
     # Project, matching root-control's canonical primary-group policy.
     if not home.is_absolute() or not project.is_absolute() or home not in project.parents:
         raise RuntimeError("compiler project outside verified passwd home")
-    for path in (home, *reversed(project.parents[:len(project.parents) -
-                              (project.parents.index(home) + 1)]), project):
+    for path in (home, *reversed(project.parents[:project.parents.index(home)]),
+                 project):
         if path.is_symlink() or not path.is_dir():
             raise RuntimeError("compiler source/project path is missing or linked")
         st = path.stat()
