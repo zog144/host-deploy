@@ -1210,6 +1210,19 @@ def _pinned_toolchain_workspace(tmp_path):
     record["runtime_companion"]["producer_revision"] = PRODUCER_REVISION
     record["runtime_companion"]["revision"] = (
         image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
+    record["compiler_execution_identity"] = {
+        "schema": "host-deploy-compiler-execution-v1",
+        "controller_uid": 12001, "controller_gid": 12002,
+        "controller_home": str(Path(record["specification"]["project_root"]).parent),
+        "project_root": record["specification"]["project_root"],
+        "build_uid": 13001, "build_gid": 13002,
+        "socket_path": "/run/zog/root-control.sock",
+        "source_revision": PRODUCER_REVISION,
+        "build_record_revision": image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY,
+        "box_control_revision": image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY,
+        "python_executable": record["specification"]["python_executable"],
+        "task_catalogue_identity": "sha256:" + "e"*64,
+    }
     save(lane_path, record)
     task = {
         "contract": CONTRACT,
@@ -1312,7 +1325,7 @@ def test_real_preflight_accepts_reviewed_source_bound_controller(tmp_path):
     )
     prepared = binding_for_request(
         gateway, request["request_id"], task_catalogue=task,
-        task_catalogue_identity="sha256:" + "d" * 64)
+        task_catalogue_identity="sha256:" + "e" * 64)
     binding = _binding({"phase": "prepared", "binding": prepared})
     scripts = []
 
