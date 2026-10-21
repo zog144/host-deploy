@@ -198,13 +198,17 @@ def _binding(record):
     source_root = Path(binding["source_root"])
     request_path = Path(binding["remote_request_path"])
     result_path = Path(binding["remote_result_path"])
+    expected_root = (
+        Path("/var/lib/host-deploy/typed-toolchain-requests")
+        / binding["workspace_id"] / binding["request_id"]
+        if "compiler_execution_identity" in binding
+        else project_root / "gateway-requests" / binding["request_id"]
+    )
     if (
         not project_root.is_absolute()
         or source_root != project_root / "source"
-        or request_path
-        != project_root / "gateway-requests" / binding["request_id"] / "request.json"
-        or result_path
-        != project_root / "gateway-requests" / binding["request_id"] / "result.json"
+        or request_path != expected_root / "request.json"
+        or result_path != expected_root / "result.json"
     ):
         raise RuntimeError("image-build dispatch remote paths are invalid")
     argv = binding["argv"]
@@ -346,6 +350,30 @@ except OSError:
     fail("deployed image-build monthly pin is unavailable")
 if monthly_pin_identity != "sha256:" + pin_digest:
     fail("deployed monthly pin digest differs from lane binding")
+
+if identity is not None:
+    # Root-owned control-plane request/result state must never live in the
+    # controller's writable Project. Verify *every* parent component is a
+    # real root-owned directory; create missing registry directories 0700.
+    expected_base = Path("/var/lib/host-deploy/typed-toolchain-requests")
+    try:
+        request_path.relative_to(expected_base)
+        if result_path.parent != request_path.parent:
+            fail("compiler request/result roots differ")
+        parent = Path("/")
+        for name in request_path.parent.parts[1:]:
+            parent = parent / name
+            if parent.is_symlink():
+                fail("protected compiler registry traverses a symlink")
+            if not parent.exists():
+                parent.mkdir(mode=0o700)
+                fsync_directory(parent.parent)
+            details = parent.stat()
+            if (not parent.is_dir() or details.st_uid != 0
+                    or details.st_mode & 0o022):
+                fail("protected compiler registry ownership unsafe")
+    except (OSError, ValueError):
+        fail("protected compiler registry unavailable")
 
 atomic(request_path, payload)
 
