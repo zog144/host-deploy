@@ -1211,7 +1211,7 @@ def _pinned_toolchain_workspace(tmp_path):
     record["runtime_companion"]["revision"] = (
         image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
     record["compiler_execution_identity"] = {
-        "schema": "host-deploy-compiler-execution-v1",
+        "schema": "host-deploy-compiler-execution-v2",
         "controller_uid": 12001, "controller_gid": 12002,
         "controller_home": str(Path(record["specification"]["project_root"]).parent),
         "project_root": record["specification"]["project_root"],
