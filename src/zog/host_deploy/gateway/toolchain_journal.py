@@ -152,7 +152,12 @@ def stage_binding(bound, event_record):
     from copy import deepcopy
     staged = deepcopy(bound)
     op_id = event_record["operation_id"]
-    remote = Path(staged["project_root"]) / "gateway-requests" / op_id
+    remote = (
+        Path("/var/lib/host-deploy/typed-toolchain-requests")
+        / staged["workspace_id"] / op_id
+        if "compiler_execution_identity" in staged
+        else Path(staged["project_root"]) / "gateway-requests" / op_id
+    )
     staged["request_id"] = op_id
     staged["remote_request"] = event_record["request"]
     staged["remote_request_sha256"] = event_record["request_sha256"]
