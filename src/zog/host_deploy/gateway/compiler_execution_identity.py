@@ -41,6 +41,8 @@ def validate(value, *, project_root, python_executable, source_revision,
         if not _absolute(value[key]):
             raise ValueError("compiler execution path is not normalized absolute")
     home = PurePosixPath(value["controller_home"])
+    if home in (PurePosixPath("/"), PurePosixPath("/root")):
+        raise ValueError("controller owner must have a dedicated nonroot home")
     project = PurePosixPath(project_root)
     if (value["project_root"] != project_root or project == home
             or home not in project.parents):
@@ -88,7 +90,10 @@ def _trusted_identity(value, source, record_root, controller_root):
     if home not in project.parents or str(project) != value["project_root"]:
         raise RuntimeError("compiler project not inside verified owner home")
     for path, uid in ((home, owner_uid), (project, owner_uid),
-                      (Path(source), 0), (Path(record_root), 0),
+                      (Path(source), 0),
+                      (project / "companions", 0),
+                      (Path(record_root), 0),
+                      (project / "companions/box-control", 0),
                       (Path(controller_root), 0)):
         if path.is_symlink() or not path.is_dir():
             raise RuntimeError("compiler source/project path is missing or linked")
