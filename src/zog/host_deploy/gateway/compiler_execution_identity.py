@@ -7,7 +7,10 @@ import json
 import re
 from pathlib import PurePosixPath
 
-SCHEMA = "host-deploy-compiler-execution-v1"
+LEGACY_SCHEMA = "host-deploy-compiler-execution-v1"
+SCHEMA = "host-deploy-compiler-execution-v2"
+ROOT_CONTROL_REVISION = "e4f25110c854c000bdde5ec564c8119370da9a52"
+ROOT_CONTROL_REVIEW_HEAD = "8a9583924109ef324eb80071953151c8c7e20b33"
 _SHA = re.compile(r"[a-f0-9]{40}\Z")
 _DIGEST = re.compile(r"sha256:[a-f0-9]{64}\Z")
 FIELDS = {
@@ -15,7 +18,9 @@ FIELDS = {
     "project_root", "build_uid", "build_gid", "socket_path",
     "source_revision", "build_record_revision", "box_control_revision",
     "python_executable", "task_catalogue_identity",
+    "root_control_revision",
 }
+LEGACY_FIELDS = FIELDS - {"root_control_revision"}
 
 
 def _absolute(value):
@@ -28,9 +33,17 @@ def _absolute(value):
 
 
 def validate(value, *, project_root, python_executable, source_revision,
-             build_record_revision, box_control_revision, task_identity):
-    if type(value) is not dict or set(value) != FIELDS or value["schema"] != SCHEMA:
+             build_record_revision, box_control_revision, task_identity,
+             allow_historical=False):
+    if type(value) is not dict:
         raise ValueError("invalid nonroot compiler execution binding")
+    historical = value.get("schema") == LEGACY_SCHEMA
+    if (set(value) != (LEGACY_FIELDS if historical else FIELDS)
+            or (historical and not allow_historical)
+            or (not historical and value.get("schema") != SCHEMA)):
+        raise ValueError("unreviewed nonroot compiler execution schema")
+    if not historical and value["root_control_revision"] != ROOT_CONTROL_REVISION:
+        raise ValueError("root-control revision differs from reviewed controller tuple")
     for key in ("controller_uid", "controller_gid", "build_uid", "build_gid"):
         if type(value[key]) is not int or value[key] <= 0 or value[key] >= 2**31:
             raise ValueError("compiler identity requires nonzero numeric UID/GID")
@@ -75,9 +88,16 @@ import pwd
 import stat
 from pathlib import Path
 
+# Exact root-control executable revision. The documentation-only receipt
+# head is different and cannot substitute for executable provenance.
+REVIEWED_ROOT_CONTROL_REVISION = "e4f25110c854c000bdde5ec564c8119370da9a52"
+
 def _trusted_identity(value, source, record_root, controller_root):
     if os.geteuid() != 0:
         raise RuntimeError("compiler identity transition requires root transport")
+    if value.get("schema") != "host-deploy-compiler-execution-v2" or (
+            value.get("root_control_revision") != REVIEWED_ROOT_CONTROL_REVISION):
+        raise RuntimeError("nonroot compiler missing corrected root-control pin")
     owner_uid = value["controller_uid"]
     owner_gid = value["controller_gid"]
     account = pwd.getpwuid(owner_uid)
@@ -89,17 +109,58 @@ def _trusted_identity(value, source, record_root, controller_root):
     home = Path(value["controller_home"])
     if home not in project.parents or str(project) != value["project_root"]:
         raise RuntimeError("compiler project not inside verified owner home")
-    for path, uid in ((home, owner_uid), (project, owner_uid),
-                      (Path(source), 0),
-                      (project / "companions", 0),
-                      (Path(record_root), 0),
-                      (project / "companions/box-control", 0),
-                      (Path(controller_root), 0)):
+    # Check *every* owner-controlled component from the real home to the
+    # Project, matching root-control's canonical primary-group policy.
+    if not home.is_absolute() or not project.is_absolute() or home not in project.parents:
+        raise RuntimeError("compiler project outside verified passwd home")
+    for path in (home, *reversed(project.parents[:len(project.parents) -
+                              (project.parents.index(home) + 1)]), project):
         if path.is_symlink() or not path.is_dir():
             raise RuntimeError("compiler source/project path is missing or linked")
         st = path.stat()
-        if st.st_uid != uid or (st.st_mode & 0o022):
-            raise RuntimeError("compiler source/project ownership is unsafe")
+        if (st.st_uid != owner_uid or st.st_gid != owner_gid
+                or (st.st_mode & 0o022)):
+            raise RuntimeError("compiler Project UID/GID or permissions mismatch")
+
+    # Check all descendants, not only the Git checkout top-level directory.
+    # No symlink, device, FIFO or socket can masquerade as reviewed source.
+    # Root owns immutable code; only regular world-readable files and
+    # world-traversable non-writable directories are admitted.
+    def _immutable_tree(root):
+        count = 0
+        stack = [root]
+        while stack:
+            path = stack.pop()
+            st = path.lstat()
+            if (st.st_uid != 0 or (st.st_mode & 0o022)
+                    or not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode))):
+                raise RuntimeError("compiler immutable source tree ownership unsafe")
+            if stat.S_ISDIR(st.st_mode):
+                if st.st_mode & 0o005 != 0o005:
+                    raise RuntimeError("compiler immutable source directory unreadable")
+                with os.scandir(path) as children:
+                    for entry in children:
+                        count += 1
+                        if count > 250000:
+                            raise RuntimeError("compiler source tree exceeds audit limit")
+                        stack.append(Path(entry.path))
+            elif st.st_mode & 0o004 == 0:
+                raise RuntimeError("compiler immutable source file unreadable")
+
+    for root in (Path(source), Path(record_root), Path(controller_root)):
+        if root != project / {"source": "source",
+                              "build-record": "companions/build-record",
+                              "box-control": "companions/box-control"}[root.name]:
+            raise RuntimeError("compiler immutable source root mismatch")
+        _immutable_tree(root)
+    parents = (project / "companions", project / "companions/box-control")
+    for path in parents:
+        if path.is_symlink() or not path.is_dir():
+            raise RuntimeError("compiler immutable companion parent unsafe")
+        st = path.lstat()
+        if (st.st_uid != 0 or st.st_mode & 0o022
+                or st.st_mode & 0o005 != 0o005):
+            raise RuntimeError("compiler immutable companion parent ownership unsafe")
     sock = Path(value["socket_path"])
     if sock.is_symlink():
         raise RuntimeError("root-control socket is linked")
