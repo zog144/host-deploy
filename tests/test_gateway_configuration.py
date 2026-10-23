@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from zog.host_deploy.gateway.github_configuration import configuration, prepare_configured
 from zog.host_deploy.gateway.github_dispatch import GitHubDispatchError, ISSUE_MARKER
+from zog.host_deploy.gateway.protocol import RequestProtocolError
 
 
 def settings():
@@ -164,7 +165,10 @@ def test_toolchain_dispatch_retains_actor_event_and_task_validation(
     env['ZOG_GATEWAY_ALLOWED_OPERATIONS'] = '["toolchain.submit"]'
     value = toolchain_event()
     mutate(value)
-    with pytest.raises(GitHubDispatchError):
+    # Malformed tool/lane selections are rejected by the stricter protocol
+    # RequestProtocolError; GitHubDispatchError is a subclass for event
+    # identity/dispatch checks. Both must reject before creating output.
+    with pytest.raises(RequestProtocolError):
         invoke(tmp_path, env, value)
     assert not (tmp_path/'request.json').exists()
 
