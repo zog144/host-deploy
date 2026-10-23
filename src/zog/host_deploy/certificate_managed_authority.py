@@ -9,8 +9,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
+import stat
 import uuid
+from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
@@ -256,3 +259,61 @@ def derive_managed_owner_authority(
     if (result["status"] != "approved" or result["expires_at"] <= now):
         _deny("managed-certificate-authority-revoked-or-expired")
     return result
+
+
+# These are canonical root-owner paths, not configurable web/user parameters.
+# They are deliberately distinct from any UID-970 managed assignment path.
+ROOT_OBSERVATION_PATH = "/state/host-discover-certificate-authority/authority.json"
+ROOT_SIGNER_PIN_PATH = "/etc/zog/host-install/certificate-assignment-authority.json"
+ROOT_CONSUMER_BINDING_PATH = "/etc/zog/host-deploy/certificate-managed-binding.json"
+
+
+def _read_root_json(path, *, mode, limit):
+    """Open a trusted root-owned path without symlink traversal or DAC drift."""
+    if os.geteuid() != 0:
+        _deny("managed-certificate-root-owner-required")
+    if path not in (
+        ROOT_OBSERVATION_PATH, ROOT_SIGNER_PIN_PATH, ROOT_CONSUMER_BINDING_PATH,
+    ):
+        _deny("managed-certificate-unreviewed-root-path")
+    cursor = Path("/")
+    parts = Path(path).parts[1:]
+    for name in parts[:-1]:
+        cursor /= name
+        info = cursor.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                or info.st_mode & 0o022):
+            _deny("managed-certificate-unsafe-root-ancestry")
+    desc = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(desc)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != mode
+                or not 0 < info.st_size <= limit):
+            _deny("managed-certificate-unsafe-root-file")
+        raw = os.read(desc, limit + 1)
+    finally:
+        os.close(desc)
+    if len(raw) > limit:
+        _deny()
+    try:
+        result = json.loads(raw)
+    except (TypeError, UnicodeError, ValueError):
+        _deny("managed-certificate-malformed-root-record")
+    return result
+
+
+def verify_current_managed_receipt(authority, *, now):
+    """Require a CURRENT separately signed root checkpoint before publication.
+
+    The managed root producer retains the monotonic signed history. The
+    installer remains responsible for a distinct durable *owner* history,
+    including persistence and reboot; this function never writes it.
+    """
+    pin = _read_root_json(ROOT_SIGNER_PIN_PATH, mode=0o444, limit=2048)
+    binding = _read_root_json(ROOT_CONSUMER_BINDING_PATH, mode=0o600, limit=8192)
+    observed = _read_root_json(ROOT_OBSERVATION_PATH, mode=0o600, limit=65536)
+    current = derive_managed_owner_authority(observed, pin, binding, now=now)
+    if current != owner_validate(authority, now=now):
+        _deny("managed-certificate-owner-receipt-stale")
+    return current
