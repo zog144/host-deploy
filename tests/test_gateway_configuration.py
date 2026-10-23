@@ -97,7 +97,7 @@ def toolchain_event(operation='toolchain.submit'):
             'commit': '31e6121cdf9fd05336286529666e2c35cdbe0831',
         }
     value['issue']['body'] = (
-        ISSUE_MARKER + '\\n```json\\n' + json.dumps(intent) + '\\n```'
+        ISSUE_MARKER + '\n```json\n' + json.dumps(intent) + '\n```'
     )
     return value
 
