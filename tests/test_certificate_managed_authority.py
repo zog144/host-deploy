@@ -112,8 +112,6 @@ def test_real_ed25519_checkpoint_yields_exact_local_receipt():
     ("binding", "host_id", ident(33)),
     ("binding", "installation_id", ident(33)),
     ("binding", "state_volume_id", ident(33)),
-    ("binding", "policy_sha256", "0"*64),
-    ("binding", "service_id", "another-nginx"),
     ("binding", "consumer", "station-nginx-https"),
     ("binding", "certificate_id", "foreign-cert"),
     ("binding", "hostnames", ["other.example.org"]),
@@ -137,6 +135,30 @@ def test_unsigned_or_foreign_authority_cannot_select_local_consumer(where,key,re
     with pytest.raises(owner.AuthorityBlocked):
         managed.derive_managed_owner_authority(
             observation, pin, binding, now=NOW)
+
+
+def test_owner_selected_service_and_policy_are_independently_pinned(monkeypatch):
+    # The signed assignment cannot choose arbitrary nginx services or the
+    # issuer policy hash. These are instead compared with the independently
+    # installed owner receipt and delivery policy.
+    observation, pin, binding = fixture()
+    original = managed.derive_managed_owner_authority(
+        observation, pin, binding, now=NOW)
+    changed = {**binding, "service_id": "another-nginx",
+               "policy_sha256": "0"*64}
+    derived = managed.derive_managed_owner_authority(
+        observation, pin, changed, now=NOW)
+    assert derived["service_id"] == "another-nginx"
+    assert derived["policy_sha256"] == "0"*64
+    roots = {
+        managed.ROOT_SIGNER_PIN_PATH: pin,
+        managed.ROOT_CONSUMER_BINDING_PATH: changed,
+        managed.ROOT_OBSERVATION_PATH: observation,
+    }
+    monkeypatch.setattr(managed, "_read_root_json",
+                        lambda path, *, mode, limit: roots[path])
+    with pytest.raises(owner.AuthorityBlocked, match="stale"):
+        managed.verify_current_managed_receipt(original, now=NOW)
 
 
 def test_signed_revocation_and_expiry_never_authorize_new_delivery():
