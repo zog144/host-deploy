@@ -486,6 +486,13 @@ def publish_authorized(policy, fingerprint, *, authority_path, execute=_run,
                     now=datetime.now(timezone.utc).timestamp())
         if selection["consumer"] != policy["service_id"]:
             raise AuthorityBlocked("not-local-consumer")
+        if authority["origin"] == "managed":
+            # A previously copied root receipt is insufficient: the
+            # independently signed host-discover root observation can
+            # subsequently revoke, supersede or change its assignment.
+            from .certificate_managed_authority import verify_current_managed_receipt
+            verify_current_managed_receipt(
+                authority, now=datetime.now(timezone.utc).timestamp())
     except (AuthorityBlocked, OSError, TypeError, ValueError):
         raise DeliveryBlocked("hostname-authority-unavailable") from None
     # Time-of-check versus publication authority revocation must be handled by
@@ -606,6 +613,10 @@ def serve(policy_path, *, authority_path=None):
         from .certificate_hostname_authority import read_owned, authorize_consumer
         selection = read_owned(authority_path, now=datetime.now(timezone.utc).timestamp())
         authorize_consumer(selection, policy, now=datetime.now(timezone.utc).timestamp())
+        if selection["origin"] == "managed":
+            from .certificate_managed_authority import verify_current_managed_receipt
+            verify_current_managed_receipt(
+                selection, now=datetime.now(timezone.utc).timestamp())
     path = Path(policy["socket_path"])
     fd = _open_dir(str(path.parent), owner=0, private=False)
     os.close(fd)
