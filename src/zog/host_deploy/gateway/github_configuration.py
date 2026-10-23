@@ -35,7 +35,13 @@ def configuration(env):
         operations = json.loads(required('ALLOWED_OPERATIONS'))
     except (ValueError, TypeError):
         raise GitHubDispatchError('deployment lists must be JSON') from None
-    allowed = {'host.status', 'build.status', 'build.submit', 'build.cancel', 'build.resume'}
+    # Static dispatchable protocol operations, NOT enabled deployment operations.
+    # A GitHub request still requires a separate explicit ZOG_GATEWAY_ALLOWED_OPERATIONS
+    # opt-in, trusted issue-opened actor, and host-side protected task/lane admission.
+    allowed = {
+        'host.status', 'build.status', 'build.submit', 'build.cancel', 'build.resume',
+        'toolchain.submit', 'toolchain.inspect', 'toolchain.resume',
+    }
     if (not isinstance(operations, list) or not operations
             or any(not isinstance(x, str) or x not in allowed for x in operations)
             or len(set(operations)) != len(operations)):

@@ -1192,3 +1192,274 @@ def test_companion_changes_after_dispatch_preparation_are_refused(tmp_path):
     save(lane_path, record)
     with pytest.raises(RuntimeError, match="runtime companion differs"):
         verify_current_target(gateway, bound)
+
+
+def _pinned_toolchain_workspace(tmp_path):
+    """Prepared fixture emulates the exact pinned producer's compatibility inputs."""
+    from zog.host_deploy.gateway.toolchain_task import (
+        RESTORED_PRODUCER_REVISION as PRODUCER_REVISION, CONTRACT, TASK_NAME,
+        RESTORED_MONTHLY_PIN_IDENTITY,
+    )
+    gateway, workspace_id = prepared_gateway(tmp_path)
+    lane_path = (gateway / "workspaces" / workspace_id
+                 / "image-build-lanes/lane-a.json")
+    record = json.loads(lane_path.read_text())
+    record["schema"] = image_build_lanes.SCHEMA
+    record["specification"]["source_revision"] = PRODUCER_REVISION
+    record["specification"]["monthly_pin_identity"] = RESTORED_MONTHLY_PIN_IDENTITY
+    record["runtime_companion"]["producer_revision"] = PRODUCER_REVISION
+    record["runtime_companion"]["revision"] = (
+        image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
+    record["compiler_execution_identity"] = {
+        "schema": "host-deploy-compiler-execution-v2",
+        "controller_uid": 12001, "controller_gid": 12002,
+        "controller_home": str(Path(record["specification"]["project_root"]).parent),
+        "project_root": record["specification"]["project_root"],
+        "build_uid": 13001, "build_gid": 13002,
+        "socket_path": "/run/zog/root-control.sock",
+        "source_revision": PRODUCER_REVISION,
+        "build_record_revision": image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY,
+        "box_control_revision": image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY,
+        "python_executable": record["specification"]["python_executable"],
+        "task_catalogue_identity": "sha256:" + "e"*64,
+        "root_control_revision": "e4f25110c854c000bdde5ec564c8119370da9a52",
+    }
+    save(lane_path, record)
+    task = {
+        "contract": CONTRACT,
+        "task": {
+            "name": TASK_NAME, "source_repository": "zog144/image-build",
+            "source_revision": PRODUCER_REVISION,
+            "lane": "lane-a", "lane_owner": "host-a",
+            "seed_generation": "a" * 64,
+            "monthly_pin_repository_path": MONTHLY_PIN_PATH,
+            "monthly_pin_identity": RESTORED_MONTHLY_PIN_IDENTITY,
+            "pin_date": "2026-10-01",
+            "specification_identity":
+                "sha256:ba8986219065627c939adf49ee0bf200bfc94f85b0bbe280aecdaff8349ffc1c",
+        },
+    }
+    request = gateway_request(workspace_id, "build.submit")
+    request["operation"] = "toolchain.submit"
+    request["source"]["commit"] = PRODUCER_REVISION
+    request["parameters"] = {
+        "lane": "lane-a", "task": TASK_NAME,
+    }
+    admit(gateway, request)
+    return gateway, request, task, lane_path, record
+
+
+def test_reviewed_toolchain_companion_must_be_bound_explicitly(tmp_path):
+    from zog.host_deploy.gateway.image_build_execution import _binding
+    from zog.host_deploy.gateway.toolchain_task import RESTORED_PRODUCER_REVISION as PRODUCER_REVISION
+    gateway, request, task, lane_path, record = _pinned_toolchain_workspace(tmp_path)
+    approval = "sha256:" + "e" * 64
+    with pytest.raises(RuntimeError, match="explicit reviewed controller"):
+        binding_for_request(
+            gateway, request["request_id"],
+            task_catalogue=task, task_catalogue_identity=approval)
+    workspace = lane_path.parent.parent
+    spec = record["specification"]
+    expected_digest = image_build_lanes.specification_sha256(spec)
+    args = dict(
+        producer_revision=PRODUCER_REVISION,
+        repository="zog144/box-control",
+        revision=image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY,
+        source_root=spec["project_root"] + "/companions/box-control",
+        expected_specification_sha256=expected_digest,
+    )
+    bound_lane = image_build_lanes.bind_controller_companion(
+        workspace, "lane-a", **args)
+    assert image_build_lanes.bind_controller_companion(
+        workspace, "lane-a", **args) == bound_lane
+    _, prepared = prepare_image_build_dispatch(
+        gateway, request["request_id"],
+        task_catalogue=task, task_catalogue_identity=approval)
+    binding = _binding(prepared)
+    assert binding["controller_companion"] == bound_lane["controller_companion"]
+    assert binding["runtime_profile"]["controller_revision"] == (
+        image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY)
+    assert binding["runtime_companion"]["revision"] == (
+        image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
+    assert binding["runtime_profile"]["controller_revision"] != (
+        image_build_lanes.BOX_CONTROL_COMPATIBILITY)
+    assert verify_current_target(gateway, binding)["workspace_id"] == (
+        request["workspace_id"])
+    with pytest.raises(ValueError, match="already bound differently|unreviewed"):
+        image_build_lanes.bind_controller_companion(
+            workspace, "lane-a", **{
+                **args, "revision": image_build_lanes.BOX_CONTROL_COMPATIBILITY,
+            })
+    current = json.loads(lane_path.read_text())
+    current["controller_companion"]["revision"] = (
+        image_build_lanes.BOX_CONTROL_COMPATIBILITY)
+    save(lane_path, current)
+    with pytest.raises(ValueError, match="unreviewed"):
+        _binding({**prepared, "binding": {
+            **binding, "controller_companion": current["controller_companion"]}})
+    with pytest.raises(RuntimeError, match="controller companion differs"):
+        verify_current_target(gateway, binding)
+
+
+def test_real_preflight_accepts_reviewed_source_bound_controller(tmp_path):
+    from zog.host_deploy.gateway.image_build_execution import _binding
+    from zog.host_deploy.gateway.toolchain_task import RESTORED_PRODUCER_REVISION as PRODUCER_REVISION
+    requirements_path = (Path(__file__).parent / "fixtures" /
+        "image-build-toolchain-runtime-requirements-31e6121c.json")
+    pinned = json.loads(requirements_path.read_text())
+    assert pinned["source"] == {
+        "repository": "zog144/image-build", "revision": PRODUCER_REVISION
+    }
+    assert pinned["box_control"]["validated_revision"] == (
+        image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY)
+    assert pinned["build_record"]["validated_revision"] == (
+        image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY)
+    gateway, request, task, lane_path, record = _pinned_toolchain_workspace(tmp_path)
+    spec = record["specification"]
+    image_build_lanes.bind_controller_companion(
+        lane_path.parent.parent, "lane-a",
+        producer_revision=PRODUCER_REVISION,
+        repository="zog144/box-control",
+        revision=pinned["box_control"]["validated_revision"],
+        source_root=spec["project_root"] + "/companions/box-control",
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec),
+    )
+    prepared = binding_for_request(
+        gateway, request["request_id"], task_catalogue=task,
+        task_catalogue_identity="sha256:" + "e" * 64)
+    binding = _binding({"phase": "prepared", "binding": prepared})
+    scripts = []
+
+    class SourceBoundHost:
+        def command(self, script, seconds):
+            scripts.append(script)
+            profile = binding["runtime_profile"]
+            assert profile["operation"] == "toolchain.specification.inspect"
+            checks = []
+            for component, revision, root, module in (
+                ("build-record", pinned["build_record"]["validated_revision"],
+                 binding["runtime_companion"]["source_root"],
+                 "src/zog/build_record/__init__.py"),
+                ("box-control", pinned["box_control"]["validated_revision"],
+                 profile["controller_source_root"],
+                 "box-control/src/zog/box_control/__init__.py"),
+            ):
+                checks.append({
+                    "component": component,
+                    "status": "ready", "validated_revision": revision,
+                    "source": root + "/" + module,
+                })
+            return json.dumps({
+                "contract": "image-build-runtime-preflight-v1",
+                "ready": True, "mutation": False,
+                "python": {"executable": binding["python_executable"]},
+                "image_build": {"repository_root": binding["source_root"]},
+                "requirements": {"operation": profile["operation"],
+                                 "bindings": {
+                                     "provenance": profile["provenance"],
+                                     "controller": profile["controller"],
+                                     "external_observed_state":
+                                         profile["external_observed_state"],
+                                 }},
+                "checks": checks,
+            })
+
+    report = REAL_PRODUCER_PREFLIGHT(SourceBoundHost(), binding)
+    assert report["ready"] is True
+    assert len(scripts) == 1
+    assert PRODUCER_REVISION in scripts[0]
+    assert image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY in scripts[0]
+    assert image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY in scripts[0]
+    assert image_build_lanes.BOX_CONTROL_COMPATIBILITY not in scripts[0]
+    assert image_build_lanes.BUILD_RECORD_COMPATIBILITY not in scripts[0]
+
+    class WrongControllerHost(SourceBoundHost):
+        def command(self, script, seconds):
+            response = json.loads(super().command(script, seconds))
+            for item in response["checks"]:
+                if item["component"] == "box-control":
+                    item["validated_revision"] = (
+                        image_build_lanes.BOX_CONTROL_COMPATIBILITY)
+            return json.dumps(response)
+
+    with pytest.raises(RuntimeError, match="did not verify bound box-control"):
+        REAL_PRODUCER_PREFLIGHT(WrongControllerHost(), binding)
+
+
+def test_historical_controller_profile_unmodified_by_new_producer(tmp_path):
+    from zog.host_deploy.gateway.image_build_execution import _binding
+    gateway, request = _prepare_status_dispatch(tmp_path)
+    prepared = load_dispatch(gateway, request["request_id"])
+    binding = _binding(prepared)
+    assert "controller_companion" not in binding
+    assert binding["runtime_profile"]["controller_revision"] == (
+        image_build_lanes.BOX_CONTROL_COMPATIBILITY)
+    assert binding["runtime_companion"]["revision"] == (
+        image_build_lanes.BUILD_RECORD_COMPATIBILITY)
+    assert verify_current_target(gateway, binding)["workspace_id"] == (
+        request["workspace_id"])
+
+
+def test_compiler_identity_is_immutable_through_inspection_and_resume(tmp_path):
+    from zog.host_deploy.gateway import toolchain_journal as journal
+    from zog.host_deploy.gateway.image_build_execution import _binding
+    from zog.host_deploy.gateway.toolchain_task import (
+        RESTORED_PRODUCER_REVISION,
+    )
+    gateway, request, task, lane_path, record = _pinned_toolchain_workspace(tmp_path)
+    spec = record["specification"]
+    workspace = lane_path.parent.parent
+    image_build_lanes.bind_controller_companion(
+        workspace, "lane-a",
+        producer_revision=RESTORED_PRODUCER_REVISION,
+        repository="zog144/box-control",
+        revision=image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY,
+        source_root=spec["project_root"] + "/companions/box-control",
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec),
+    )
+    identity = record["compiler_execution_identity"]
+    current = json.loads(lane_path.read_text())
+    del current["compiler_execution_identity"]
+    save(lane_path, current)
+    selected = image_build_lanes.bind_compiler_execution_identity(
+        workspace, "lane-a", identity=identity,
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec))
+    assert selected["compiler_execution_identity"] == identity
+    assert image_build_lanes.bind_compiler_execution_identity(
+        workspace, "lane-a", identity=identity,
+        expected_specification_sha256=image_build_lanes.specification_sha256(spec)
+    ) == selected
+    with pytest.raises(RuntimeError, match="already frozen"):
+        image_build_lanes.bind_compiler_execution_identity(
+            workspace, "lane-a", identity={**identity, "controller_uid": 16001},
+            expected_specification_sha256=image_build_lanes.specification_sha256(spec))
+    frozen = binding_for_request(
+        gateway, request["request_id"], task_catalogue=task,
+        task_catalogue_identity="sha256:" + "e"*64)
+    _binding({"phase": "prepared", "binding": frozen})
+    registry = ("/var/lib/host-deploy/typed-toolchain-requests/"
+                + request["workspace_id"] + "/")
+    assert frozen["remote_request_path"].startswith(registry)
+    assert not frozen["remote_request_path"].startswith(spec["project_root"])
+    state = journal.initial(request["request_id"], frozen)
+    state["phases"] = [{"operation_id": "a"*32}]
+    events = (
+        journal.event(frozen, state, "specification", "specification"),
+        journal.event(frozen, state, "submit", "cross-bootstrap"),
+        journal.event(frozen, state, "inspect", "cross-bootstrap", ordinal=1),
+        journal.event(frozen, state, "resume", "cross-bootstrap", ordinal=1),
+    )
+    for operation in events:
+        staged = journal.stage_binding(frozen, operation)
+        assert staged["compiler_execution_identity"] == identity
+        assert staged["task_catalogue_identity"] == "sha256:"+"e"*64
+        assert staged["source"]["revision"] == RESTORED_PRODUCER_REVISION
+        assert staged["remote_request"]["operation_id"] == operation["operation_id"]
+        assert staged["remote_request_path"].startswith(registry)
+        assert staged["remote_result_path"].startswith(registry)
+        assert staged["remote_request_path"] != frozen["remote_request_path"]
+    modified = json.loads(lane_path.read_text())
+    modified["compiler_execution_identity"]["controller_gid"] += 1
+    save(lane_path, modified)
+    with pytest.raises(RuntimeError, match="UID/GID/home/socket identity changed"):
+        verify_current_target(gateway, frozen)
