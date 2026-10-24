@@ -176,6 +176,7 @@ def test_two_independent_proofs_required_before_verified_renewal(tmp_path, monke
             "status": "journal-ready", "tls_ready": False,
             "request_id": request_id, "certificate_id": "station-web",
             "policy_sha256": "a"*64, "outcome": "unchanged",
+            "host_policy_digest": "sha256:" + "d"*64,
             "certificate_fingerprint_sha256": FP,
             "journal_updated_at": certificate["operation_updated_at"],
         }

@@ -53,13 +53,15 @@ def test_only_exact_selected_programs_are_allowed():
     rid = ctrl.issue_application_request_id()
     for app, program in (
         ("station-access", "renew"), ("certify-manage", "issue"),
-        ("certify-manage", "inspect"), ("certify-manage", "shell"),
+        ("certify-manage", "shell"),
     ):
         with pytest.raises(RenewalBlocked, match="selection-rejected"):
             ctrl.request_application_launch(app, program_name=program, request_id=rid)
     assert not broker.launched
+    ctrl.request_application_launch("certify-manage", program_name="inspect", request_id=rid)
+    assert broker.launched[0][1] == "inspect"
     ctrl.request_application_launch("certify-manage", program_name="stage", request_id=rid)
-    assert broker.launched[0][1] == "stage"
+    assert broker.launched[1][1] == "stage"
 
 
 @pytest.mark.parametrize("invalid", [
