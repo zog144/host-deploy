@@ -14,6 +14,7 @@ import re
 import stat
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.exceptions import InvalidSignature
@@ -124,8 +125,17 @@ def _valid_binding(binding):
             or len(binding["contact_email"]) > 254
             or not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", binding["contact_email"])
             or type(binding["acme_directory"]) is not str
-            or not binding["acme_directory"].startswith("https://")):
+            or len(binding["acme_directory"]) > 2048):
         _deny()
+    try:
+        url = urlsplit(binding["acme_directory"])
+        if (url.scheme != "https" or not url.hostname
+                or url.username is not None or url.password is not None
+                or url.port not in (None, 443) or not url.path.startswith("/")
+                or url.query or url.fragment):
+            _deny("managed-certificate-acme-directory-invalid")
+    except ValueError:
+        _deny("managed-certificate-acme-directory-invalid")
     # Use owner receipt schema for canonical hostname, challenge and credential
     # validation; no need to trust a browser-selected file or loose source list.
     probe = {**binding, "origin": "managed", "verified_by": "signed-host-discover",
