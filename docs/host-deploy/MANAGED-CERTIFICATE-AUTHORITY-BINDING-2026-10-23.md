@@ -24,7 +24,11 @@ records**, all from reviewed native host-install enrollment/installation:
 
 All directories on these paths must be root-owned and not group/other
 writable. Reads are root-only, descriptor-based with `O_NOFOLLOW`, exact
-mode/UID/link-count/type and size checks. No caller provides an alternate
+mode/UID/link-count/type and size checks. All path components, not just the
+leaf, are opened relative to a retained and verified `dir_fd` from `/`.
+A former `lstat`-then-open on absolute path could otherwise race against
+a parent directory replacement; the corrected readers reject ancestor and
+leaf symlinks rather than following them. No caller provides an alternate
 path. These file paths and modes are versioned integration requirements;
 this PR **does not install or create the records**.
 
@@ -100,6 +104,13 @@ certificates; and explicit rollback/uncertainty retention.
 
 ## Source tests and native acceptance gates
 
+`tests/test_certificate_authority_anchored_paths.py` exercises both
+managed and local owner readers on real Linux files/directories with symlinked
+ancestors and leaves, exact file modes and bounded reads. GitHub Actions
+simulates root file ownership for this unprivileged filesystem regression;
+it does **not** claim installed root ownership or native storage/mount
+acceptance.
+
 `tests/test_certificate_managed_authority.py` uses **real synthetic
 Ed25519 signatures** and covers valid checkpoint conversion, wrong
 signer/host/installation/STATE, tampered payload, altered DNS/ACME/credential,
@@ -138,3 +149,22 @@ is a **one-shot October 19 read-only `build.status` request**, unrelated
 to hostname authority or protected certificate delivery. It should be
 dispositioned administratively against its historical gateway request
 receipt rather than added to this PR's implementation dependencies.
+
+## Source review follow-up — 2026-10-24
+
+An additional review of both privileged authority readers found a path
+replacement window: checking ancestry with `Path.lstat` followed by
+`os.open` of the entire filename did not prevent a parent from being
+renamed or replaced between those steps. The managed root checkpoint, root
+signer pin, local consumer binding and owner receipt now use an explicit
+`openat`-style descriptor walk for **all** directory components and a
+final `O_NOFOLLOW` file open relative to the pinned parent.
+
+The change does not broaden authority, modify the installed issuer policy,
+or bypass the native-inspection guard. It does not establish atomicity
+across an externally changing signed root checkpoint, owner receipt and
+nginx reload: host-install still owns the durable root publication,
+revision fencing and source-of-truth installation, and native Work must
+test the full selected renew→inspect→stage→deliver operation under
+interruption and concurrent revocation. The source gate alone cannot
+authorize real TLS activation.
