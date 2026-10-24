@@ -160,6 +160,13 @@ signer pin, local consumer binding and owner receipt now use an explicit
 `openat`-style descriptor walk for **all** directory components and a
 final `O_NOFOLLOW` file open relative to the pinned parent.
 
+The separate local consumer binding now also validates the ACME directory
+URL using the producer-compatible HTTPS profile, rejecting userinfo, non-443
+ports, missing URL paths, queries, fragments and malformed ports. Unlike a
+simple `https://` prefix test, this makes credential-bearing or redirected
+URL forms fail closed before a signed managed assignment can be bound to a
+local issuer consumer.
+
 The change does not broaden authority, modify the installed issuer policy,
 or bypass the native-inspection guard. It does not establish atomicity
 across an externally changing signed root checkpoint, owner receipt and
