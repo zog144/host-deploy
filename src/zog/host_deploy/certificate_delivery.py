@@ -490,9 +490,14 @@ def publish_authorized(policy, fingerprint, *, authority_path, execute=_run,
             # A previously copied root receipt is insufficient: the
             # independently signed host-discover root observation can
             # subsequently revoke, supersede or change its assignment.
-            from .certificate_managed_authority import verify_current_managed_receipt
+            from .certificate_managed_authority import (
+                ROOT_OWNER_AUTHORITY_PATH, verify_current_managed_receipt,
+            )
+            if str(authority_path) != ROOT_OWNER_AUTHORITY_PATH:
+                raise AuthorityBlocked("managed-certificate-unreviewed-owner-path")
             verify_current_managed_receipt(
-                authority, now=datetime.now(timezone.utc).timestamp())
+                authority, now=datetime.now(timezone.utc).timestamp(),
+                delivery_policy=policy)
     except (AuthorityBlocked, OSError, TypeError, ValueError):
         raise DeliveryBlocked("hostname-authority-unavailable") from None
     # Time-of-check versus publication authority revocation must be handled by
@@ -614,9 +619,14 @@ def serve(policy_path, *, authority_path=None):
         selection = read_owned(authority_path, now=datetime.now(timezone.utc).timestamp())
         authorize_consumer(selection, policy, now=datetime.now(timezone.utc).timestamp())
         if selection["origin"] == "managed":
-            from .certificate_managed_authority import verify_current_managed_receipt
+            from .certificate_managed_authority import (
+                ROOT_OWNER_AUTHORITY_PATH, verify_current_managed_receipt,
+            )
+            if str(authority_path) != ROOT_OWNER_AUTHORITY_PATH:
+                raise DeliveryBlocked("hostname-authority-unavailable")
             verify_current_managed_receipt(
-                selection, now=datetime.now(timezone.utc).timestamp())
+                selection, now=datetime.now(timezone.utc).timestamp(),
+                delivery_policy=policy)
     path = Path(policy["socket_path"])
     fd = _open_dir(str(path.parent), owner=0, private=False)
     os.close(fd)
