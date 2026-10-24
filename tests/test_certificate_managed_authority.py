@@ -155,6 +155,56 @@ def test_independent_owner_acme_directory_rejects_unreviewed_url_forms(candidate
             observation, pin, binding, now=NOW)
 
 
+def _ledger_records(observation, pin, binding, owner_receipt):
+    assignment_digest = observation["assignment_sha256"]
+    owner_digest = hashlib.sha256(managed._canonical(owner_receipt)).hexdigest()
+    entry = {
+        "revision": owner_receipt["revision"],
+        "operation_id": owner_receipt["operation_id"],
+        "assignment_sha256": assignment_digest,
+        "owner_authority_sha256": owner_digest,
+        "status": owner_receipt["status"],
+    }
+    ledger = {
+        "schema": managed.OWNER_LEDGER_SCHEMA,
+        "installation_id": binding["installation_id"],
+        "state_volume_id": binding["state_volume_id"],
+        "registry_id": binding["registry_id"],
+        "authority_key_id": binding["authority_key_id"],
+        "service_id": binding["service_id"],
+        "certificate_id": binding["certificate_id"],
+        "binding_sha256": hashlib.sha256(managed._canonical(binding)).hexdigest(),
+        "delivery_policy_sha256": "7"*64,
+        "local_intent_sha256": "8"*64,
+        "issuer": {
+            "storage_id": "a"*32, "grant_id": "b"*32,
+            "uid": 44001, "gid": 44002,
+            "software_view": "sha256:" + "c"*64,
+            "certificate_data_path": "/var/lib/zog-certify-manage",
+            "controller_record_sha256": "d"*64,
+        },
+        "revision": entry["revision"], "operation_id": entry["operation_id"],
+        "assignment_sha256": entry["assignment_sha256"],
+        "owner_authority_sha256": entry["owner_authority_sha256"],
+        "status": entry["status"], "operations": [entry],
+    }
+    return {
+        managed.ROOT_SIGNER_PIN_PATH: pin,
+        managed.ROOT_CONSUMER_BINDING_PATH: binding,
+        managed.ROOT_OBSERVATION_PATH: observation,
+        managed.ROOT_OWNER_AUTHORITY_PATH: owner_receipt,
+        managed.ROOT_OWNER_LEDGER_PATH: ledger,
+        managed.ROOT_OWNER_TRANSACTION_PATH: None,
+    }
+
+
+def _mount_roots(monkeypatch, records):
+    monkeypatch.setattr(
+        managed, "_read_root_json",
+        lambda path, *, mode, limit, allow_missing=False: records[path],
+    )
+
+
 def test_owner_selected_service_and_policy_are_independently_pinned(monkeypatch):
     # The signed assignment cannot choose arbitrary nginx services or the
     # issuer policy hash. These are instead compared with the independently
@@ -168,13 +218,8 @@ def test_owner_selected_service_and_policy_are_independently_pinned(monkeypatch)
         observation, pin, changed, now=NOW)
     assert derived["service_id"] == "another-nginx"
     assert derived["policy_sha256"] == "0"*64
-    roots = {
-        managed.ROOT_SIGNER_PIN_PATH: pin,
-        managed.ROOT_CONSUMER_BINDING_PATH: changed,
-        managed.ROOT_OBSERVATION_PATH: observation,
-    }
-    monkeypatch.setattr(managed, "_read_root_json",
-                        lambda path, *, mode, limit: roots[path])
+    roots = _ledger_records(observation, pin, changed, derived)
+    _mount_roots(monkeypatch, roots)
     with pytest.raises(owner.AuthorityBlocked, match="stale"):
         managed.verify_current_managed_receipt(original, now=NOW)
 
@@ -209,13 +254,8 @@ def test_signed_revocation_and_expiry_never_authorize_new_delivery():
 def test_managed_delivery_reopens_root_state_and_refuses_stale_receipt(monkeypatch):
     observation, pin, binding = fixture()
     current = managed.derive_managed_owner_authority(observation, pin, binding, now=NOW)
-    expected = {
-        managed.ROOT_SIGNER_PIN_PATH: pin,
-        managed.ROOT_CONSUMER_BINDING_PATH: binding,
-        managed.ROOT_OBSERVATION_PATH: observation,
-    }
-    monkeypatch.setattr(managed, "_read_root_json",
-                        lambda path, *, mode, limit: expected[path])
+    expected = _ledger_records(observation, pin, binding, current)
+    _mount_roots(monkeypatch, expected)
     assert managed.verify_current_managed_receipt(current, now=NOW) == current
     with pytest.raises(owner.AuthorityBlocked, match="stale"):
         managed.verify_current_managed_receipt(
@@ -247,4 +287,4 @@ def test_managed_delivery_fails_closed_without_installed_root_checkpoint(monkeyp
              "certificate_id": current["certificate_id"],
              "hostnames": current["hostnames"],
              "policy_sha256": current["policy_sha256"]},
-            "e"*64, authority_path="/etc/zog/delivery-authority.json")
+            "e"*64, authority_path=managed.ROOT_OWNER_AUTHORITY_PATH)
