@@ -137,22 +137,41 @@ def read_owned(path, *, now=None):
     path = Path(path)
     if not path.is_absolute() or path == Path("/") or ".." in path.parts:
         _fail()
-    p = Path("/")
-    for name in path.parts[1:-1]:
-        p /= name
-        info = p.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-            _fail()
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    # Keep every verified directory descriptor anchored until the leaf is
+    # opened. An lstat-then-open pathname sequence is replaceable between
+    # checks, even when O_NOFOLLOW is set for the leaf.
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        info = os.fstat(descriptor)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
-                or info.st_nlink != 1 or info.st_mode & 0o077
-                or info.st_size > 8192):
-            _fail()
-        raw = os.read(descriptor, 8193)
+        for name in path.parts[1:-1]:
+            child = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                os.O_CLOEXEC, dir_fd=fd,
+            )
+            try:
+                info = os.fstat(child)
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                        or info.st_mode & 0o022):
+                    _fail()
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(fd)
+            fd = child
+        descriptor = os.open(
+            path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=fd,
+        )
+        try:
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or info.st_nlink != 1 or info.st_mode & 0o077
+                    or info.st_size > 8192):
+                _fail()
+            raw = os.read(descriptor, 8193)
+        finally:
+            os.close(descriptor)
     finally:
-        os.close(descriptor)
+        os.close(fd)
     try:
         return validate(json.loads(raw), now=now)
     except (UnicodeError, ValueError, TypeError) as exc:
