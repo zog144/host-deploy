@@ -137,6 +137,24 @@ def test_unsigned_or_foreign_authority_cannot_select_local_consumer(where,key,re
             observation, pin, binding, now=NOW)
 
 
+@pytest.mark.parametrize("candidate", [
+    "https://someuser@example.org/directory",
+    "https://example.org:8443/directory",
+    "https://example.org/directory?token=secret",
+    "https://example.org/directory#fragment",
+    "http://example.org/directory",
+    "https://example.org",
+    "https://",
+    "https://example.org:bad/directory",
+])
+def test_independent_owner_acme_directory_rejects_unreviewed_url_forms(candidate):
+    observation, pin, binding = fixture()
+    binding["acme_directory"] = candidate
+    with pytest.raises(owner.AuthorityBlocked):
+        managed.derive_managed_owner_authority(
+            observation, pin, binding, now=NOW)
+
+
 def test_owner_selected_service_and_policy_are_independently_pinned(monkeypatch):
     # The signed assignment cannot choose arbitrary nginx services or the
     # issuer policy hash. These are instead compared with the independently
