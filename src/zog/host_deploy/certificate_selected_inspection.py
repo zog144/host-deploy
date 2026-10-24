@@ -18,7 +18,8 @@ from .certificate_renewal import (
 )
 
 SCHEMA = "zog-host-deploy-selected-inspect-v1"
-EVIDENCE_SCHEMA = "zog-controller-selected-inspect-evidence-v1"  # proposal, not producer contract
+EVIDENCE_SCHEMA = "zog-controller-selected-inspect-evidence-v1"  # legacy fixture
+TRUSTED_SCHEMA = "zog-trusted-issuer-inspection-v1"
 _ID = re.compile(r"[a-z][a-z0-9-]{0,62}\Z")
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _UUID32 = re.compile(r"[0-9a-f]{32}\Z")
@@ -171,7 +172,8 @@ def _original_renewal(fd, scope, original_id):
 
 
 def tick(directory, controller, scope, *, original_renewal_id=None,
-         trusted_reader=None, trusted_renewal_observation=None, now=None):
+         trusted_reader=None, trusted_renewal_observation=None,
+         host_policy_digest=None, now=None):
     """Single bounded pass; no client-supplied issuer JSON may become evidence.
 
     trusted_reader, when implemented by controller/root-control, must derive
@@ -201,8 +203,6 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
             elapsed = current - _timestamp(record["issued_at"])
             if elapsed <= timedelta(minutes=15):
                 return dict(record)
-            if elapsed < timedelta(hours=24):
-                raise RenewalBlocked("inspection-cadence-bound")
             _archive_verified(fd, record)
             record = None
         if record is None:
@@ -254,15 +254,29 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
         record["runtime_id"] = runtime_id
         record["phase"] = "awaiting-evidence"
         _save(fd, record)
+        authenticated = hasattr(controller, "inspect_issuer_result")
+        if authenticated:
+            # An injected callback must never replace a UID-pinned client.
+            trusted_reader = controller.inspect_issuer_result
         if trusted_reader is None:
             return dict(record)
-        # Reader MUST derive evidence from exact invocation, never accept
-        # arbitrary status or the generic journald stream supplied by caller.
-        evidence = trusted_reader(ident, runtime_id)
-        checked = correlate(scope, ident, runtime_id, evidence,
-                            original_renewal_id=original_renewal_id,
-                            renewal_observation=trusted_renewal_observation,
-                            now=current)
+        # The controller's authenticated inspection API accepts only its saved
+        # inspect request ID, never arbitrary path/invocation/boot selectors.
+        evidence = (trusted_reader(ident) if authenticated
+                    else trusted_reader(ident, runtime_id))
+        if authenticated:
+            from .certificate_authenticated_inspection import correlate as correlate_authenticated
+            checked = correlate_authenticated(
+                scope, ident, runtime_id, evidence,
+                original_renewal_id=original_renewal_id,
+                renewal_observation=trusted_renewal_observation,
+                host_policy_digest=host_policy_digest, now=current,
+            )
+        else:
+            checked = correlate(scope, ident, runtime_id, evidence,
+                                original_renewal_id=original_renewal_id,
+                                renewal_observation=trusted_renewal_observation,
+                                now=current)
         if original_renewal_id is not None:
             original = _original_renewal(fd, scope, original_renewal_id)
             if (original["fingerprint"] != checked["fingerprint"]

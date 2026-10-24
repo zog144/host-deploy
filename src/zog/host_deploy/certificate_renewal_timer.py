@@ -197,10 +197,25 @@ def _authenticated_issuer_evidence(policy, *, request_id, started, controller_re
     if (approved["certificate_id"] != policy["certificate_id"]
             or approved["policy_sha256"] != policy["policy_sha256"]):
         raise RenewalBlocked("issuer-observer-policy-mismatch")
-    return observe_request(
+    observed = observe_request(
         approved, request_id=request_id, issued_at=started.isoformat(),
         controller_result=controller_result,
     )
+    # The trusted root-control observation is request-bound, but the local
+    # host-deploy timer policy independently owns the certificate policy pin.
+    # Never consume station-access's UID-specific state or use an observed
+    # digest as the local authorization source.
+    if (type(observed) is not dict
+            or observed.get("request_id") != request_id
+            or observed.get("tls_ready") is not False):
+        raise RenewalBlocked("root-observation-request-mismatch")
+    if observed.get("status") == "journal-ready":
+        if (observed.get("policy_sha256") != policy["policy_sha256"]
+                or observed.get("certificate_id") != policy["certificate_id"]
+                or observed.get("host_policy_digest") !=
+                   approved["host_policy_digest"]):
+            raise RenewalBlocked("root-observation-local-policy-mismatch")
+    return observed
 
 
 def _publication_policy(policy):
@@ -277,6 +292,8 @@ def run(policy, *, controller, issuer_checker=None,
             journal_time = journal_time.astimezone(timezone.utc)
             if (trusted["certificate_id"] != policy["certificate_id"]
                     or trusted["policy_sha256"] != policy["policy_sha256"]
+                    or (policy["controller_backend"] == "selected-broker"
+                        and trusted.get("host_policy_digest") is None)
                     or trusted["tls_ready"] is not False
                     or trusted["certificate_fingerprint_sha256"] !=
                        inspected.fingerprint_sha256

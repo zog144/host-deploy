@@ -466,6 +466,46 @@ def publish(policy, fingerprint, *, execute=_run, probe=_probe):
         os.close(fd)
 
 
+def publish_authorized(policy, fingerprint, *, authority_path, execute=_run,
+                       probe=_probe):
+    """Versioned host-owner gate around the unchanged v1 root delivery bridge.
+
+    Caller provides only a root-owned authority receipt path, not web-supplied
+    authorization. The receipt binds this machine's local HTTPS service and
+    exact staged issuer policy. The bridge never delivers keys to a relay.
+    """
+    from .certificate_hostname_authority import (
+        read_owned, authorize_consumer, AuthorityBlocked,
+    )
+    if os.geteuid() != 0:
+        raise DeliveryBlocked("not-authorized")
+    policy = policy_validate(policy)
+    try:
+        authority = read_owned(authority_path, now=datetime.now(timezone.utc).timestamp())
+        selection = authorize_consumer(authority, policy,
+                    now=datetime.now(timezone.utc).timestamp())
+        if selection["consumer"] != policy["service_id"]:
+            raise AuthorityBlocked("not-local-consumer")
+        if authority["origin"] == "managed":
+            # A previously copied root receipt is insufficient: the
+            # independently signed host-discover root observation can
+            # subsequently revoke, supersede or change its assignment.
+            from .certificate_managed_authority import (
+                ROOT_OWNER_AUTHORITY_PATH, verify_current_managed_receipt,
+            )
+            if str(authority_path) != ROOT_OWNER_AUTHORITY_PATH:
+                raise AuthorityBlocked("managed-certificate-unreviewed-owner-path")
+            verify_current_managed_receipt(
+                authority, now=datetime.now(timezone.utc).timestamp(),
+                delivery_policy=policy)
+    except (AuthorityBlocked, OSError, TypeError, ValueError):
+        raise DeliveryBlocked("hostname-authority-unavailable") from None
+    # Time-of-check versus publication authority revocation must be handled by
+    # the protected policy owner during deployment. No network/web receipt
+    # is ever treated as the privileged authority.
+    return publish(policy, fingerprint, execute=execute, probe=probe)
+
+
 def recover_previous(policy, *, execute=_run, probe=_probe):
     """Explicit root-operator recovery of an uncertain publication.
 
@@ -566,9 +606,27 @@ class _Server(socketserver.UnixStreamServer):
     allow_reuse_address = False
 
 
-def serve(policy_path):
-    """Root-owned Unix socket: SO_PEERCRED plus exact policy-bound operation."""
+def serve(policy_path, *, authority_path=None):
+    """Root-owned Unix socket; optional separately reviewed authority-gated mode.
+
+    The default v1 listener remains unchanged for existing installations.
+    New versioned host-owner deployments must explicitly select the protected
+    authority file; per-request checks occur before certificate publication.
+    """
     policy = read_policy(policy_path)
+    if authority_path is not None:
+        from .certificate_hostname_authority import read_owned, authorize_consumer
+        selection = read_owned(authority_path, now=datetime.now(timezone.utc).timestamp())
+        authorize_consumer(selection, policy, now=datetime.now(timezone.utc).timestamp())
+        if selection["origin"] == "managed":
+            from .certificate_managed_authority import (
+                ROOT_OWNER_AUTHORITY_PATH, verify_current_managed_receipt,
+            )
+            if str(authority_path) != ROOT_OWNER_AUTHORITY_PATH:
+                raise DeliveryBlocked("hostname-authority-unavailable")
+            verify_current_managed_receipt(
+                selection, now=datetime.now(timezone.utc).timestamp(),
+                delivery_policy=policy)
     path = Path(policy["socket_path"])
     fd = _open_dir(str(path.parent), owner=0, private=False)
     os.close(fd)
@@ -590,7 +648,12 @@ def serve(policy_path):
                 current_policy = read_policy(policy_path)
                 if current_policy != policy:
                     raise DeliveryBlocked("policy-changed-restart-required")
-                response = publish(current_policy, message["fingerprint"])
+                if authority_path is None:
+                    response = publish(current_policy, message["fingerprint"])
+                else:
+                    response = publish_authorized(
+                        current_policy, message["fingerprint"],
+                        authority_path=authority_path)
             except DeliveryBlocked as exc:
                 response = {"schema": SCHEMA, "state": "blocked", "reason": exc.code}
             except Exception:
@@ -616,6 +679,8 @@ def serve(policy_path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--owner-policy", required=True)
+    parser.add_argument("--owner-authority",
+                        help="Protected, versioned hostname authority for local nginx")
     parser.add_argument("--listen", action="store_true")
     parser.add_argument("--fingerprint")
     parser.add_argument("--recover-previous", action="store_true")
@@ -624,7 +689,7 @@ def main(argv=None):
         if options.listen:
             if options.fingerprint is not None or options.recover_previous:
                 raise DeliveryBlocked("invalid-request")
-            serve(options.owner_policy)
+            serve(options.owner_policy, authority_path=options.owner_authority)
         elif options.recover_previous:
             if options.fingerprint is not None:
                 raise DeliveryBlocked("invalid-request")
@@ -632,7 +697,14 @@ def main(argv=None):
         else:
             if options.fingerprint is None:
                 raise DeliveryBlocked("invalid-request")
-            print(_canonical(publish(read_policy(options.owner_policy), options.fingerprint)).decode())
+            policy = read_policy(options.owner_policy)
+            if options.owner_authority is None:
+                result = publish(policy, options.fingerprint)
+            else:
+                result = publish_authorized(
+                    policy, options.fingerprint,
+                    authority_path=options.owner_authority)
+            print(_canonical(result).decode())
         return 0
     except DeliveryBlocked as exc:
         print(_canonical({"schema": SCHEMA, "state": "blocked", "reason": exc.code}).decode())
