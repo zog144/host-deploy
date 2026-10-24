@@ -175,3 +175,62 @@ revision fencing and source-of-truth installation, and native Work must
 test the full selected renew→inspect→stage→deliver operation under
 interruption and concurrent revocation. The source gate alone cannot
 authorize real TLS activation.
+
+## Host-install's second owner ledger — 2026-10-24 source reconciliation
+
+Host-install now implements `certificate-owner-reconcile` and its second
+durable monotonic ledger independently of host-discover's signed root checkpoint.
+Producer source reviewed:
+`zog144/host-install/unstable@567eab311764800ad4f8eceeb3b7fa1d5d86c515`
+(`src/zog/host_install/certificate_owner_authority.py`).
+This owner code still pins host-deploy `04c1006742e7592f2ec5f2103c7874404fc361a8`;
+**it must independently review and repin the successor before accepting it**.
+
+The local protected managed delivery consumer now additionally reads the exact
+root-owned second-owner files:
+
+| Source | Canonical path | Requirement |
+| --- | --- | --- |
+| Owner receipt | `/state/host-install/certificate-owner-authority/authority.json` | root-owned single-link regular 0600 |
+| Second owner ledger | `/state/host-install/certificate-owner-authority/ledger.json` | root-owned single-link regular 0600 |
+| Pending transaction | `/state/host-install/certificate-owner-authority/transaction.json` | **must be absent**; any present or malformed record blocks |
+
+They are read with retained no-symlink parent-directory descriptors. A managed
+issuer request is rejected if the owner receipt is not the exact approved
+locally installed and currently signed authority; if an installer transaction
+remains pending; or if the ledger's current revision, operation, assignment,
+owner-authority digest, local binding digest, signer/registry/Host-installation
+identity, or status differ. Ledger history is checked for distinct operations,
+monotonic revisions and terminal revocation. Its owner record and immutable
+issuer grant/storage identity remain bound separately to the reviewed local
+certificate-delivery policy digest and issuer UID/state root.
+
+Host-deploy's **opt-in managed owner-authority** socket additionally requires
+the *canonical* host-install owner receipt path, rather than accepting any
+root-owned alternate pathname. Standalone-local authority continues under its
+distinct original producer/install contract. All historical root-owner and
+certificate generation identities remain in place.
+
+These checks prevent a torn host-install ledger publication from being treated
+as a fresh certificate-delivery approval, but cannot by themselves guarantee
+serial execution across multiple root-owned records, a concurrent higher
+signed revocation, or a running nginx reload. **Native Work must still exercise
+real root-owned storage / lock / reboot / revocation and SNI activation** before
+Gate B/C. No issuer credential, key, DNS token or nginx service is changed by
+the source correction.
+
+### Required host-install Regular repin
+
+On source acceptance of the new PR #3 head, update and independently attest
+`HOST_DEPLOY_COMMIT` plus exact Git blobs in host-install's
+`HOST_DEPLOY_MODULE_BLOBS`; retain historical accepted revision as history:
+
+- `certificate_managed_authority.py`: `f07c0655280d9724cc59a7fc8bbd7af5e5415913`
+- `certificate_hostname_authority.py`: `fc833cb3164e018076e2cc4a4a75aa12923c4c8d`
+- `certificate_delivery.py`: `d69b59afe3060f5c92bf527c82d9aafc85127493`
+
+This is a **source-consumer compatibility request**, not an instruction to
+reinstall, modify retained STATE or bypass `attest_installed_host_deploy`.
+Work must attest the exact newly selected host-deploy installation/RECORD,
+reviewed issuer and controller state, approved native inspection and owner
+ledger before any live protected ACME/nginx acceptance.
