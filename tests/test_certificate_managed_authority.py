@@ -267,6 +267,88 @@ def test_managed_delivery_reopens_root_state_and_refuses_stale_receipt(monkeypat
         managed.verify_current_managed_receipt(current, now=NOW)
 
 
+@pytest.mark.parametrize("change", [
+    "pending", "missing-ledger", "wrong-revision", "wrong-owner-digest",
+    "wrong-assignment", "wrong-binding", "wrong-issuer",
+    "wrong-installed-receipt", "revoked-history", "malformed-history",
+])
+def test_installer_owner_ledger_and_crash_marker_fail_closed(monkeypatch, change):
+    observation, pin, binding = fixture()
+    current = managed.derive_managed_owner_authority(
+        observation, pin, binding, now=NOW)
+    records = _ledger_records(observation, pin, binding, current)
+    ledger = records[managed.ROOT_OWNER_LEDGER_PATH]
+    if change == "pending":
+        records[managed.ROOT_OWNER_TRANSACTION_PATH] = {
+            "schema": "zog-host-install-certificate-owner-transaction-v1",
+        }
+    elif change == "missing-ledger":
+        records[managed.ROOT_OWNER_LEDGER_PATH] = None
+    elif change == "wrong-revision":
+        ledger["revision"] -= 1
+    elif change == "wrong-owner-digest":
+        ledger["owner_authority_sha256"] = "f"*64
+    elif change == "wrong-assignment":
+        ledger["assignment_sha256"] = "f"*64
+    elif change == "wrong-binding":
+        ledger["binding_sha256"] = "f"*64
+    elif change == "wrong-issuer":
+        ledger["issuer"]["uid"] = 0
+    elif change == "wrong-installed-receipt":
+        records[managed.ROOT_OWNER_AUTHORITY_PATH] = {
+            **current, "policy_sha256": "f"*64,
+        }
+    elif change == "revoked-history":
+        ledger["operations"] = [{
+            **ledger["operations"][0], "revision": ledger["revision"]-1,
+            "operation_id": ident(10), "status": "revoked",
+        }, ledger["operations"][0]]
+    elif change == "malformed-history":
+        ledger["operations"] = [ledger["operations"][0], ledger["operations"][0]]
+    _mount_roots(monkeypatch, records)
+    with pytest.raises(owner.AuthorityBlocked, match="owner|ledger|recovery"):
+        managed.verify_current_managed_receipt(current, now=NOW)
+
+
+def test_installed_delivery_policy_digest_and_issuer_identity_are_frozen(monkeypatch):
+    observation, pin, binding = fixture()
+    current = managed.derive_managed_owner_authority(observation, pin, binding, now=NOW)
+    records = _ledger_records(observation, pin, binding, current)
+    _mount_roots(monkeypatch, records)
+    policy = {
+        "schema": delivery.SCHEMA,
+        "service_id": binding["service_id"],
+        "certificate_id": binding["certificate_id"],
+        "hostnames": binding["hostnames"],
+        "policy_sha256": binding["policy_sha256"],
+        "issuer_state": "/var/lib/zog-certify-manage",
+        "issuer_uid": 44001, "peer_uid": 44001,
+        "consumer_root": "/etc/zog/tls/candidate-nginx",
+        "socket_path": "/run/zog/certificate-delivery.sock",
+        "socket_gid": 44001, "nginx_unit": "candidate-nginx.service",
+        "nginx_binary": "/usr/sbin/nginx",
+        "nginx_config": "/etc/zog/nginx/candidate.conf",
+        "nginx_config_sha256": "e"*64,
+        "systemctl_binary": "/usr/bin/systemctl",
+        "probe_host": "127.0.0.1", "probe_port": 18443,
+        "probe_ca_file": "/etc/ssl/certs/ca-certificates.crt",
+    }
+    records[managed.ROOT_OWNER_LEDGER_PATH]["delivery_policy_sha256"] = (
+        hashlib.sha256(managed._canonical(policy)).hexdigest()
+    )
+    assert managed.verify_current_managed_receipt(
+        current, now=NOW, delivery_policy=policy) == current
+    with pytest.raises(owner.AuthorityBlocked, match="delivery-policy-ledger"):
+        managed.verify_current_managed_receipt(
+            current, now=NOW, delivery_policy={
+                **policy, "nginx_unit": "foreign-nginx.service",
+            })
+    with pytest.raises(owner.AuthorityBlocked, match="issuer-ledger"):
+        records[managed.ROOT_OWNER_LEDGER_PATH]["issuer"]["uid"] = 44003
+        managed.verify_current_managed_receipt(
+            current, now=NOW, delivery_policy=policy)
+
+
 def test_managed_delivery_fails_closed_without_installed_root_checkpoint(monkeypatch):
     observation, pin, binding = fixture()
     from zog.host_deploy import certificate_managed_authority as m
