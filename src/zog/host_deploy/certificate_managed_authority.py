@@ -276,14 +276,23 @@ def derive_managed_owner_authority(
 ROOT_OBSERVATION_PATH = "/state/host-discover-certificate-authority/authority.json"
 ROOT_SIGNER_PIN_PATH = "/etc/zog/host-install/certificate-assignment-authority.json"
 ROOT_CONSUMER_BINDING_PATH = "/etc/zog/host-deploy/certificate-managed-binding.json"
+# The second monotonic owner ledger is installed by host-install, independent
+# of host-discover's signed source checkpoint. Publication in progress is never
+# authority for a fresh nginx generation.
+ROOT_OWNER_AUTHORITY_PATH = "/state/host-install/certificate-owner-authority/authority.json"
+ROOT_OWNER_LEDGER_PATH = "/state/host-install/certificate-owner-authority/ledger.json"
+ROOT_OWNER_TRANSACTION_PATH = "/state/host-install/certificate-owner-authority/transaction.json"
+OWNER_LEDGER_SCHEMA = "zog-host-install-certificate-owner-ledger-v1"
 
 
-def _read_root_json(path, *, mode, limit):
+def _read_root_json(path, *, mode, limit, allow_missing=False):
     """Open a trusted root-owned path without symlink traversal or DAC drift."""
     if os.geteuid() != 0:
         _deny("managed-certificate-root-owner-required")
     if path not in (
         ROOT_OBSERVATION_PATH, ROOT_SIGNER_PIN_PATH, ROOT_CONSUMER_BINDING_PATH,
+        ROOT_OWNER_AUTHORITY_PATH, ROOT_OWNER_LEDGER_PATH,
+        ROOT_OWNER_TRANSACTION_PATH,
     ):
         _deny("managed-certificate-unreviewed-root-path")
     # Descriptor-walk every path component. Checking lstat(path) then
@@ -307,10 +316,15 @@ def _read_root_json(path, *, mode, limit):
                 raise
             os.close(fd)
             fd = nextfd
-        desc = os.open(
-            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
-            dir_fd=fd,
-        )
+        try:
+            desc = os.open(
+                parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=fd,
+            )
+        except FileNotFoundError:
+            if allow_missing and path == ROOT_OWNER_TRANSACTION_PATH:
+                return None
+            raise
         try:
             info = os.fstat(desc)
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
@@ -324,14 +338,121 @@ def _read_root_json(path, *, mode, limit):
         os.close(fd)
     if len(raw) > limit:
         _deny()
+    def _unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                _deny("managed-certificate-duplicate-root-field")
+            result[key] = value
+        return result
+
+    def _reject_number(value):
+        _deny("managed-certificate-invalid-root-number")
+
     try:
-        result = json.loads(raw)
-    except (TypeError, UnicodeError, ValueError):
+        result = json.loads(
+            raw, object_pairs_hook=_unique_pairs, parse_float=_reject_number,
+            parse_constant=_reject_number,
+        )
+    except (TypeError, UnicodeError, ValueError, RecursionError):
         _deny("managed-certificate-malformed-root-record")
     return result
 
 
-def verify_current_managed_receipt(authority, *, now):
+def _verified_owner_ledger(ledger, *, authority, observation, binding,
+                           delivery_policy=None):
+    """Fail closed on the independent installed host-install owner ledger."""
+    required = {
+        "schema", "installation_id", "state_volume_id", "registry_id",
+        "authority_key_id", "service_id", "certificate_id", "binding_sha256",
+        "delivery_policy_sha256", "issuer", "local_intent_sha256", "revision",
+        "operation_id", "assignment_sha256", "owner_authority_sha256",
+        "status", "operations",
+    }
+    if (type(ledger) is not dict or set(ledger) != required
+            or ledger["schema"] != OWNER_LEDGER_SCHEMA):
+        _deny("managed-certificate-owner-ledger-invalid")
+    expected = {
+        "installation_id": binding["installation_id"],
+        "state_volume_id": binding["state_volume_id"],
+        "registry_id": binding["registry_id"],
+        "authority_key_id": binding["authority_key_id"],
+        "service_id": binding["service_id"],
+        "certificate_id": binding["certificate_id"],
+        "binding_sha256": hashlib.sha256(_canonical(binding)).hexdigest(),
+        "revision": authority["revision"],
+        "operation_id": authority["operation_id"],
+        "assignment_sha256": observation["assignment_sha256"],
+        "owner_authority_sha256": hashlib.sha256(_canonical(authority)).hexdigest(),
+        "status": authority["status"],
+    }
+    if any(ledger.get(key) != value for key, value in expected.items()):
+        _deny("managed-certificate-owner-ledger-mismatch")
+    for key in ("delivery_policy_sha256", "local_intent_sha256"):
+        if type(ledger[key]) is not str or not _HEX.fullmatch(ledger[key]):
+            _deny("managed-certificate-owner-ledger-invalid")
+    issuer = ledger["issuer"]
+    if (type(issuer) is not dict or set(issuer) != {
+            "storage_id", "grant_id", "uid", "gid", "software_view",
+            "certificate_data_path", "controller_record_sha256",
+        } or type(issuer["uid"]) is not int or issuer["uid"] < 1000
+          or type(issuer["gid"]) is not int or issuer["gid"] < 1000
+          or type(issuer["storage_id"]) is not str
+          or not re.fullmatch(r"[a-f0-9]{32}", issuer["storage_id"])
+          or type(issuer["grant_id"]) is not str
+          or not re.fullmatch(r"[a-f0-9]{32}", issuer["grant_id"])
+          or type(issuer["software_view"]) is not str
+          or not re.fullmatch(r"sha256:[a-f0-9]{64}", issuer["software_view"])
+          or type(issuer["certificate_data_path"]) is not str
+          or not issuer["certificate_data_path"].startswith("/")
+          or type(issuer["controller_record_sha256"]) is not str
+          or not _HEX.fullmatch(issuer["controller_record_sha256"])):
+        _deny("managed-certificate-owner-ledger-invalid")
+    operations = ledger["operations"]
+    if type(operations) is not list or not 1 <= len(operations) <= 128:
+        _deny("managed-certificate-owner-ledger-invalid")
+    seen = set()
+    last_revision = 0
+    for entry in operations:
+        if (type(entry) is not dict or set(entry) != {
+                "revision", "operation_id", "assignment_sha256",
+                "owner_authority_sha256", "status",
+            } or type(entry["revision"]) is not int
+                or entry["revision"] <= last_revision
+                or entry["revision"] >= 2**53
+                or type(entry["operation_id"]) is not str
+                or entry["operation_id"] in seen
+                or type(entry["assignment_sha256"]) is not str
+                or not _HEX.fullmatch(entry["assignment_sha256"])
+                or type(entry["owner_authority_sha256"]) is not str
+                or not _HEX.fullmatch(entry["owner_authority_sha256"])
+                or entry["status"] not in ("approved", "revoked")):
+            _deny("managed-certificate-owner-ledger-invalid")
+        _uuid(entry["operation_id"])
+        if last_revision and entry["status"] == "approved" and (
+                "revoked" in (x["status"] for x in operations[:len(seen)])):
+            _deny("managed-certificate-owner-revocation-terminal")
+        seen.add(entry["operation_id"])
+        last_revision = entry["revision"]
+    current = operations[-1]
+    if any(current[key] != ledger[key] for key in (
+            "revision", "operation_id", "assignment_sha256",
+            "owner_authority_sha256", "status",
+    )):
+        _deny("managed-certificate-owner-ledger-invalid")
+    if delivery_policy is not None:
+        from .certificate_delivery import policy_validate
+        policy = policy_validate(delivery_policy)
+        if (hashlib.sha256(_canonical(policy)).hexdigest()
+                != ledger["delivery_policy_sha256"]):
+            _deny("managed-certificate-delivery-policy-ledger-mismatch")
+        if (policy["issuer_uid"] != issuer["uid"]
+                or policy["issuer_state"] != issuer["certificate_data_path"]):
+            _deny("managed-certificate-issuer-ledger-mismatch")
+    return ledger
+
+
+def verify_current_managed_receipt(authority, *, now, delivery_policy=None):
     """Require a CURRENT separately signed root checkpoint before publication.
 
     The managed root producer retains the monotonic signed history. The
@@ -344,4 +465,21 @@ def verify_current_managed_receipt(authority, *, now):
     current = derive_managed_owner_authority(observed, pin, binding, now=now)
     if current != owner_validate(authority, now=now):
         _deny("managed-certificate-owner-receipt-stale")
+    # The root-managed signer history and the host-install owner ledger are
+    # independent. Neither a cached owner receipt nor a matching assignment
+    # can bypass the installer's pending-transaction crash fence.
+    ledger = _read_root_json(ROOT_OWNER_LEDGER_PATH, mode=0o600, limit=65536)
+    installed = _read_root_json(ROOT_OWNER_AUTHORITY_PATH, mode=0o600, limit=8192)
+    pending = _read_root_json(
+        ROOT_OWNER_TRANSACTION_PATH, mode=0o600, limit=8192,
+        allow_missing=True,
+    )
+    if pending is not None:
+        _deny("managed-certificate-owner-recovery-pending")
+    if installed != current:
+        _deny("managed-certificate-installed-owner-mismatch")
+    _verified_owner_ledger(
+        ledger, authority=current, observation=observed, binding=binding,
+        delivery_policy=delivery_policy,
+    )
     return current
