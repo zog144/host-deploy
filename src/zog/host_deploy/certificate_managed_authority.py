@@ -276,24 +276,42 @@ def _read_root_json(path, *, mode, limit):
         ROOT_OBSERVATION_PATH, ROOT_SIGNER_PIN_PATH, ROOT_CONSUMER_BINDING_PATH,
     ):
         _deny("managed-certificate-unreviewed-root-path")
-    cursor = Path("/")
+    # Descriptor-walk every path component. Checking lstat(path) then
+    # opening the full pathname would allow a directory replacement between
+    # the two syscalls; O_NOFOLLOW only protects its final component.
     parts = Path(path).parts[1:]
-    for name in parts[:-1]:
-        cursor /= name
-        info = cursor.lstat()
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
-                or info.st_mode & 0o022):
-            _deny("managed-certificate-unsafe-root-ancestry")
-    desc = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        info = os.fstat(desc)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
-                or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != mode
-                or not 0 < info.st_size <= limit):
-            _deny("managed-certificate-unsafe-root-file")
-        raw = os.read(desc, limit + 1)
+        for name in parts[:-1]:
+            nextfd = os.open(
+                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                os.O_CLOEXEC, dir_fd=fd,
+            )
+            try:
+                parent = os.fstat(nextfd)
+                if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != 0
+                        or parent.st_mode & 0o022):
+                    _deny("managed-certificate-unsafe-root-ancestry")
+            except BaseException:
+                os.close(nextfd)
+                raise
+            os.close(fd)
+            fd = nextfd
+        desc = os.open(
+            parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=fd,
+        )
+        try:
+            info = os.fstat(desc)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != mode
+                    or not 0 < info.st_size <= limit):
+                _deny("managed-certificate-unsafe-root-file")
+            raw = os.read(desc, limit + 1)
+        finally:
+            os.close(desc)
     finally:
-        os.close(desc)
+        os.close(fd)
     if len(raw) > limit:
         _deny()
     try:
