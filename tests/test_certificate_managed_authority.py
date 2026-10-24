@@ -349,6 +349,41 @@ def test_installed_delivery_policy_digest_and_issuer_identity_are_frozen(monkeyp
             current, now=NOW, delivery_policy=policy)
 
 
+def test_protected_nginx_gate_rejects_pending_installer_transaction(monkeypatch):
+    from zog.host_deploy import certificate_hostname_authority as owner_mod
+    observation, pin, binding = fixture()
+    current = managed.derive_managed_owner_authority(
+        observation, pin, binding, now=NOW)
+    roots = _ledger_records(observation, pin, binding, current)
+    roots[managed.ROOT_OWNER_TRANSACTION_PATH] = {
+        "schema": "zog-host-install-certificate-owner-transaction-v1",
+    }
+    _mount_roots(monkeypatch, roots)
+    monkeypatch.setattr(delivery.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(owner_mod, "read_owned",
+                        lambda path, *, now: current)
+    monkeypatch.setattr(delivery, "policy_validate", lambda policy: policy)
+    monkeypatch.setattr(delivery, "publish",
+                        lambda *a, **k: pytest.fail("nginx called during owner recovery"))
+    approved = {
+        "service_id": binding["service_id"],
+        "certificate_id": binding["certificate_id"],
+        "hostnames": binding["hostnames"],
+        "policy_sha256": binding["policy_sha256"],
+    }
+    with pytest.raises(delivery.DeliveryBlocked, match="hostname-authority-unavailable"):
+        delivery.publish_authorized(
+            approved, "f"*64,
+            authority_path=managed.ROOT_OWNER_AUTHORITY_PATH,
+        )
+    # A matching but caller-chosen alternate root-owned receipt pathname must
+    # not substitute for the installation-bound owner authority.
+    with pytest.raises(delivery.DeliveryBlocked, match="hostname-authority-unavailable"):
+        delivery.publish_authorized(
+            approved, "f"*64, authority_path="/etc/zog/synthetic-authority.json",
+        )
+
+
 def test_managed_delivery_fails_closed_without_installed_root_checkpoint(monkeypatch):
     observation, pin, binding = fixture()
     from zog.host_deploy import certificate_managed_authority as m
