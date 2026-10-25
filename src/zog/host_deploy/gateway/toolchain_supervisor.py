@@ -230,8 +230,20 @@ def _guard_lane(root, request_id, bound):
             )
 
 
-def advance(root, request_id, *, host_factory=Host):
+def advance(root, request_id, *, host_factory=Host, budget_owner=None):
     bound = binding(root, request_id)
+    fresh = bound.get("compiler_execution_identity", {}).get("schema") == (
+        "host-deploy-compiler-execution-v3")
+    # Source CI/ordinary GitHub dispatch cannot instantiate a native,
+    # independently installed root-owned watchdog. No v3 operation advances
+    # while that host-owned guard is absent, uncertain, expired or full.
+    if fresh:
+        if budget_owner is None:
+            raise RuntimeError("fresh compiler requires native host-owned aggregate watchdog")
+        from .fresh_budget_guard import attest_live
+        state, telemetry = budget_owner.inspect_exact(bound)
+        attest_live(bound, state, telemetry,
+                    root_owner_verified=budget_owner.is_trusted_native_owner())
     with request_lock(root, request_id) as directory:
         journal = read(directory, request_id, bound)
         if journal is None:
