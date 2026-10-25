@@ -119,6 +119,13 @@ def test_trusted_sidecar_backend_is_single_shot_and_never_reloads(monkeypatch):
                 "role": sidecar.ROLE,
                 "project_root": fixture_identity()["project_root"],
             }
+    class MissingAttempt(Trusted):
+        actions = []
+        def mark_start_attempt(self, digest):
+            return {"state": "uncertain", "plan_sha256": digest, "durable": False}
+    with pytest.raises(RuntimeError, match="attempted-start marker"):
+        sidecar.install(plan, host_owner=MissingAttempt())
+    assert MissingAttempt.actions == []
     back = Trusted()
     receipt = sidecar.install(plan, host_owner=back)
     assert receipt["invocation_id"] == "new-invocation"
