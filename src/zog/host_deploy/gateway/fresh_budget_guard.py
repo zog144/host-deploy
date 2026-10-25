@@ -160,11 +160,7 @@ def write_once(directory, value):
     if os.geteuid() != 0:
         raise PermissionError("budget registry requires privileged host owner")
     x = validate(value)
-    root = Path(directory)
-    st = root.lstat()
-    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
-            or stat.S_IMODE(st.st_mode) & 0o077):
-        raise PermissionError("budget registry is not root-owned protected directory")
+    root = _protected_root(directory)
     name = x["request_id"] + ".json"
     path = root / name
     data = _canonical(x) + b"\n"
@@ -186,11 +182,7 @@ def write_once(directory, value):
 def read(directory, request_id):
     if not _HEX.fullmatch(request_id):
         raise ValueError("budget request ID invalid")
-    root = Path(directory)
-    root_stat = root.lstat()
-    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != 0
-            or stat.S_IMODE(root_stat.st_mode) & 0o077):
-        raise PermissionError("untrusted budget registry")
+    root = _protected_root(directory)
     fd = os.open(root / (request_id + ".json"), os.O_RDONLY | os.O_NOFOLLOW)
     try:
         st = os.fstat(fd)
