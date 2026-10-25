@@ -183,6 +183,7 @@ def test_fresh_dispatch_requires_dedicated_controller_and_preserves_frozen_lane(
     lane_path = (gateway / "workspaces" / workspace_id /
                  "image-build-lanes/lane-a.json")
     rec = json.loads(lane_path.read_text())
+    rec["schema"] = image_build_lanes.SCHEMA
     project = PROJECT.replace("isolated-new-lane", "lane-a")
     rec["specification"]["source_revision"] = NEW
     rec["specification"]["project_root"] = project
