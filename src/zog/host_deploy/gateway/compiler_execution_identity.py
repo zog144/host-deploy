@@ -53,7 +53,9 @@ def validate(value, *, project_root, python_executable, source_revision,
     fresh = value.get("schema") == FRESH_SCHEMA
     if (set(value) != (LEGACY_FIELDS if historical else
                        FRESH_FIELDS if fresh else FIELDS)
-            or (not fresh and not allow_historical)
+            or (historical and not allow_historical)
+            or (fresh and source_revision != FRESH_PRODUCER_REVISION)
+            or (not fresh and source_revision == FRESH_PRODUCER_REVISION)
             or (value.get("schema") not in (LEGACY_SCHEMA, SCHEMA, FRESH_SCHEMA))):
         raise ValueError("unreviewed nonroot compiler execution schema")
     if fresh:
@@ -91,7 +93,7 @@ def validate(value, *, project_root, python_executable, source_revision,
             or home not in project.parents):
         raise ValueError("compiler project must be strictly inside controller home")
     if fresh:
-        if (not re.fullmatch(r"/run/zog/root-control-[a-z0-9][a-z0-9-]{0,47}\\.sock",
+        if (not re.fullmatch(r"/run/zog/root-control-[a-z0-9][a-z0-9-]{0,47}\.sock",
                              value["socket_path"])
                 or value["socket_path"] == "/run/zog/root-control.sock"):
             raise ValueError("fresh compiler must use a dedicated reviewed controller socket")
@@ -143,7 +145,7 @@ def _trusted_identity(value, source, record_root, controller_root):
                     "existing_host_only": True, "automatic_later_phases": False,
                 }
                 or not __import__("re").fullmatch(
-                    r"/run/zog/root-control-[a-z0-9][a-z0-9-]{0,47}\\.sock",
+                    r"/run/zog/root-control-[a-z0-9][a-z0-9-]{0,47}\.sock",
                     value.get("socket_path", ""))):
             raise RuntimeError("fresh compiler has unreviewed root-control or scope")
     elif value.get("schema") != "host-deploy-compiler-execution-v2" or (
