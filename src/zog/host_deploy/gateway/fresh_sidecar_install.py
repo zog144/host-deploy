@@ -144,6 +144,20 @@ def install(plan, *, host_owner):
     host_owner.verify_source_and_nss(plan)
     if host_owner.read_unit(UNIT) is not None or host_owner.socket_exists(SOCKET):
         raise RuntimeError("fresh sidecar already exists; no implicit replacement")
+    # The trusted installer must own a serialized durable transaction and
+    # persist BOTH prepared identity and attempted PID1 start before D-Bus.
+    # An uncertain reply must never create another service or new identity.
+    preparation = host_owner.prepare_once(plan)
+    if (type(preparation) is not dict
+            or preparation.get("plan_sha256") != plan["sha256"]
+            or preparation.get("state") != "prepared"
+            or preparation.get("durable") is not True):
+        raise RuntimeError("sidecar protected installation was not durably prepared")
+    attempted = host_owner.mark_start_attempt(plan["sha256"])
+    if (type(attempted) is not dict or attempted.get("state") != "attempted"
+            or attempted.get("plan_sha256") != plan["sha256"]
+            or attempted.get("durable") is not True):
+        raise RuntimeError("sidecar attempted-start marker is not durable")
     # Host-side implementation must call PID1 StartTransientUnit with this
     # fixed property set and no daemon-reload or general shell.
     receipt = host_owner.start_transient(UNIT, "fail", plan["properties"])
