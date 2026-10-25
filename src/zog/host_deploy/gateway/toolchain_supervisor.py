@@ -44,6 +44,14 @@ def _next(bound, journal):
             return event(bound, journal, "submit", RECOVERY)
         journal["status"] = "failed"
         return None
+    # A fresh cross-bootstrap authorization covers one phase only.
+    # Once that phase is terminal, never create the next-phase event, even
+    # if the typed producer advertises a successor in its capability graph.
+    fresh = bound.get("compiler_execution_identity", {}).get("schema") == (
+        "host-deploy-compiler-execution-v3")
+    if fresh and last["name"] == "cross-bootstrap":
+        journal["status"] = "completed"
+        return None
     if last["name"] == "final-compiler":
         journal["status"] = ("completed" if journal["artifact_receipt"] else "uncertain")
         return None
