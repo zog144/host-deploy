@@ -9,6 +9,14 @@ from pathlib import PurePosixPath
 
 LEGACY_SCHEMA = "host-deploy-compiler-execution-v1"
 SCHEMA = "host-deploy-compiler-execution-v2"
+FRESH_SCHEMA = "host-deploy-compiler-execution-v3"
+FRESH_PRODUCER_REVISION = "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
+FRESH_BOX_CONTROL_REVISION = "b7934882cfacd2fbfd60c7964713ed3dde7f9460"
+FRESH_ROOT_CONTROL_REVISION = "bc52f2e9e8696acaef15db09e50bec21b084248a"
+FRESH_BUILD_RECORD_REVISION = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
+FRESH_SCOPE = "host-deploy-fresh-cross-bootstrap-v1"
+FRESH_DISK_BYTES = 32 * 1024**3
+FRESH_MAX_SECONDS = 6 * 3600
 ROOT_CONTROL_REVISION = "e4f25110c854c000bdde5ec564c8119370da9a52"
 ROOT_CONTROL_REVIEW_HEAD = "8a9583924109ef324eb80071953151c8c7e20b33"
 _SHA = re.compile(r"[a-f0-9]{40}\Z")
@@ -21,6 +29,10 @@ FIELDS = {
     "root_control_revision",
 }
 LEGACY_FIELDS = FIELDS - {"root_control_revision"}
+FRESH_FIELDS = FIELDS | {"fresh_scope"}
+FRESH_SCOPE_FIELDS = {"schema", "phase", "execution_limit_seconds",
+                      "additional_disk_bytes", "existing_host_only",
+                      "automatic_later_phases"}
 
 
 def _absolute(value):
@@ -38,11 +50,29 @@ def validate(value, *, project_root, python_executable, source_revision,
     if type(value) is not dict:
         raise ValueError("invalid nonroot compiler execution binding")
     historical = value.get("schema") == LEGACY_SCHEMA
-    if (set(value) != (LEGACY_FIELDS if historical else FIELDS)
-            or (historical and not allow_historical)
-            or (not historical and value.get("schema") != SCHEMA)):
+    fresh = value.get("schema") == FRESH_SCHEMA
+    if (set(value) != (LEGACY_FIELDS if historical else
+                       FRESH_FIELDS if fresh else FIELDS)
+            or (not fresh and not allow_historical)
+            or (value.get("schema") not in (LEGACY_SCHEMA, SCHEMA, FRESH_SCHEMA))):
         raise ValueError("unreviewed nonroot compiler execution schema")
-    if not historical and value["root_control_revision"] != ROOT_CONTROL_REVISION:
+    if fresh:
+        if (value["root_control_revision"] != FRESH_ROOT_CONTROL_REVISION
+                or value["source_revision"] != FRESH_PRODUCER_REVISION
+                or value["box_control_revision"] != FRESH_BOX_CONTROL_REVISION
+                or value["build_record_revision"] != FRESH_BUILD_RECORD_REVISION
+                or not isinstance(value["fresh_scope"], dict)
+                or set(value["fresh_scope"]) != FRESH_SCOPE_FIELDS
+                or value["fresh_scope"] != {
+                    "schema": FRESH_SCOPE, "phase": "cross-bootstrap",
+                    "execution_limit_seconds": FRESH_MAX_SECONDS,
+                    "additional_disk_bytes": FRESH_DISK_BYTES,
+                    "existing_host_only": True,
+                    "automatic_later_phases": False,
+                }):
+            raise ValueError("fresh compiler scope/source/controller differs from approval")
+    elif (not historical and
+          value["root_control_revision"] != ROOT_CONTROL_REVISION):
         raise ValueError("root-control revision differs from reviewed controller tuple")
     for key in ("controller_uid", "controller_gid", "build_uid", "build_gid"):
         if type(value[key]) is not int or value[key] <= 0 or value[key] >= 2**31:
@@ -60,7 +90,12 @@ def validate(value, *, project_root, python_executable, source_revision,
     if (value["project_root"] != project_root or project == home
             or home not in project.parents):
         raise ValueError("compiler project must be strictly inside controller home")
-    if value["socket_path"] != "/run/zog/root-control.sock":
+    if fresh:
+        if (not re.fullmatch(r"/run/zog/root-control-[a-z0-9][a-z0-9-]{0,47}\\.sock",
+                             value["socket_path"])
+                or value["socket_path"] == "/run/zog/root-control.sock"):
+            raise ValueError("fresh compiler must use a dedicated reviewed controller socket")
+    elif value["socket_path"] != "/run/zog/root-control.sock":
         raise ValueError("unreviewed privileged controller socket")
     for key, expected in (
         ("source_revision", source_revision),
@@ -91,11 +126,27 @@ from pathlib import Path
 # Exact root-control executable revision. The documentation-only receipt
 # head is different and cannot substitute for executable provenance.
 REVIEWED_ROOT_CONTROL_REVISION = "e4f25110c854c000bdde5ec564c8119370da9a52"
+FRESH_ROOT_CONTROL_REVISION = "bc52f2e9e8696acaef15db09e50bec21b084248a"
 
 def _trusted_identity(value, source, record_root, controller_root):
     if os.geteuid() != 0:
         raise RuntimeError("compiler identity transition requires root transport")
-    if value.get("schema") != "host-deploy-compiler-execution-v2" or (
+    if value.get("schema") == "host-deploy-compiler-execution-v3":
+        if (value.get("root_control_revision") != FRESH_ROOT_CONTROL_REVISION
+                or value.get("source_revision") != "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
+                or value.get("box_control_revision") != "b7934882cfacd2fbfd60c7964713ed3dde7f9460"
+                or value.get("fresh_scope") != {
+                    "schema": "host-deploy-fresh-cross-bootstrap-v1",
+                    "phase": "cross-bootstrap",
+                    "execution_limit_seconds": 21600,
+                    "additional_disk_bytes": 34359738368,
+                    "existing_host_only": True, "automatic_later_phases": False,
+                }
+                or not __import__("re").fullmatch(
+                    r"/run/zog/root-control-[a-z0-9][a-z0-9-]{0,47}\\.sock",
+                    value.get("socket_path", ""))):
+            raise RuntimeError("fresh compiler has unreviewed root-control or scope")
+    elif value.get("schema") != "host-deploy-compiler-execution-v2" or (
             value.get("root_control_revision") != REVIEWED_ROOT_CONTROL_REVISION):
         raise RuntimeError("nonroot compiler missing corrected root-control pin")
     owner_uid = value["controller_uid"]
