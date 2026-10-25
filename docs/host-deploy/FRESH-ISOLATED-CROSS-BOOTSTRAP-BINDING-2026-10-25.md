@@ -221,3 +221,35 @@ routed through a generic unprivileged caller or GitHub/SSM shell.
 
 See the [seven-step root-control owner's native sequence](https://github.com/zog144/know-file/blob/8be3433dd816e30c34c845c26e9a9d1937e3f90d/root-control/handoffs/fresh-cross-bootstrap-stage-a-controller-review-2026-10-25.md).
 No source pass authorizes starting the sidecar or submitting a compiler job.
+
+### Native systemd D-Bus transport and remaining host-owner wiring
+
+`gateway/fresh_sidecar_dbus.py` also supplies the exact privileged
+`StartTransientUnit` D-Bus marshaling: signature
+`ssa(sv)a(sa(sv))`, `ExecStart` signature `a(sasb)`, `Type=exec`,
+`RestartUSec=5000000`, `StartLimitBurst=2`,
+`StartLimitIntervalUSec=60000000`, and the fixed reviewed environment.
+It refuses a different unit/mode, shell commands or untrusted role and
+calls system PID1 only under an independently trusted root-owned installer.
+This is a **host management sidecar**, not permission to manipulate Zog
+application/compiler units outside the authenticated root-control RPC.
+
+The source-side installer exposes `review_plan(...)` and `install(...)`
+with a typed trusted `host_owner` interface. **There is not yet an
+accepted live installer owner implementation on the retained host**
+providing old-state evidence, installed module/wheel verification,
+NSS/Project provisioning, PID1 readback, persistent boot reconciliation
+and a continuously scheduled watchdog. The native Work owner must
+integrate and attest these functions under the existing protected
+host-install mechanism, *not* invoke arbitrary SSM-root Python or
+fabricate `installer_receipt_sha256`/watchdog credentials. Boot
+reactivation must reuse exact accepted source/Project/owner and must
+record the new boot+InvocationID, or block the compiler. A dead or missing
+watchdog must revoke new submission/resume authority and request only
+fresh-Project-scoped cancellation.
+
+The budget registry currently provides root-only create/read and
+serialized `watch_once` state updates; **native quota accounting and
+reliable periodic timer/boot reactivation are separate enforcement
+prerequisites**. Until those are observed, Stage B remains prohibited,
+even if all three source/isolated CI workflows pass.
