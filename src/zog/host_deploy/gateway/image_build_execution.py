@@ -98,14 +98,16 @@ def _binding(record):
                 raise RuntimeError("controller companion is bound to another producer")
         elif (binding["source"]["revision"] in (
                   image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
-                  image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
+                  image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+                  image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
               and "--controller-config" in binding["argv"]):
             raise RuntimeError("new producer requires explicit controller selection")
         if (binding["source"]["revision"] in (
                     image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
-                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
-                and companion["revision"] !=
-                image_build_lanes.TOOLCHAIN_BUILD_RECORD_COMPATIBILITY):
+                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+                    image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
+                and companion["revision"] != image_build_lanes.expected_build_record_revision(
+                    binding["source"]["revision"])):
             raise RuntimeError("new producer requires its exact build-record companion")
         expected_profile = {
             "schema": 1,
@@ -130,8 +132,9 @@ def _binding(record):
     if binding.get("schema") != 3 and "controller_companion" in binding:
         raise RuntimeError("legacy dispatch cannot have controller companion")
     if "compiler_execution_identity" in binding:
-        if (binding["schema"] != 3 or binding["source"]["revision"] !=
-                image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION
+        if (binding["schema"] != 3 or binding["source"]["revision"] not in (
+                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+                    image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
                 or "task" not in binding or "controller_companion" not in binding):
             raise RuntimeError("compiler nonroot identity is not bound to protected task")
         validate_execution_identity(
@@ -145,8 +148,9 @@ def _binding(record):
             allow_historical=True,
         )
     elif (binding.get("task")
-          and binding["source"]["revision"] ==
-          image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION):
+          and binding["source"]["revision"] in (
+              image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+              image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)):
         raise RuntimeError("restored toolchain requires nonroot execution identity")
     if set(binding) - required - optional or not required.issubset(binding):
         raise RuntimeError("image-build dispatch binding fields are invalid")
