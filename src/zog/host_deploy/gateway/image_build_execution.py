@@ -631,10 +631,23 @@ sys.stdout.buffer.write(observed.stdout)
         for item in checks
     ):
         raise RuntimeError("producer preflight did not verify bound build-record")
+    # Fresh producer 53ad8c retains the 644170fc compatibility checkpoint
+    # in its source-owned runtime_requirements. The root SSM script separately
+    # verifies the EXACT newer b7934882 installed checkout by Git HEAD and
+    # clean tree; producer's API smoke verifies the runtime module. Never
+    # conflate the source's declared checkpoint with the selected installed
+    # companion or accept this exception for another producer.
+    reported_controller_revision = profile["controller_revision"]
+    if (binding["source"]["revision"] ==
+            image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION):
+        if profile["controller_revision"] != (
+                image_build_lanes.FRESH_CROSS_BOOTSTRAP_BOX_CONTROL_REVISION):
+            raise RuntimeError("fresh producer installed controller pin changed")
+        reported_controller_revision = image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY
     if profile["controller"] and not any(
         isinstance(item, dict) and item.get("component") == "box-control"
         and item.get("status") == "ready"
-        and item.get("validated_revision") == profile["controller_revision"]
+        and item.get("validated_revision") == reported_controller_revision
         and isinstance(item.get("source"), str)
         and item["source"].startswith(
             profile["controller_source_root"] + "/box-control/src/"
