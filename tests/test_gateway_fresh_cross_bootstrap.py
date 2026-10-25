@@ -172,8 +172,7 @@ def test_exact_scope_is_in_fixed_root_transport_launcher():
 def test_fresh_dispatch_requires_dedicated_controller_and_preserves_frozen_lane(tmp_path):
     import json
     from pathlib import Path
-    from test_gateway_dispatch import prepared_gateway, gateway_request
-    from zog.host_deploy.gateway.ledger import accept
+    from test_gateway_dispatch import prepared_gateway, gateway_request, admit
     from zog.host_deploy.gateway.image_build_dispatch import (
         binding_for_request, verify_current_target,
     )
@@ -226,7 +225,7 @@ def test_fresh_dispatch_requires_dedicated_controller_and_preserves_frozen_lane(
     request["parameters"] = {
         "lane": "lane-a", "task": toolchain_task.TASK_NAME,
     }
-    accept(gateway, request)
+    admit(gateway, request)
     frozen = binding_for_request(
         gateway, request["request_id"],
         task_catalogue=protected, task_catalogue_identity=TASK_ID,
