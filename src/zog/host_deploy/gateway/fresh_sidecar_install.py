@@ -114,7 +114,8 @@ def review_plan(binding, installed):
               "controller_gid": value["controller_gid"],
               "socket": SOCKET,
               "root_control_revision": FRESH_ROOT_CONTROL_REVISION,
-              "installed": installed.copy(), "properties": properties}
+              "identity": value, "installed": installed.copy(),
+              "properties": properties}
     result["sha256"] = "sha256:" + hashlib.sha256(_canonical(result)).hexdigest()
     return result
 
@@ -136,23 +137,7 @@ def install(plan, *, host_owner):
     if digest != "sha256:" + hashlib.sha256(_canonical(raw)).hexdigest():
         raise ValueError("sidecar plan digest invalid")
     # Reject mutation or startup even if the caller manufactured a digest.
-    approved = review_plan({
-        "schema": FRESH_SCHEMA,
-        "controller_uid": plan["controller_uid"],
-        "controller_gid": plan["controller_gid"],
-        "controller_home": str(PurePosixPath(plan["project_root"]).parent),
-        "project_root": plan["project_root"],
-        "build_uid": plan.get("build_uid", 1),
-        "build_gid": plan.get("build_gid", 1),
-        "socket_path": plan["socket"],
-        "source_revision": plan.get("source_revision", ""),
-        "build_record_revision": plan.get("build_record_revision", ""),
-        "box_control_revision": plan.get("box_control_revision", ""),
-        "root_control_revision": plan["root_control_revision"],
-        "python_executable": plan["installed"]["python_executable"],
-        "task_catalogue_identity": plan.get("task_catalogue_identity", ""),
-        "fresh_scope": plan.get("fresh_scope", {}),
-    }, plan["installed"])
+    approved = review_plan(plan["identity"], plan["installed"])
     if approved != plan:
         raise ValueError("sidecar plan differs from reviewed identity")
     host_owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
