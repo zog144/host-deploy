@@ -137,6 +137,47 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
             }
         finally:
             os.close(fd)
+        # A second, isolated future controller socket must be a genuinely
+        # separate kernel listener, not the historical root-control.sock.
+        fresh_path = Path("/run/zog/root-control-fresh-native-acceptance.sock")
+        if fresh_path.exists() or fresh_path.is_symlink():
+            pytest.skip("CI runner already has a fresh-controller listener")
+        fresh_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            fresh_listener.bind(str(fresh_path))
+            os.chown(fresh_path, 0, gid)
+            os.chmod(fresh_path, 0o660)
+            fresh = {
+                **data, "schema": "host-deploy-compiler-execution-v3",
+                "root_control_revision": "bc52f2e9e8696acaef15db09e50bec21b084248a",
+                "source_revision": "53ad8c2166e6b73dffbc722c2e47ccf3593612ec",
+                "box_control_revision": "b7934882cfacd2fbfd60c7964713ed3dde7f9460",
+                "socket_path": str(fresh_path),
+                "fresh_scope": {
+                    "schema": "host-deploy-fresh-cross-bootstrap-v1",
+                    "phase": "cross-bootstrap",
+                    "execution_limit_seconds": 21600,
+                    "additional_disk_bytes": 34359738368,
+                    "existing_host_only": True,
+                    "automatic_later_phases": False,
+                },
+            }
+            observed = transition(fresh, producer)
+            assert observed.returncode == 0, observed.stderr
+            fields = json.loads(observed.stdout)
+            assert fields["uid"] == uid and fields["gid"] == gid
+            assert fields["groups"] == []
+            with pytest.raises(RuntimeError, match="root-control or scope"):
+                transition({**fresh, "socket_path": str(socket_path)}, producer)
+            with pytest.raises(RuntimeError, match="root-control or scope"):
+                transition({**fresh, "fresh_scope": {
+                    **fresh["fresh_scope"], "automatic_later_phases": True,
+                }}, producer)
+        finally:
+            fresh_listener.close()
+            if fresh_path.exists():
+                fresh_path.unlink()
+
         # Kernel-bound ownership, socket ACL, and passwd home must all
         # reject before any further producer process can start.
         os.chmod(socket_path, 0o666)
