@@ -245,7 +245,8 @@ def binding_for_request(
                 raise RuntimeError("controller companion belongs to different producer")
         if (lane_spec["source_revision"] in (
                     image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
-                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
+                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+                    image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
                 and lane_spec["observed_state_dir"] is None
                 and controller_companion is None):
             raise RuntimeError("new producer requires explicit reviewed controller companion")
@@ -320,6 +321,14 @@ def binding_for_request(
         approved_identity = lane_record.get("compiler_execution_identity")
         if approved_identity is None:
             raise RuntimeError("nonroot toolchain execution identity not installed")
+        if lane_spec["source_revision"] == image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
+            controller = lane_spec["controller"]
+            if (controller["socket_path"] != approved_identity.get("socket_path")
+                    or controller["execution_user_id"] != approved_identity.get("build_uid")
+                    or controller["execution_group_id"] != approved_identity.get("build_gid")
+                    or controller["execution_timeout_seconds"] > 21600
+                    or lane_spec["resource_policy"]["disk_reservation_bytes"] > 32 * 1024**3):
+                raise RuntimeError("fresh compiler lane exceeds controller/socket/budget binding")
         binding["compiler_execution_identity"] = validate_execution(
             approved_identity, project_root=lane_spec["project_root"],
             python_executable=lane_spec["python_executable"],
@@ -402,11 +411,14 @@ def verify_current_target(gateway_root, binding):
                 raise RuntimeError("controller companion differs from frozen dispatch")
         elif (binding["source"]["revision"] in (
                   image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
-                  image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION)
+                  image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+                  image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
               and binding["runtime_profile"]["controller"]):
             raise RuntimeError("new producer dispatch lacks reviewed controller binding")
     if "compiler_execution_identity" in binding:
-        from .compiler_execution_identity import validate as validate_execution
+        from .compiler_execution_identity import (
+            FRESH_SCHEMA, validate as validate_execution,
+        )
         checked = validate_execution(
             binding["compiler_execution_identity"],
             project_root=binding["project_root"],
@@ -419,9 +431,18 @@ def verify_current_target(gateway_root, binding):
         )
         if lane_record.get("compiler_execution_identity") != checked:
             raise RuntimeError("compiler UID/GID/home/socket identity changed after preparation")
-    elif binding.get("task") and binding["source"]["revision"] == (
-            image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION):
-        raise RuntimeError("restored compiler dispatch missing nonroot binding")
+        if checked["schema"] == FRESH_SCHEMA:
+            cfg = lane_spec["controller"]
+            if (cfg["socket_path"] != checked["socket_path"]
+                    or cfg["execution_user_id"] != checked["build_uid"]
+                    or cfg["execution_group_id"] != checked["build_gid"]
+                    or cfg["execution_timeout_seconds"] > 21600
+                    or lane_spec["resource_policy"]["disk_reservation_bytes"] > 32 * 1024**3):
+                raise RuntimeError("fresh compiler controller/socket/budget drift")
+    elif binding.get("task") and binding["source"]["revision"] in (
+            image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+            image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION):
+        raise RuntimeError("reviewed compiler dispatch missing nonroot binding")
     if lane_record["source_root"] != binding["source_root"]:
         raise RuntimeError("image-build lane source path differs from prepared dispatch")
     expected_argv = image_build_lanes.remote_operation_argv(
