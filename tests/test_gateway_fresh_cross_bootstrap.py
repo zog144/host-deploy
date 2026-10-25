@@ -167,3 +167,88 @@ def test_exact_scope_is_in_fixed_root_transport_launcher():
     assert 'extra_groups=()' in runtime
     assert 'value.get("fresh_scope")' in runtime
     assert 'root-control-[a-z0-9]' in runtime
+
+
+def test_fresh_dispatch_requires_dedicated_controller_and_preserves_frozen_lane(tmp_path):
+    import json
+    from pathlib import Path
+    from test_gateway_dispatch import prepared_gateway, gateway_request
+    from zog.host_deploy.gateway.ledger import accept
+    from zog.host_deploy.gateway.image_build_dispatch import (
+        binding_for_request, verify_current_target,
+    )
+    from zog.host_deploy.gateway.image_build_execution import _binding
+    from zog.host_deploy.workspace import save
+
+    gateway, workspace_id = prepared_gateway(tmp_path)
+    lane_path = (gateway / "workspaces" / workspace_id /
+                 "image-build-lanes/lane-a.json")
+    rec = json.loads(lane_path.read_text())
+    project = PROJECT.replace("isolated-new-lane", "lane-a")
+    rec["specification"]["source_revision"] = NEW
+    rec["specification"]["project_root"] = project
+    rec["specification"]["monthly_pin_identity"] = PIN
+    rec["specification"]["controller"]["socket_path"] = SOCKET
+    rec["specification"]["controller"]["execution_user_id"] = 17401
+    rec["specification"]["controller"]["execution_group_id"] = 17402
+    rec["specification"]["controller"]["execution_timeout_seconds"] = 21600
+    rec["specification"]["resource_policy"]["disk_reservation_bytes"] = (
+        32 * 1024**3)
+    rec["runtime_companion"].update(
+        producer_revision=NEW,
+        revision=identity.FRESH_BUILD_RECORD_REVISION,
+        source_root=project + "/companions/build-record",
+    )
+    rec["controller_companion"] = {
+        "schema": 1, "repository": "zog144/box-control",
+        "revision": identity.FRESH_BOX_CONTROL_REVISION,
+        "source_root": project + "/companions/box-control",
+        "producer_revision": NEW,
+    }
+    rec.update(
+        source_root=project + "/source",
+        package_dir=project + "/source/project/package",
+        state_dir=project + "/state",
+        controller_config=project + "/controller.json",
+    )
+    approved = fresh_identity()
+    approved["project_root"] = project
+    approved["task_catalogue_identity"] = TASK_ID
+    rec["compiler_execution_identity"] = approved
+    save(lane_path, rec)
+    protected = task()
+    protected["task"].update(
+        lane="lane-a", lane_owner="host-a", seed_generation="d"*64,
+    )
+    request = gateway_request(workspace_id, "build.submit")
+    request["operation"] = "toolchain.submit"
+    request["source"]["commit"] = NEW
+    request["parameters"] = {
+        "lane": "lane-a", "task": toolchain_task.TASK_NAME,
+    }
+    accept(gateway, request)
+    frozen = binding_for_request(
+        gateway, request["request_id"],
+        task_catalogue=protected, task_catalogue_identity=TASK_ID,
+    )
+    assert frozen["compiler_execution_identity"]["socket_path"] == SOCKET
+    assert frozen["source"]["revision"] == NEW
+    assert frozen["runtime_profile"]["controller_revision"] == (
+        identity.FRESH_BOX_CONTROL_REVISION)
+    assert frozen["task"]["seed_generation"] == "d"*64
+    assert frozen["remote_request_path"].startswith(
+        "/var/lib/host-deploy/typed-toolchain-requests/")
+    _binding({"phase": "prepared", "binding": frozen})
+    assert verify_current_target(gateway, frozen)["workspace_id"] == workspace_id
+    mismatched = json.loads(lane_path.read_text())
+    mismatched["specification"]["controller"]["socket_path"] = (
+        "/run/zog/root-control.sock")
+    save(lane_path, mismatched)
+    with pytest.raises(RuntimeError, match="controller/socket/budget drift"):
+        verify_current_target(gateway, frozen)
+    save(lane_path, rec)
+    mismatched = json.loads(lane_path.read_text())
+    mismatched["runtime_companion"]["revision"] = "0"*40
+    save(lane_path, mismatched)
+    with pytest.raises(RuntimeError, match="runtime companion differs"):
+        verify_current_target(gateway, frozen)
