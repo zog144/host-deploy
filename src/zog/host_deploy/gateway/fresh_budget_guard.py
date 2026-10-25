@@ -203,3 +203,31 @@ def read(directory, request_id):
     if value["request_id"] != request_id:
         raise ValueError("budget record substituted")
     return value
+
+
+def attest_live(bound, guard, telemetry, *, root_owner_verified):
+    """Mandatory native owner budget check on each fresh supervisor transition.
+
+    The trusted native host-owner must verify root registry inode, active
+    independently scheduled watchdog, boot activation and immutable quota
+    before setting root_owner_verified. A dispatcher-supplied JSON 'true'
+    must NEVER be interpreted as this result.
+    """
+    if root_owner_verified is not True:
+        raise PermissionError("host-owned budget watchdog is not authenticated")
+    owner = bound["compiler_execution_identity"]
+    if (owner["schema"] != "host-deploy-compiler-execution-v3"
+            or guard["request_id"] != bound["request_id"]
+            or guard["project_root"] != bound["project_root"]
+            or guard["host_id"] != bound["target"]["instance_id"]
+            or guard["sidecar_plan_sha256"] != telemetry.get("sidecar_plan_sha256")
+            or guard["monitor_receipt_sha256"] != telemetry.get(
+                "monitor_receipt_sha256")):
+        raise RuntimeError("new compiler request differs from native budget owner")
+    selected = {key: telemetry[key] for key in (
+        "host_id", "project_root", "boot_id", "now_seconds",
+        "monotonic_seconds", "used_bytes", "monitor_receipt_sha256",
+        "watchdog_active", "sidecar_active")}
+    if evaluate(guard, **selected) != "active":
+        raise RuntimeError("aggregate compiler budget exhausted or uncertain")
+    return True
