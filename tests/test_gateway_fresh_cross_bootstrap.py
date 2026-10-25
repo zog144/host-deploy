@@ -240,6 +240,47 @@ def test_fresh_dispatch_requires_dedicated_controller_and_preserves_frozen_lane(
     assert frozen["remote_request_path"].startswith(
         "/var/lib/host-deploy/typed-toolchain-requests/")
     _binding({"phase": "prepared", "binding": frozen})
+    from zog.host_deploy.gateway.image_build_execution import (
+        producer_runtime_preflight,
+    )
+    report = {
+        "contract": "image-build-runtime-preflight-v1",
+        "ready": True, "mutation": False,
+        "python": {"executable": frozen["python_executable"]},
+        "image_build": {"repository_root": frozen["source_root"]},
+        "requirements": {
+            "operation": "toolchain.specification.inspect",
+            "bindings": {
+                "provenance": True, "controller": True,
+                "external_observed_state": False,
+            },
+        },
+        "checks": [
+            {
+                "component": "build-record", "status": "ready",
+                "validated_revision": identity.FRESH_BUILD_RECORD_REVISION,
+                "source": project + "/companions/build-record/src/zog/build_record/__init__.py",
+            },
+            {
+                "component": "box-control", "status": "ready",
+                # This is source-owned *declared* compatibility, not the
+                # independently checked actual checkout revision.
+                "validated_revision": (
+                    image_build_lanes.TOOLCHAIN_BOX_CONTROL_COMPATIBILITY),
+                "source": project + "/companions/box-control/box-control/src/zog/box_control/__init__.py",
+            },
+        ],
+    }
+    class FakeHost:
+        def command(self, script, seconds):
+            assert identity.FRESH_BOX_CONTROL_REVISION in script
+            assert identity.FRESH_PRODUCER_REVISION in script
+            assert "git -C" in script and "status --porcelain" in script
+            return json.dumps(report)
+    assert producer_runtime_preflight(FakeHost(), frozen)["ready"] is True
+    report["checks"][1]["validated_revision"] = identity.FRESH_BOX_CONTROL_REVISION
+    with pytest.raises(RuntimeError, match="preflight did not verify bound box-control"):
+        producer_runtime_preflight(FakeHost(), frozen)
     assert verify_current_target(gateway, frozen)["workspace_id"] == workspace_id
     mismatched = json.loads(lane_path.read_text())
     mismatched["specification"]["controller"]["socket_path"] = (
