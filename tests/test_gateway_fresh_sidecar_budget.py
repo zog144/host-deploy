@@ -101,6 +101,14 @@ def test_trusted_sidecar_backend_is_single_shot_and_never_reloads(monkeypatch):
         def socket_exists(self, socket):
             assert socket == sidecar.SOCKET
             return False
+        def prepare_once(self, value):
+            assert value["sha256"] == plan["sha256"]
+            return {"plan_sha256": value["sha256"],
+                    "state": "prepared", "durable": True}
+        def mark_start_attempt(self, digest):
+            assert digest == plan["sha256"]
+            return {"plan_sha256": digest,
+                    "state": "attempted", "durable": True}
         def start_transient(self, unit, mode, properties):
             self.actions.append((unit, mode, properties))
             return {"job": "new-only-job"}
