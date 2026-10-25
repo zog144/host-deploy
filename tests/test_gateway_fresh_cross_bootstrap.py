@@ -213,6 +213,7 @@ def test_fresh_dispatch_requires_dedicated_controller_and_preserves_frozen_lane(
     )
     approved = fresh_identity()
     approved["project_root"] = project
+    approved["python_executable"] = rec["specification"]["python_executable"]
     approved["task_catalogue_identity"] = TASK_ID
     rec["compiler_execution_identity"] = approved
     save(lane_path, rec)
