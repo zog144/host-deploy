@@ -402,10 +402,19 @@ TOOLCHAIN_PRODUCER_REVISION = "857bb454e64102afa51a93ce0b9f8cce5924b67c"
 RESTORED_TOOLCHAIN_PRODUCER_REVISION = "31e6121cdf9fd05336286529666e2c35cdbe0831"
 TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
 TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
+# Separate fresh-only tuple. Historical source/companion bindings above remain
+# valid for readback and recovery; no prior lane may be silently promoted.
+FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION = "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
+FRESH_CROSS_BOOTSTRAP_BOX_CONTROL_REVISION = "b7934882cfacd2fbfd60c7964713ed3dde7f9460"
+# Reviewed image-build runtime_requirements.py at the exact producer revision
+# still declares build-record a866... as its validated API checkpoint.
+FRESH_CROSS_BOOTSTRAP_BUILD_RECORD_REVISION = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
 CONTROLLER_COMPANION_SCHEMA = 1
 
 
 def expected_build_record_revision(producer_revision):
+    if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
+        return FRESH_CROSS_BOOTSTRAP_BUILD_RECORD_REVISION
     if producer_revision in (
             TOOLCHAIN_PRODUCER_REVISION, RESTORED_TOOLCHAIN_PRODUCER_REVISION):
         return TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
@@ -413,6 +422,8 @@ def expected_build_record_revision(producer_revision):
 
 
 def expected_controller_revision(producer_revision):
+    if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
+        return FRESH_CROSS_BOOTSTRAP_BOX_CONTROL_REVISION
     if producer_revision in (
             TOOLCHAIN_PRODUCER_REVISION, RESTORED_TOOLCHAIN_PRODUCER_REVISION):
         return TOOLCHAIN_BOX_CONTROL_COMPATIBILITY
@@ -506,7 +517,10 @@ def bind_compiler_execution_identity(
         if (record.get("schema") != SCHEMA or record.get("lane") != lane
                 or record.get("state") != "active"
                 or spec["schema"] != SCHEMA or spec["mode"] != "managed"
-                or spec["source_revision"] != RESTORED_TOOLCHAIN_PRODUCER_REVISION
+                or spec["source_revision"] not in (
+                    RESTORED_TOOLCHAIN_PRODUCER_REVISION,
+                    FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION,
+                )
                 or spec["observed_state_dir"] is not None
                 or controller["producer_revision"] != spec["source_revision"]
                 or companion["producer_revision"] != spec["source_revision"]
@@ -520,6 +534,14 @@ def bind_compiler_execution_identity(
             box_control_revision=controller["revision"],
             task_identity=identity["task_catalogue_identity"],
         )
+        if spec["source_revision"] == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
+            selected_controller = spec["controller"]
+            if (selected_controller["socket_path"] != expected["socket_path"]
+                    or selected_controller["execution_user_id"] != expected["build_uid"]
+                    or selected_controller["execution_group_id"] != expected["build_gid"]
+                    or selected_controller["execution_timeout_seconds"] > 21600
+                    or spec["resource_policy"]["disk_reservation_bytes"] > 32 * 1024**3):
+                raise RuntimeError("fresh compiler owner/socket/resource bounds differ from lane")
         existing = record.get("compiler_execution_identity")
         if existing is not None:
             if existing != expected:
