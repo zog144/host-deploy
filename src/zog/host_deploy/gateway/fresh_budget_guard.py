@@ -4,13 +4,14 @@ Not a background monitor by itself. The protected host installer must run
 tick() from a separate boot-reactivated watchdog at least once per minute.
 Source-only inspection can never stand in for an installed native watchdog.
 """
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
-import tempfile
+import uuid
 
 SCHEMA = "host-deploy-fresh-cross-bootstrap-budget-v1"
 DEADLINE_SECONDS = 21600
@@ -231,3 +232,74 @@ def attest_live(bound, guard, telemetry, *, root_owner_verified):
     if evaluate(guard, **selected) != "active":
         raise RuntimeError("aggregate compiler budget exhausted or uncertain")
     return True
+
+
+def _protected_root(directory):
+    """Reject link redirects and writable parents for the host-owned journal."""
+    root = Path(directory)
+    if not root.is_absolute() or root == Path("/"):
+        raise PermissionError("budget registry must be a dedicated absolute path")
+    cursor = Path("/")
+    for component in root.parts[1:]:
+        cursor = cursor / component
+        st = cursor.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
+                or st.st_mode & 0o022):
+            raise PermissionError("unsafe budget registry ancestry")
+    if stat.S_IMODE(root.stat().st_mode) & 0o077:
+        raise PermissionError("budget registry must be private")
+    return root
+
+
+def watch_once(directory, request_id, *, native_owner):
+    """Durably sample+cancel one operation under a root-only host-owned lock.
+
+    native_owner.sample_exact must return counters from an independently
+    installed host quota/clock/readback—not from an SSM/GitHub request.
+    Caller must schedule this outside the compiler process and across boots.
+    Cancellation failure remains uncertain and never triggers a new submit.
+    """
+    if os.geteuid() != 0 or not native_owner.is_trusted_native_owner():
+        raise PermissionError("independent root-owned watchdog required")
+    root = _protected_root(directory)
+    lock_path = root / ".watchdog.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
+                or stat.S_IMODE(st.st_mode) != 0o600):
+            raise PermissionError("untrusted budget watchdog lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        before = read(root, request_id)
+        telemetry = native_owner.sample_exact(before)
+        after = tick(before, telemetry=telemetry, host_owner=native_owner)
+        if after == before:
+            return before
+        # Root-only atomic replacement. Reject manual budget rollback by
+        # verifying retained bytes again while the serialized lock is held.
+        if read(root, request_id) != before:
+            raise RuntimeError("concurrent or substituted aggregate budget")
+        path = root / (request_id + ".json")
+        temp = root / (".budget-" + uuid.uuid4().hex)
+        tf = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600)
+        try:
+            payload = _canonical(validate(after)) + b"\n"
+            os.write(tf, payload)
+            os.fsync(tf)
+        finally:
+            os.close(tf)
+        try:
+            os.replace(temp, path)
+        finally:
+            if temp.exists():
+                temp.unlink()
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(root_fd)
+        finally:
+            os.close(root_fd)
+        return after
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
