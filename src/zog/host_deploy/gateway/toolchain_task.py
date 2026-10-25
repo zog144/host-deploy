@@ -15,6 +15,7 @@ PRODUCER_REVISION = "857bb454e64102afa51a93ce0b9f8cce5924b67c"
 # New source-owned, reviewed monthly pin restoration. Only this pair may
 # authorize a NEW compiler submission; never retarget the historical pin.
 RESTORED_PRODUCER_REVISION = "31e6121cdf9fd05336286529666e2c35cdbe0831"
+FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION = "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
 RESTORED_MONTHLY_PIN_PATH = "project/pins/2026-10-01/commit-pin.py"
 RESTORED_MONTHLY_PIN_IDENTITY = (
     "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
@@ -51,8 +52,10 @@ def validate(value):
     if (task["name"] != TASK_NAME
             or task["source_repository"] != "zog144/image-build"
             or task["source_revision"] not in (
-                PRODUCER_REVISION, RESTORED_PRODUCER_REVISION)
-            or (task["source_revision"] == RESTORED_PRODUCER_REVISION
+                PRODUCER_REVISION, RESTORED_PRODUCER_REVISION,
+                FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
+            or (task["source_revision"] in (
+                    RESTORED_PRODUCER_REVISION, FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
                 and (task["monthly_pin_repository_path"] != RESTORED_MONTHLY_PIN_PATH
                      or task["monthly_pin_identity"] != RESTORED_MONTHLY_PIN_IDENTITY
                      or task["pin_date"] != "2026-10-01"))
@@ -125,7 +128,8 @@ def select(protected, *, name, repository, revision, lane,
     # Historical task bindings remain inspectable for idempotency/recovery,
     # but their source had no reviewed public monthly lock and therefore
     # cannot authorize any NEW compiler dispatch.
-    if task["source_revision"] != RESTORED_PRODUCER_REVISION:
+    if task["source_revision"] not in (
+            RESTORED_PRODUCER_REVISION, FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION):
         raise ToolchainTaskError("historical toolchain producer cannot accept new work")
     if (name != TASK_NAME
             or repository != task["source_repository"]
