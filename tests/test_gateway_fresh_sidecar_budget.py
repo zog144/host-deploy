@@ -255,7 +255,7 @@ def test_native_transient_transport_encodes_exact_pid1_properties(monkeypatch):
         sidecar.UNIT, "fail", p["properties"])
     properties = {name: (signature, value) for name, signature, value in variants}
     assert properties["ExecStart"] == (
-        "a(sasb)", [("/usr/bin/python3",
+        "a(sasb)", [["/usr/bin/python3",
                     ["/usr/bin/python3", "-B", "-m", "zog.root_control"],
                     False]])
     assert properties["RestartUSec"] == ("t", 5_000_000)
