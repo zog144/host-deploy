@@ -271,3 +271,142 @@ def test_actual_shared_and_historical_bad_setting_observation_is_frozen(monkeypa
     observed["zog-root-control.service"] = dict(shared, InvocationID="changed")
     with pytest.raises(RuntimeError, match="shared controller"):
         owner._legacy()
+
+
+
+def test_f1_real_root_owned_directory_can_have_multiple_links():
+    import os
+    from zog.host_deploy.gateway import fresh_quota_volume as quota
+    directory = Path("/usr")
+    st = directory.lstat()
+    if st.st_uid != 0 or st.st_nlink <= 1:
+        pytest.skip("CI host has no suitable real protected root-owned directory")
+    assert quota._private(directory) == directory
+    assert st.st_nlink > 1
+
+
+def test_f4_real_mkfs_nodiscard_preserves_preallocation(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    from zog.host_deploy.gateway import fresh_quota_volume as quota
+    mkfs = shutil.which("mkfs.ext4")
+    if mkfs is None or not hasattr(os, "posix_fallocate"):
+        pytest.skip("real mke2fs/posix_fallocate unavailable")
+    image = tmp_path / "disposable-64MiB.img"
+    with image.open("xb") as out:
+        os.posix_fallocate(out.fileno(), 0, 64*1024**2)
+        os.fsync(out.fileno())
+    before = image.stat()
+    assert before.st_blocks*512 >= before.st_size
+    assert image.stat().st_size == 64*1024**2
+    assert "nodiscard" in quota.provision.__code__.co_consts.__repr__()
+    result = subprocess.run([mkfs, "-F", "-m", "0", "-E", "nodiscard",
+                             str(image)], capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    after = image.stat()
+    assert after.st_size == before.st_size
+    assert after.st_blocks*512 >= after.st_size
+
+
+def test_f2_historical_unit_readback_uses_real_regex_and_systemctl_adapter(monkeypatch):
+    commands = []
+    def command(args, *, timeout=15):
+        commands.append(args)
+        return ("LoadState=bad-setting\nActiveState=inactive\n"
+                "MainPID=0\nInvocationID=\nControlGroup=\nEnvironment=\n"
+                "FragmentPath=/run/systemd/transient/old-build.service")
+    monkeypatch.setattr(owner, "_read_json", lambda path: {
+        "historical_unit": "zog-image-build-original@build.service",
+    })
+    monkeypatch.setattr(owner, "_command", command)
+    result = owner._show("zog-image-build-original@build.service")
+    assert result["LoadState"] == "bad-setting"
+    assert commands[0][2] == "zog-image-build-original@build.service"
+    with pytest.raises(ValueError, match="unapproved"):
+        owner._show("unreviewed.service")
+    with pytest.raises(ValueError, match="unapproved"):
+        owner._show("zog-image-build-original@buildXservice")
+
+
+def test_f3_retained_certbot_seed_root_is_preserved_without_rename(monkeypatch):
+    shared = {
+        "LoadState": "loaded", "ActiveState": "active", "MainPID": "31242",
+        "InvocationID": "original-invocation-not-to-restart",
+        "FragmentPath": "/run/systemd/transient/zog-certbot-seed-root.service",
+    }
+    historical = {"LoadState": "bad-setting", "ActiveState": "inactive",
+                  "MainPID": "0", "InvocationID": ""}
+    receipt = {"shared_unit": "zog-certbot-seed-root.service",
+               "root_control_show": shared,
+               "historical_unit": "zog-image-build-original@build.service",
+               "historical_show": historical,
+               "historical_bad_setting_sha256": owner._sha(owner._bytes(historical))}
+    seen = []
+    monkeypatch.setattr(owner, "_read_json", lambda path: receipt)
+    def command(args, *, timeout=15):
+        seen.append(args[2])
+        return "\n".join(f"{k}={v}" for k,v in (
+            shared if args[2] == receipt["shared_unit"] else historical).items())
+    monkeypatch.setattr(owner, "_command", command)
+    assert owner._legacy() == owner._sha(owner._bytes(receipt))
+    assert seen == [receipt["shared_unit"], receipt["historical_unit"]]
+    assert all(arg[0] == "/usr/bin/systemctl" for arg in (
+        ["/usr/bin/systemctl", "show", x] for x in seen))
+
+
+def test_f5_cron_loss_does_not_short_circuit_budget_cancellation(monkeypatch):
+    from zog.host_deploy.gateway import fresh_watchdog_service as independent
+    monkeypatch.setattr(owner, "_root", lambda: None)
+    monkeypatch.setattr(owner.budget, "_protected_root", lambda path: Path(path))
+    monkeypatch.setattr(owner, "BUDGET_DIR", Path("/ignored/disposable"))
+    monkeypatch.setattr(Path, "glob", lambda *args: iter([Path("f"*32+".json")]))
+    observed = []
+    monkeypatch.setattr(owner.budget, "watch_once",
+                        lambda path, request, *, native_owner:
+                        observed.append((request, native_owner)))
+    monkeypatch.setattr(owner, "_show",
+                        lambda unit: {"ActiveState": "inactive" if unit ==
+                                    owner.CRON_SERVICE else "active"})
+    monkeypatch.setattr(owner, "verify_schedule", lambda: True)
+    monkeypatch.setattr(quota, "inspect", lambda: {"used_bytes": 100})
+    monkeypatch.setattr(owner, "_boot", lambda: "boot")
+    sample = owner.NativeOwner().sample_exact({
+        "host_id": "i-fresh", "project_root": "/reviewed-project",
+        "monitor_receipt_sha256": "sha256:"+"a"*64,
+    })
+    assert sample["watchdog_active"] is False
+    owner.watch()
+    assert len(observed) == 1
+    assert observed[0][0] == "f"*32
+    monkeypatch.setattr(owner, "watch", lambda: observed.append("independent"))
+    def halt(seconds):
+        assert seconds == independent.INTERVAL_SECONDS
+        raise InterruptedError("simulated watchdog service restart")
+    monkeypatch.setattr(owner.time, "sleep", halt)
+    with pytest.raises(InterruptedError):
+        owner.watch_loop()
+    assert observed[-1] == "independent"
+
+
+def test_f5_independent_watchdog_message_is_real_wire_serializable():
+    import io
+    from dbus_next._private.unmarshaller import Unmarshaller
+    from zog.host_deploy.gateway import fresh_watchdog_service as independent
+    plan = {
+        "schema": sidecar.SCHEMA, "unit": sidecar.UNIT,
+        "installed": {"python_executable": "/usr/bin/python3",
+                      "host_deploy_python_root": "/opt/zog/accepted/host-deploy/src"},
+    }
+    message = independent.message(plan)
+    message.serial = 1
+    decoded = Unmarshaller(io.BytesIO(message._marshall())).unmarshall()
+    assert decoded.body[0] == independent.UNIT
+    assert decoded.body[1] == "fail"
+    props = dict(decoded.body[2])
+    assert props["Restart"].value == "always"
+    assert props["ExecStart"].value[0][1][-1] == "watch-loop"
+    assert props["Slice"].value == "system.slice"
+    assert props["NoNewPrivileges"].value is True
+    assert props["RestartUSec"].value == 1_000_000
