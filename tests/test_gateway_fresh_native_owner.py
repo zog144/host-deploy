@@ -226,3 +226,32 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch
     assert result["kernel_quota_bytes"] == budget.ADDITIONAL_DISK_BYTES
     assert len(record) == 1 and record[0]["request_id"] == original
     assert record[0]["status"] == "active"
+
+
+
+def test_actual_shared_and_historical_bad_setting_observation_is_frozen(monkeypatch):
+    shared = {"LoadState": "loaded", "ActiveState": "active",
+              "MainPID": "1234", "InvocationID": "old-accepted-invocation",
+              "FragmentPath": "/run/systemd/transient/root-control.service"}
+    historical = {"LoadState": "bad-setting", "ActiveState": "inactive",
+                  "MainPID": "0", "InvocationID": "",
+                  "FragmentPath": "/run/systemd/transient/old-build.service"}
+    receipt = {"shared_unit": "zog-root-control.service",
+               "root_control_show": shared,
+               "historical_unit": "old-build.service",
+               "historical_show": historical,
+               "historical_bad_setting_sha256": owner._sha(owner._bytes(historical))}
+    monkeypatch.setattr(owner, "_read_json", lambda path: receipt)
+    observed = {"zog-root-control.service": shared, "old-build.service": historical}
+    def inspect(unit):
+        return observed[unit]
+    monkeypatch.setattr(owner, "_show", inspect)
+    digest = owner._legacy()
+    assert digest == owner._sha(owner._bytes(receipt))
+    observed["old-build.service"] = dict(historical, LoadState="not-found")
+    with pytest.raises(RuntimeError, match="bad-setting PID1 evidence"):
+        owner._legacy()
+    observed["old-build.service"] = historical
+    observed["zog-root-control.service"] = dict(shared, InvocationID="changed")
+    with pytest.raises(RuntimeError, match="shared controller"):
+        owner._legacy()
