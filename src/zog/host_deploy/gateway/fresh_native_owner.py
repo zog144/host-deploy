@@ -301,7 +301,10 @@ class NativeOwner:
             # Cron failure must reach budget.watch_once via independent PID1
             # watchdog, not preemptively escape the cancellation path.
             "watchdog_active": (_show(CRON_SERVICE).get("ActiveState") == "active"
-                and verify_schedule()), 
+                and verify_schedule()
+                and _show(independent_watchdog.UNIT).get("ActiveState") == "active"
+                and _show(independent_watchdog.UNIT).get("MainPID") not in (
+                    None, "", "0")),
             "sidecar_active": _show(sidecar.UNIT).get("ActiveState") == "active",
         }
 
