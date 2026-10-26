@@ -260,7 +260,7 @@ def _commit(root, request_id, before, after):
     tf = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                  0o600)
     try:
-        payload = _canonical(validate(after)) + b"\\n"
+        payload = _canonical(validate(after)) + b"\n"
         if os.write(tf, payload) != len(payload):
             raise OSError("short protected budget write")
         os.fsync(tf)
