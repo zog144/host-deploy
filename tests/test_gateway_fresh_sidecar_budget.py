@@ -265,7 +265,7 @@ def test_native_transient_transport_encodes_exact_pid1_properties(monkeypatch):
     assert properties["ExecStart"] == (
         "a(sasb)", [("/usr/bin/python3",
                     ["/usr/bin/python3", "-B", "-m", "zog.root_control"],
-                    False)])
+                    False]])
     assert properties["RestartUSec"] == ("t", 5_000_000)
     assert properties["StartLimitIntervalUSec"] == ("t", 60_000_000)
     assert properties["Environment"][0] == "as"
@@ -285,3 +285,29 @@ def test_native_transient_transport_encodes_exact_pid1_properties(monkeypatch):
     monkeypatch.setattr(native.os, "geteuid", lambda: 1000)
     with pytest.raises(PermissionError, match="privileged installer"):
         native.start_exact_sidecar(sidecar.UNIT, "fail", p["properties"])
+
+
+def test_dbus_next_real_wire_serialization_and_roundtrip():
+    """Actual dbus-next 0.2.3 signature verification, not mock properties."""
+    import io
+    from dbus_next._private.unmarshaller import Unmarshaller
+    from zog.host_deploy.gateway import fresh_sidecar_dbus as native
+    plan = sidecar.review_plan(fixture_identity(), installed())
+    typed = native._checked_properties(sidecar.UNIT, "fail", plan["properties"])
+    message = native._message(sidecar.UNIT, typed)
+    message.serial = 1
+    frame = message._marshall()
+    assert isinstance(frame, bytes) and len(frame) > 100
+    unpacked = Unmarshaller(io.BytesIO(frame)).unmarshall()
+    assert unpacked is not None
+    assert unpacked.signature == "ssa(sv)a(sa(sv))"
+    assert unpacked.member == "StartTransientUnit"
+    assert unpacked.body[0:2] == [sidecar.UNIT, "fail"]
+    props = dict(unpacked.body[2])
+    assert props["ExecStart"].signature == "a(sasb)"
+    assert props["ExecStart"].value == [
+        ["/usr/bin/python3",
+         ["/usr/bin/python3", "-B", "-m", "zog.root_control"], False]
+    ]
+    assert props["Environment"].signature == "as"
+    assert props["NoNewPrivileges"].value is True
