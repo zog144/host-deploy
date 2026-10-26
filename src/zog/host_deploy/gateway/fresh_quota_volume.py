@@ -1,6 +1,6 @@
 """Concrete Linux quota filesystem for the fresh cross-bootstrap only.
 
-The 32-GiB *additional disk* cap is enforced by the kernel capacity of an
+The build portion of the 32-GiB TOTAL host cap is kernel-limited by an
 allocated ext4 loop filesystem, not by an advisory du/statvfs monitor.
 The native installer must independently prove every mutable build output is
 inside this mount. No existing Zog workspace or rootfs is reformatted.
@@ -11,7 +11,7 @@ import re
 import stat
 import subprocess
 
-from .fresh_budget_guard import ADDITIONAL_DISK_BYTES
+from .fresh_aggregate_disk import BUILD_BYTES
 
 IMAGE = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25/quota.img")
 MOUNT = Path("/home/zog-cross-owner/fresh-cross-bootstrap-oct25/work")
@@ -67,16 +67,16 @@ def inspect():
     """Read real backing size and mount capacity, rejecting other sources."""
     _private(IMAGE, file=True)
     st = IMAGE.stat()
-    if (st.st_size != ADDITIONAL_DISK_BYTES
-            or st.st_blocks * 512 < ADDITIONAL_DISK_BYTES):
+    if (st.st_size != BUILD_BYTES
+            or st.st_blocks * 512 < BUILD_BYTES):
         raise RuntimeError("fresh disk backing is sparse or not fully reserved")
     _source()
     fs = os.statvfs(MOUNT)
     capacity = fs.f_blocks * fs.f_frsize
-    if capacity > ADDITIONAL_DISK_BYTES or capacity <= 0:
+    if capacity > BUILD_BYTES or capacity <= 0:
         raise RuntimeError("quota volume capacity exceeds approved disk")
     used = (fs.f_blocks - fs.f_bfree) * fs.f_frsize
-    if used < 0 or used > ADDITIONAL_DISK_BYTES:
+    if used < 0 or used > BUILD_BYTES:
         raise RuntimeError("quota accounting is invalid")
     return {"capacity_bytes": capacity, "used_bytes": used,
             "image_bytes": st.st_size, "mount": str(MOUNT),
@@ -93,7 +93,7 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
     if os.geteuid() != 0:
         raise PermissionError("kernel quota provisioning requires root")
     if (type(available_after_reservations_bytes) is not int
-            or available_after_reservations_bytes < ADDITIONAL_DISK_BYTES
+            or available_after_reservations_bytes < BUILD_BYTES
             or type(mounted_writable_roots) is not list
             or not mounted_writable_roots
             or any(type(p) is not str or (
@@ -115,7 +115,7 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
     fd = os.open(IMAGE, os.O_CREAT | os.O_EXCL | os.O_WRONLY |
                  os.O_NOFOLLOW, 0o600)
     try:
-        os.posix_fallocate(fd, 0, ADDITIONAL_DISK_BYTES)
+        os.posix_fallocate(fd, 0, BUILD_BYTES)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -133,8 +133,8 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
     # Do not mount an incompletely reserved image: a sparse successor could
     # consume unbudgeted blocks during the compiler's write-heavy phases.
     formatted = IMAGE.stat()
-    if (formatted.st_size != ADDITIONAL_DISK_BYTES
-            or formatted.st_blocks * 512 < ADDITIONAL_DISK_BYTES):
+    if (formatted.st_size != BUILD_BYTES
+            or formatted.st_blocks * 512 < BUILD_BYTES):
         raise RuntimeError("ext4 formatting discarded the reserved image blocks")
     loop = _run(["/usr/sbin/losetup", "--find", "--show", "--nooverlap",
                  str(IMAGE)])
