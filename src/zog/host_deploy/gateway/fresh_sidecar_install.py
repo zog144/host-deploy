@@ -18,6 +18,7 @@ ROLE = "build-only-project-v1"
 UNIT = "zog-fresh-cross-bootstrap-oct25-controller.service"
 SOCKET = "/run/zog/root-control-fresh-cross-bootstrap-oct25.sock"
 PROJECT = "fresh-cross-bootstrap-oct25"
+SLICE_UNIT = "zogfreshcrossbootstrapoct25.slice"
 REQUIRED_ENV = frozenset({
     "ROOT_CONTROL_SOCKET", "ROOT_CONTROL_SOCKET_GID",
     "ROOT_CONTROL_CONTROLLER_UID", "ROOT_CONTROL_ROLE",
@@ -52,7 +53,8 @@ def review_plan(binding, installed):
         raise ValueError("sidecar identity is not the exact reviewed lane")
     if (type(installed) is not dict or set(installed) != {
             "root_control_revision", "root_control_tree_sha256",
-            "root_control_python_root", "python_executable",
+            "root_control_python_root", "host_deploy_python_root",
+            "host_deploy_tree_sha256", "python_executable",
             "installer_receipt_sha256", "host_id", "boot_id",
             "legacy_baseline_sha256", "reactivation_receipt_sha256",
             "watchdog_receipt_sha256"}):
@@ -61,12 +63,13 @@ def review_plan(binding, installed):
         raise ValueError("sidecar executable source differs from reviewed role")
     for key in ("root_control_tree_sha256", "installer_receipt_sha256",
                 "legacy_baseline_sha256", "reactivation_receipt_sha256",
-                "watchdog_receipt_sha256"):
+                "watchdog_receipt_sha256", "host_deploy_tree_sha256"):
         if (type(installed[key]) is not str or len(installed[key]) != 71
                 or not installed[key].startswith("sha256:")
                 or any(c not in "0123456789abcdef" for c in installed[key][7:])):
             raise ValueError("sidecar host-owned evidence is not SHA-256 bound")
-    for key in ("root_control_python_root", "python_executable"):
+    for key in ("root_control_python_root", "host_deploy_python_root",
+                "python_executable"):
         v = installed[key]
         if (type(v) is not str or not v.startswith("/")
                 or str(PurePosixPath(v)) != v
@@ -97,7 +100,7 @@ def review_plan(binding, installed):
             installed["python_executable"], "-B", "-m", "zog.root_control"
         ],
         "Environment": [f"{k}={environment[k]}" for k in sorted(environment)],
-        "User": "0", "Group": "0",
+        "User": "0", "Group": "0", "Slice": SLICE_UNIT,
         "Restart": "on-failure", "RestartSec": "5s",
         "StartLimitBurst": 2, "StartLimitIntervalSec": "60s",
         "StandardOutput": "journal", "StandardError": "journal",
