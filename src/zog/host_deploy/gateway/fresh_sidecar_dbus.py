@@ -29,9 +29,9 @@ def _checked_properties(unit, mode, properties):
     if (properties["Slice"] != SLICE_UNIT
             or properties["Type"] != "exec" or properties["User"] != "0"
             or properties["Group"] != "0"
-            or properties["Restart"] != "on-failure"
-            or properties["RestartSec"] != "5s"
-            or properties["StartLimitBurst"] != 2
+            or properties["Restart"] != "no"
+            or properties["RestartSec"] != "0s"
+            or properties["StartLimitBurst"] != 1
             or properties["StartLimitIntervalSec"] != "60s"
             or properties["StandardOutput"] != "journal"
             or properties["StandardError"] != "journal"
@@ -60,9 +60,9 @@ def _checked_properties(unit, mode, properties):
         ("Environment", "as", env),
         ("User", "s", "0"), ("Group", "s", "0"),
         ("Slice", "s", SLICE_UNIT),
-        ("Restart", "s", "on-failure"),
-        ("RestartUSec", "t", 5_000_000),
-        ("StartLimitBurst", "u", 2),
+        ("Restart", "s", "no"),
+        ("RestartUSec", "t", 0),
+        ("StartLimitBurst", "u", 1),
         ("StartLimitIntervalUSec", "t", 60_000_000),
         ("StandardOutput", "s", "journal"),
         ("StandardError", "s", "journal"),
