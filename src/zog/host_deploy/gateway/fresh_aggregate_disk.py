@@ -72,3 +72,72 @@ def validate(work, external, *, host_owner_verified=False):
         "external_mount": EXTERNAL_MOUNT,
         "bounded_classes": sorted(REQUIRED_CLASSES),
     }
+
+
+
+def inspect_external_native():
+    """Read kernel and loop backing rather than accepting a JSON quota claim.
+
+    This verifies the fixed ACCOUNTING pool itself. Native owner must also
+    independently prove the journald namespace and *all* new writable state
+    truly use these class roots; a file merely present here is not enough.
+    """
+    import os
+    import re
+    import stat
+    import subprocess
+
+    from .fresh_quota_volume import _private
+    image = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25/external.img")
+    mount = Path(EXTERNAL_MOUNT)
+    _private(image, file=True)
+    file_st = image.stat()
+    if (file_st.st_size != EXTERNAL_BYTES
+            or file_st.st_blocks * 512 < EXTERNAL_BYTES):
+        raise RuntimeError("external accounting image is not fully reserved")
+    if not os.path.ismount(mount):
+        raise RuntimeError("external accounting mount absent")
+
+    def command(argv):
+        return subprocess.run(
+            argv, check=True, text=True, capture_output=True, timeout=15,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"},
+        ).stdout.strip()
+
+    fields = command(["/usr/bin/findmnt", "--noheadings", "--output",
+                      "SOURCE,FSTYPE", "--target", str(mount)]).split()
+    if (len(fields) != 2 or not re.fullmatch(r"/dev/loop[0-9]+", fields[0])
+            or fields[1] != "ext4"):
+        raise RuntimeError("external accounting mount has unsafe kernel backing")
+    backing = command(["/usr/sbin/losetup", "--noheadings", "--output",
+                       "BACK-FILE", fields[0]])
+    if backing != str(image):
+        raise RuntimeError("external accounting is mounted from other image")
+    fs = os.statvfs(mount)
+    limit = fs.f_blocks * fs.f_frsize
+    if not 0 < limit <= EXTERNAL_BYTES:
+        raise RuntimeError("external accounting capacity exceeds reserve")
+    roots = {
+        "owner-state": mount / "owner-state",
+        "budget-journal": mount / "owner-state/budget",
+        "artifact-metadata": mount / "artifacts",
+        "compiler-logs": mount / "compiler-logs",
+        "controller-logs": mount / "controller-logs",
+        "systemd-journal": mount / "systemd-journal",
+    }
+    dev = mount.stat().st_dev
+    for cls, path in roots.items():
+        st = path.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_dev != dev
+                or path.is_symlink() or path.resolve() != path):
+            raise RuntimeError("external accounting root is not on bounded mount: " + cls)
+    return {
+        "schema": SCHEMA, "mount": str(mount), "limit_bytes": limit,
+        "kernel_enforced": True, "mount_verified": True,
+        "allocation_verified": True,
+        "class_roots": {key: str(path) for key, path in roots.items()},
+        # UNKNOWN UNTIL actual kernel-worker mount and journal-namespace
+        # acceptance. Do not infer an empty escape list just from 6 dirs.
+        "unaccounted_writable_roots": ["worker-mounts-unverified",
+                                      "journald-namespace-unverified"],
+    }
