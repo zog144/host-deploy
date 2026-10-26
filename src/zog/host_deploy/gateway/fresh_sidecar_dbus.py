@@ -55,7 +55,7 @@ def _checked_properties(unit, mode, properties):
     return [
         ("Description", "s", properties["Description"]),
         ("Type", "s", "exec"),
-        ("ExecStart", "a(sasb)", [(argv[0], argv, False)]),
+        ("ExecStart", "a(sasb)", [[argv[0], argv, False]]),
         ("Environment", "as", env),
         ("User", "s", "0"), ("Group", "s", "0"),
         ("Restart", "s", "on-failure"),
@@ -68,28 +68,39 @@ def _checked_properties(unit, mode, properties):
     ]
 
 
+def _message(unit, typed_properties):
+    """Build a complete dbus-next message with actual list-valued structs.
+
+    dbus-next 0.2.3 requires Python lists for D-Bus structs; tuples that
+    look plausible in Python fail its signature verifier on serialization.
+    """
+    from dbus_next import Message, Variant
+    return Message(
+        destination="org.freedesktop.systemd1",
+        path="/org/freedesktop/systemd1",
+        interface="org.freedesktop.systemd1.Manager",
+        member="StartTransientUnit",
+        signature="ssa(sv)a(sa(sv))",
+        body=[
+            unit, "fail",
+            [[key, Variant(signature, value)]
+             for key, signature, value in typed_properties],
+            [],
+        ],
+    )
+
+
 async def _start(unit, typed_properties, *, connect=None):
     # The active native runtime must provide dbus-next 0.2.3, already a
     # selected controller dependency. Import lazily for public source CI.
-    from dbus_next import BusType, Message, MessageType, Variant
+    from dbus_next import BusType, MessageType
     from dbus_next.aio import MessageBus
     if connect is None:
         bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
     else:
         bus = await connect()
     try:
-        reply = await bus.call(Message(
-            destination="org.freedesktop.systemd1",
-            path="/org/freedesktop/systemd1",
-            interface="org.freedesktop.systemd1.Manager",
-            member="StartTransientUnit",
-            signature="ssa(sv)a(sa(sv))",
-            body=[
-                unit, "fail",
-                [(k, Variant(sig, value)) for k, sig, value in typed_properties],
-                [],
-            ],
-        ))
+        reply = await bus.call(_message(unit, typed_properties))
         if reply.message_type == MessageType.ERROR:
             raise RuntimeError("PID1 rejected protected transient controller service")
         if reply.signature != "o" or len(reply.body) != 1:
