@@ -308,7 +308,23 @@ def watch_once(directory, request_id, *, native_owner):
         fcntl.flock(fd, fcntl.LOCK_EX)
         state = read(root, request_id)
         if state["status"] == "active":
-            telemetry = native_owner.sample_exact(state)
+            try:
+                telemetry = native_owner.sample_exact(state)
+            except Exception:
+                # Missing native quota/clock evidence must NOT leave an
+                # unguarded compiler in durable "active" state. The fallback
+                # deliberately makes the decision uncertain, and cannot
+                # authorize continued execution.
+                telemetry = {
+                    "host_id": state["host_id"],
+                    "project_root": state["project_root"],
+                    "boot_id": state["boot_id"],
+                    "now_seconds": state["last_tick_seconds"],
+                    "monotonic_seconds": state["last_monotonic_seconds"],
+                    "used_bytes": state["last_disk_used_bytes"],
+                    "monitor_receipt_sha256": state["monitor_receipt_sha256"],
+                    "watchdog_active": False, "sidecar_active": False,
+                }
             next_state = tick(state, telemetry=telemetry)
             if next_state != state:
                 next_state = _commit(root, request_id, state, next_state)
