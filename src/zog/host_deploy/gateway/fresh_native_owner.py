@@ -400,7 +400,27 @@ def recover():
     _root()
     if not verify_schedule():
         raise RuntimeError("untrusted reboot hook")
-    quota.reattach_after_boot()
+    volume = quota.reattach_after_boot()
+    # Every boot is independently identified; we do not trust a transient
+    # pre-reboot PID1 InvocationID or assume running compiler services survived.
+    # No auto-submit, cleanup, old-controller reset or silent new sidecar start.
+    journal = STATE / ("reboot-" + _boot() + ".json")
+    if not journal.exists():
+        _store(journal, {
+            "schema": "host-deploy-fresh-boot-recovery-v1",
+            "boot_id": _boot(),
+            "quota_image": str(quota.IMAGE),
+            "quota_capacity_bytes": volume["capacity_bytes"],
+            "status": "observed-reboot-needs-fresh-controller-attestation",
+        }, exclusive=True)
+    else:
+        recorded = _read_json(journal)
+        if (recorded.get("boot_id") != _boot()
+                or recorded.get("quota_image") != str(quota.IMAGE)):
+            raise RuntimeError("reboot checkpoint drift")
+    # The native watchdog transitions any in-flight original new request to
+    # uncertain/stop_requested due to changed boot-id. Its original immutable
+    # cancellation ID is inspected only; no replacement compiler submission.
     watch()
 
 
@@ -455,6 +475,12 @@ def install_approved():
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
     if _sha(schedule_text().encode()) != plan["installed"]["watchdog_receipt_sha256"]:
         raise RuntimeError("unreviewed watchdog schedule source")
+    BUDGET_DIR.mkdir(mode=0o700, exist_ok=False)
+    directory_fd = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
     # Install and verify a reboot-persistent scheduled guard BEFORE sidecar
     # and any compilation. An interrupted installer keeps its durable state
     # and requires explicit read-only disposition, never automatic replay.
