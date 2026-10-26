@@ -313,6 +313,7 @@ def test_budget_crash_safe_cancel_once_and_read_only_recovery(tmp_path, monkeypa
     root.chmod(0o700)
     # CI exercises real fsync/rename/lock on disposable files, not root NSS.
     monkeypatch.setattr(guard.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(guard, "_protected_root", lambda directory: Path(directory))
     real_lstat = Path.lstat
     real_stat = guard.os.fstat
     def fake_lstat(path, *args, **kwargs):
@@ -375,6 +376,7 @@ def test_watchdog_unknown_cancel_readback_remains_frozen(tmp_path, monkeypatch):
     import os
     import stat
     monkeypatch.setattr(guard.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(guard, "_protected_root", lambda directory: Path(directory))
     real_lstat = Path.lstat
     real_fstat = os.fstat
     def ownership(path, *args, **kwargs):
