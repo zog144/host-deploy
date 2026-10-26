@@ -11,6 +11,7 @@ import pytest
 from zog.host_deploy.gateway import fresh_native_owner as owner
 from zog.host_deploy.gateway import fresh_quota_volume as quota
 from zog.host_deploy.gateway import fresh_budget_guard as budget
+from zog.host_deploy.gateway import fresh_aggregate_disk as aggregate
 from zog.host_deploy.gateway import fresh_sidecar_install as sidecar
 
 
@@ -35,7 +36,7 @@ def test_quota_refuses_extra_mutable_root_or_unapproved_disk(monkeypatch):
     monkeypatch.setattr(quota.os, "geteuid", lambda: 0)
     with pytest.raises(RuntimeError, match="capacity or mutable"):
         quota.provision(
-            available_after_reservations_bytes=budget.ADDITIONAL_DISK_BYTES - 1,
+            available_after_reservations_bytes=aggregate.BUILD_BYTES - 1,
             mounted_writable_roots=[str(quota.MOUNT)])
     with pytest.raises(RuntimeError, match="capacity or mutable"):
         quota.provision(
@@ -93,6 +94,9 @@ def test_reboot_reconciles_quota_and_stores_blocked_receipt_without_submit(tmp_p
     monkeypatch.setattr(owner, "STATE", tmp_path)
     monkeypatch.setattr(owner, "_boot", lambda: boot)
     monkeypatch.setattr(owner, "_root", lambda: None)
+    monkeypatch.setattr(owner.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(owner.aggregate, "reattach_external_after_boot",
+                        lambda: {"limit_bytes": aggregate.EXTERNAL_BYTES})
     monkeypatch.setattr(owner, "verify_schedule", lambda: True)
     monkeypatch.setattr(owner.quota, "reattach_after_boot", lambda: {
         "capacity_bytes": budget.ADDITIONAL_DISK_BYTES - 1,
@@ -164,6 +168,7 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     class Back:
         def verify_source_and_nss(self, plan): calls.append("native-attest")
         def validate_old_baseline(self, digest): calls.append("old-baseline")
+        def is_trusted_native_owner(self): return True
     monkeypatch.setattr(owner, "NativeOwner", Back)
     monkeypatch.setattr(owner, "schedule_text", lambda: "fixed cron")
     monkeypatch.setattr(owner, "install_schedule",
@@ -182,8 +187,12 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     def provision(**kwargs):
         calls.append("kernel-quota")
         assert kwargs["mounted_writable_roots"] == [str(quota.MOUNT)]
-        return {"capacity_bytes": budget.ADDITIONAL_DISK_BYTES}
+        return {"capacity_bytes": aggregate.BUILD_BYTES}
     monkeypatch.setattr(quota, "provision", provision)
+    # This fixture exercises ordering; aggregate kernel proof has separate
+    # real policy/negative tests in test_gateway_aggregate_budget.py.
+    monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
+    monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner.os, "chown", lambda *a: calls.append("quota-owner"))
     monkeypatch.setattr(owner.os, "chmod", lambda *a: calls.append("quota-mode"))
     monkeypatch.setattr(sidecar, "install", lambda p, *, host_owner:
@@ -204,7 +213,7 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     assert calls.count("old-baseline") == 2
 
 
-def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch):
+def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, monkeypatch):
     x = {
         "sha256": "sha256:"+"a"*64, "host_id": "i-fresh",
         "project_root": "/home/zog-cross-owner/fresh-cross-bootstrap-oct25",
@@ -223,16 +232,38 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch
     class Native:
         def validate_old_baseline(self, digest): assert digest == "sha256:"+"b"*64
         def observe_unit(self, unit): return {"active": True}
+        def is_trusted_native_owner(self): return True
     monkeypatch.setattr(owner, "NativeOwner", Native)
     monkeypatch.setattr(owner, "verify_schedule", lambda: True)
     monkeypatch.setattr(owner, "_show", lambda unit: {
         "ActiveState": "active", "MainPID": "123",
+        "LoadState": "not-found" if unit == owner.hard_deadline.UNIT else "loaded",
+        "Unit": owner.hard_deadline.STOP_UNIT,
+        "NextElapseUSecMonotonic": "999999999999",
     })
+    monkeypatch.setattr(owner, "DEADLINE_ATTEMPT", tmp_path / "deadline.json")
+    monkeypatch.setattr(owner, "_store", lambda *args, **kwargs: None)
+    monkeypatch.setattr(owner.hard_deadline, "start", lambda plan: None)
+    # The service becomes visible after the simulated PID1 call.
+    timer_started = {"value": False}
+    monkeypatch.setattr(owner.hard_deadline, "start",
+                        lambda plan: timer_started.update(value=True))
+    monkeypatch.setattr(owner, "_show", lambda unit: {
+        "ActiveState": "active", "MainPID": "123",
+        "LoadState": ("loaded" if timer_started["value"] else "not-found")
+                     if unit == owner.hard_deadline.UNIT else "loaded",
+        "Unit": owner.hard_deadline.STOP_UNIT,
+        "NextElapseUSecMonotonic": "999999999999",
+    })
+    monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
+    monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
     monkeypatch.setattr(owner, "_boot", lambda: "fresh-boot")
     monkeypatch.setattr(quota, "inspect", lambda: {
-        "capacity_bytes": budget.ADDITIONAL_DISK_BYTES,
-        "used_bytes": 4096,
+        "capacity_bytes": aggregate.BUILD_BYTES,
+        "image_bytes": aggregate.BUILD_BYTES,
+        "used_bytes": 4096, "kernel_enforced": True,
+        "mount": str(quota.MOUNT),
     })
     monkeypatch.setattr(owner.time, "time", lambda: 100000)
     monkeypatch.setattr(owner.time, "monotonic", lambda: 1000)
@@ -241,7 +272,7 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch
                         lambda path, value: record.append(value))
     result = owner.arm_approved()
     assert result["request_id"] == original
-    assert result["kernel_quota_bytes"] == budget.ADDITIONAL_DISK_BYTES
+    assert result["kernel_quota_bytes"] == aggregate.BUILD_BYTES
     assert len(record) == 1 and record[0]["request_id"] == original
     assert record[0]["status"] == "active"
 
