@@ -440,7 +440,7 @@ def _admission(plan):
             "schema", "plan_sha256", "host_id", "request_id",
             "seed_generation", "seed_manifest_sha256",
             "capabilities_sha256", "available_after_reservations_bytes",
-            "writable_roots", "fresh_slice"})
+            "writable_roots", "fresh_slice"}):
         raise RuntimeError("fresh admission receipt incomplete")
     if (a["schema"] != "host-deploy-fresh-native-admission-v1"
             or a["plan_sha256"] != plan["sha256"]
