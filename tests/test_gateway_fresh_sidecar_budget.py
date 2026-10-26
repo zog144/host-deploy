@@ -203,27 +203,19 @@ def test_total_deadline_and_watchdog_interruption_block():
     assert guard.evaluate(x, **t) == "stop"
 
 
-def test_scope_cancel_only_exact_new_project_and_blocks_uncertain_stop():
+def test_stop_intent_is_pure_and_never_mutates_before_journal():
     class Owner:
-        def __init__(self, confirmed):
-            self.confirmed = confirmed
-            self.calls = []
-        def cancel_exact_project(self, project, request, *, reason):
-            self.calls.append((project, request, reason))
-            return {"confirmed": self.confirmed, "job_id": "new-job"}
+        def cancel_exact_project(self, *args, **kwargs):
+            pytest.fail("cancellation before durable intent is forbidden")
     x = original_budget()
     t = telemetry()
     t["used_bytes"] = 200 + guard.ADDITIONAL_DISK_BYTES
-    owner = Owner(True)
-    stopped = guard.tick(x, telemetry=t, host_owner=owner)
-    assert stopped["status"] == "stopped"
-    assert owner.calls == [(fixture_identity()["project_root"], REQ,
-                            "aggregate-budget-stop")]
-    owner = Owner(False)
-    uncertain = guard.tick(x, telemetry=t, host_owner=owner)
-    assert uncertain["status"] == "uncertain"
-    assert uncertain["stop_receipt"] is None
-    assert guard.evaluate(uncertain, **t) == "stop"
+    pending = guard.tick(x, telemetry=t, host_owner=Owner())
+    assert pending["status"] == "stop_requested"
+    assert pending["stop_reason"] == "aggregate-budget-stop"
+    assert pending["stop_receipt"] is None
+    assert pending["cancellation_id"] == x["cancellation_id"]
+    assert guard.evaluate(pending, **t) == "stop"
 
 
 def test_supervisor_refuses_v3_without_native_owner(monkeypatch):
@@ -297,7 +289,7 @@ def test_dbus_next_real_wire_serialization_and_roundtrip():
     message = native._message(sidecar.UNIT, typed)
     message.serial = 1
     frame = message._marshall()
-    assert isinstance(frame, bytes) and len(frame) > 100
+    assert isinstance(frame, (bytes, bytearray)) and len(frame) > 100
     unpacked = Unmarshaller(io.BytesIO(frame)).unmarshall()
     assert unpacked is not None
     assert unpacked.signature == "ssa(sv)a(sa(sv))"
@@ -311,3 +303,106 @@ def test_dbus_next_real_wire_serialization_and_roundtrip():
     ]
     assert props["Environment"].signature == "as"
     assert props["NoNewPrivileges"].value is True
+
+def test_budget_crash_safe_cancel_once_and_read_only_recovery(tmp_path, monkeypatch):
+    from pathlib import Path
+    import os
+    import pytest
+    root = tmp_path / "budget"
+    root.mkdir()
+    root.chmod(0o700)
+    # CI exercises real fsync/rename/lock on disposable files, not root NSS.
+    monkeypatch.setattr(guard.os, "geteuid", lambda: 0)
+    real_lstat = Path.lstat
+    real_stat = guard.os.fstat
+    def fake_lstat(path, *args, **kwargs):
+        st = real_lstat(path, *args, **kwargs)
+        # Real protected pathname and modes; CI runner is not root.
+        return type("Stat", (), {"st_mode": st.st_mode, "st_uid": 0})()
+    def fake_fstat(fd):
+        st = real_stat(fd)
+        return type("Stat", (), {
+            "st_mode": st.st_mode, "st_uid": 0, "st_size": st.st_size,
+            "st_nlink": st.st_nlink,
+        })()
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(guard.os, "fstat", fake_fstat)
+    guard.write_once(root, original_budget())
+    class Owner:
+        def __init__(self):
+            self.calls = []
+            self.replies = []
+            self.fail = False
+        def is_trusted_native_owner(self):
+            return True
+        def sample_exact(self, before):
+            d = telemetry()
+            d["used_bytes"] = before["baseline_disk_used_bytes"] + guard.ADDITIONAL_DISK_BYTES
+            return d
+        def cancel_exact_project(self, project, request, *, reason, cancellation_id):
+            # Read DURABLY written attempted state before the only mutation.
+            state = guard.read(root, request)
+            assert state["status"] == "stop_attempted"
+            assert state["cancellation_id"] == cancellation_id
+            self.calls.append((project, request, reason, cancellation_id))
+            if self.fail:
+                raise ConnectionError("ack lost after kernel cancellation")
+            return {"confirmed": True, "cancellation_id": cancellation_id,
+                    "request_id": request, "project_root": project}
+        def inspect_cancel_exact_project(self, project, request, *, cancellation_id):
+            self.replies.append(cancellation_id)
+            return {"confirmed": True, "cancellation_id": cancellation_id,
+                    "request_id": request, "project_root": project}
+    owner = Owner()
+    owner.fail = True
+    with pytest.raises(ConnectionError):
+        guard.watch_once(root, REQ, native_owner=owner)
+    assert guard.read(root, REQ)["status"] == "stop_attempted"
+    assert len(owner.calls) == 1
+    # Restart MUST NOT make another cancellation call, only inspect same ID.
+    observed = guard.watch_once(root, REQ, native_owner=owner)
+    assert observed["status"] == "stopped"
+    assert observed["stop_receipt"]["cancellation_id"] == owner.calls[0][3]
+    assert owner.replies == [owner.calls[0][3]]
+    assert len(owner.calls) == 1
+    # Terminal state is durable and never changes to active or attempts again.
+    assert guard.watch_once(root, REQ, native_owner=owner)["status"] == "stopped"
+    assert len(owner.calls) == 1
+
+
+def test_watchdog_unknown_cancel_readback_remains_frozen(tmp_path, monkeypatch):
+    from pathlib import Path
+    import os
+    import stat
+    monkeypatch.setattr(guard.os, "geteuid", lambda: 0)
+    real_lstat = Path.lstat
+    real_fstat = os.fstat
+    def ownership(path, *args, **kwargs):
+        st = real_lstat(path, *args, **kwargs)
+        return type("Stat", (), {"st_mode": st.st_mode, "st_uid": 0})()
+    def ownership_fd(fd):
+        st = real_fstat(fd)
+        return type("Stat", (), {"st_mode": st.st_mode, "st_uid": 0,
+                                "st_size": st.st_size, "st_nlink": st.st_nlink})()
+    monkeypatch.setattr(Path, "lstat", ownership)
+    monkeypatch.setattr(os, "fstat", ownership_fd)
+    root = tmp_path / "budget"
+    root.mkdir(mode=0o700)
+    guard.write_once(root, original_budget())
+    class Owner:
+        cancels = 0
+        reads = 0
+        def is_trusted_native_owner(self): return True
+        def sample_exact(self, x):
+            return dict(telemetry(), used_bytes=guard.ADDITIONAL_DISK_BYTES + 200)
+        def cancel_exact_project(self, project, request, *, reason, cancellation_id):
+            self.cancels += 1
+            return {"confirmed": False}
+        def inspect_cancel_exact_project(self, project, request, *, cancellation_id):
+            self.reads += 1
+            return None
+    owner = Owner()
+    assert guard.watch_once(root, REQ, native_owner=owner)["status"] == "stop_attempted"
+    assert guard.watch_once(root, REQ, native_owner=owner)["status"] == "stop_attempted"
+    assert owner.cancels == 1
+    assert owner.reads == 1
