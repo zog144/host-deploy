@@ -253,3 +253,57 @@ serialized `watch_once` state updates; **native quota accounting and
 reliable periodic timer/boot reactivation are separate enforcement
 prerequisites**. Until those are observed, Stage B remains prohibited,
 even if all three source/isolated CI workflows pass.
+
+## 2026-10-26 correction — real D-Bus wire and crash-safe watchdog stop
+
+Two defects in the first source candidate were corrected **before** any
+retained-host native installer admission:
+
+**Actual PID1 message serialization:** `dbus-next==0.2.3` requires
+**Python lists for D-Bus structs**, including nested
+`a(sv)` property entries and the `a(sasb)` `ExecStart` value.
+Previously the adapter used Python tuples for both, which passed
+shape-only source checks but failed real library marshalling.
+`gateway/fresh_sidecar_dbus.py` now constructs the exact
+`StartTransientUnit` `ssa(sv)a(sa(sv))` `Message` using nested
+list-valued structs. Required CI pins dbus-next 0.2.3 and performs
+`Message._marshall()` plus `Unmarshaller` round-trip, verifying the
+unit/mode, actual fixed `ExecStart`, environment, and protected flags.
+There is **no** PID1/systemd mutation in this test: native Work must
+still prove an actual (StartTransientUnit) invocation/ack and fresh
+InvocationID without shared `daemon-reload`.
+
+**Cancellation crash window:** The original watchdog called the
+native `cancel_exact_project` **before persisting** its new terminal
+record. A crash after the external cancellation could leave the
+on-disk budget `active` and issue cancellation again on recovery.
+The corrected `fresh_budget_guard` uses these durable states:
+
+```
+active → stop_requested → stop_attempted → stopped
+                           ↳ stop_attempted (unknown ack; inspect only)
+```
+
+Under the exclusive root-owned watchdog lock, `stop_requested`
+is fsync-published before the stop and the immutable `stop_attempted`
+marker is fsync-published before the one external cancellation call.
+Every stop has an immutable cancellation ID derived from the original
+request/host/Project, and the native owner must return a signed/verified
+receipt **binding that same ID, request and Project**. Once attempted,
+a watchdog restart may call only read-only
+`inspect_cancel_exact_project` on that ID; it must never call cancel
+again, change Project/request IDs or synthesize success. A nonconfirmed
+or lost ack retains `stop_attempted`, blocking further compilation.
+A native telemetry exception also enters the uncertain stop protocol
+instead of silently keeping the budget active.
+
+Tests exercise root-owned journal fsync/atomic replace under a
+disposable local directory, inspect-after-crash, lost and nonconfirmed
+cancellation acknowledgements, exact caller scope, and the no-replay
+behavior. Ordinary source CI simulates root ownership; it is not a
+retained-host FS/mount/SELinux/UID acceptance test. Native Work must
+independently validate the **real** quota counters, root-owned timer
+cadence, boot reactivation and cancellation scope with the protected
+controller. **No scheduler, privilege escalation, AWS/SSM submission,
+historical controller action or future toolchain phase is authorized
+by this source correction.**
