@@ -408,3 +408,37 @@ def test_watchdog_unknown_cancel_readback_remains_frozen(tmp_path, monkeypatch):
     assert guard.watch_once(root, REQ, native_owner=owner)["status"] == "stop_attempted"
     assert owner.cancels == 1
     assert owner.reads == 1
+
+
+def test_watchdog_telemetry_failure_is_durable_uncertain_stop(tmp_path, monkeypatch):
+    from pathlib import Path
+    import os
+    root = tmp_path / "budget"
+    root.mkdir(mode=0o700)
+    monkeypatch.setattr(guard.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(guard, "_protected_root", lambda directory: Path(directory))
+    real_fstat = os.fstat
+    def fake_fstat(fd):
+        st = real_fstat(fd)
+        return type("Stat", (), {"st_mode": st.st_mode, "st_uid": 0,
+                                 "st_size": st.st_size, "st_nlink": st.st_nlink})()
+    monkeypatch.setattr(os, "fstat", fake_fstat)
+    guard.write_once(root, original_budget())
+    class Owner:
+        cancels = 0
+        def is_trusted_native_owner(self): return True
+        def sample_exact(self, before):
+            raise OSError("quota evidence unavailable")
+        def cancel_exact_project(self, project, request, *, reason, cancellation_id):
+            state = guard.read(root, request)
+            assert state["status"] == "stop_attempted"
+            assert state["stop_reason"] == "aggregate-budget-uncertain"
+            self.cancels += 1
+            return {"confirmed": False}
+        def inspect_cancel_exact_project(self, project, request, *, cancellation_id):
+            return None
+    owner = Owner()
+    assert guard.watch_once(root, REQ, native_owner=owner)["status"] == "stop_attempted"
+    assert guard.read(root, REQ)["stop_reason"] == "aggregate-budget-uncertain"
+    assert guard.watch_once(root, REQ, native_owner=owner)["status"] == "stop_attempted"
+    assert owner.cancels == 1
