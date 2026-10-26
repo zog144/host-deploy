@@ -7,7 +7,7 @@ No disk .service file, daemon-reload, generic unit or arbitrary ExecStart.
 import asyncio
 import os
 
-from .fresh_sidecar_install import UNIT, ROLE, SOCKET
+from .fresh_sidecar_install import UNIT, ROLE, SOCKET, SLICE_UNIT
 
 
 def _checked_properties(unit, mode, properties):
@@ -17,7 +17,7 @@ def _checked_properties(unit, mode, properties):
         "Description", "Type", "ExecStart", "Environment", "User", "Group",
         "Restart", "RestartSec", "StartLimitBurst",
         "StartLimitIntervalSec", "StandardOutput", "StandardError",
-        "NoNewPrivileges",
+        "NoNewPrivileges", "Slice",
     }
     if set(properties) != required:
         raise ValueError("unsupported transient systemd service property")
@@ -26,7 +26,8 @@ def _checked_properties(unit, mode, properties):
             or argv[1:] != ["-B", "-m", "zog.root_control"]
             or type(argv[0]) is not str or not argv[0].startswith("/")):
         raise ValueError("unreviewed root-control service executable")
-    if (properties["Type"] != "exec" or properties["User"] != "0"
+    if (properties["Slice"] != SLICE_UNIT
+            or properties["Type"] != "exec" or properties["User"] != "0"
             or properties["Group"] != "0"
             or properties["Restart"] != "on-failure"
             or properties["RestartSec"] != "5s"
@@ -58,6 +59,7 @@ def _checked_properties(unit, mode, properties):
         ("ExecStart", "a(sasb)", [[argv[0], argv, False]]),
         ("Environment", "as", env),
         ("User", "s", "0"), ("Group", "s", "0"),
+        ("Slice", "s", SLICE_UNIT),
         ("Restart", "s", "on-failure"),
         ("RestartUSec", "t", 5_000_000),
         ("StartLimitBurst", "u", 2),
