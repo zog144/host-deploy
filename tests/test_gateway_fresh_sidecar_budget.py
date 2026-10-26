@@ -40,6 +40,8 @@ def installed():
         "root_control_revision": identity.FRESH_ROOT_CONTROL_REVISION,
         "root_control_tree_sha256": SHA,
         "root_control_python_root": "/opt/zog/accepted/root-control/src",
+        "host_deploy_python_root": "/opt/zog/accepted/host-deploy/src",
+        "host_deploy_tree_sha256": SHA,
         "python_executable": "/usr/bin/python3",
         "installer_receipt_sha256": SHA,
         "host_id": "i-0123456789abcdef0",
