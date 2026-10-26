@@ -191,11 +191,13 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
                             "plan_sha256": p["sha256"], "invocation_id": "new-only",
                         }))
     monkeypatch.setattr(owner, "_store", lambda path, item, *, exclusive:
-                        calls.append("activation-checkpoint"))
+                        calls.append("watchdog-attempt" if path == owner.WATCHDOG_ATTEMPT
+                                     else "activation-checkpoint"))
     result = owner.install_approved()
     assert result["invocation_id"] == "new-only"
     assert calls.index("persistent-cron") < calls.index("kernel-quota")
     assert calls.index("kernel-quota") < calls.index("pid1-watchdog")
+    assert calls.index("watchdog-attempt") < calls.index("pid1-watchdog")
     assert calls.index("pid1-watchdog") < calls.index("pid1-start")
     assert calls.index("kernel-quota") < calls.index("pid1-start")
     assert calls.index("pid1-start") < calls.index("activation-checkpoint")
