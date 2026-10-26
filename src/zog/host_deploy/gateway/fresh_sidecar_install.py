@@ -101,8 +101,11 @@ def review_plan(binding, installed):
         ],
         "Environment": [f"{k}={environment[k]}" for k in sorted(environment)],
         "User": "0", "Group": "0", "Slice": SLICE_UNIT,
-        "Restart": "on-failure", "RestartSec": "5s",
-        "StartLimitBurst": 2, "StartLimitIntervalSec": "60s",
+        # A kernel cgroup.kill must never resurrect this privileged sidecar
+        # and create more privileged build operations after budget expiry.
+        # Restart/reboot always requires an independently reviewed new grant.
+        "Restart": "no", "RestartSec": "0s",
+        "StartLimitBurst": 1, "StartLimitIntervalSec": "60s",
         "StandardOutput": "journal", "StandardError": "journal",
         "NoNewPrivileges": True,
     }
