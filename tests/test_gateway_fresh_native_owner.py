@@ -135,7 +135,6 @@ def test_admission_freezes_unique_request_and_mount_under_approved_plan(monkeypa
         owner._admission(plan)
     bad = deepcopy(receipt)
     bad["request_id"] = "371da99f23764180aad37d8e4e83595b"
-    # Historical request must also be excluded by original request-specific
-    # host owner; this scope only proves syntax and new/old separate binding.
     monkeypatch.setattr(owner, "_read_json", lambda path: bad)
-    assert owner._admission(plan)["request_id"] == bad["request_id"]
+    with pytest.raises(RuntimeError, match="native admission differs"):
+        owner._admission(plan)
