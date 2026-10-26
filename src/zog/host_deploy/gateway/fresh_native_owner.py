@@ -27,8 +27,8 @@ INSTALL_PATH = STATE / "sidecar-install.json"
 BASELINE_PATH = STATE / "legacy-baseline.json"
 BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
-CGROUP = Path("/sys/fs/cgroup/zog-fresh-cross-bootstrap-oct25.slice")
-SLICE_UNIT = "zog-fresh-cross-bootstrap-oct25.slice"
+CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
+SLICE_UNIT = sidecar.SLICE_UNIT
 CRON_SERVICE = "crond.service"
 SCHEMA = "host-deploy-native-sidecar-owner-v1"
 
@@ -137,12 +137,12 @@ def _protected_tree(path):
             st = entry.lstat()
             if (st.st_uid != 0 or st.st_mode & 0o022
                     or (not stat.S_ISDIR(st.st_mode) and not stat.S_ISREG(st.st_mode))
-                    or st.st_nlink != (st.st_nlink if stat.S_ISDIR(st.st_mode) else 1)):
+                    or (stat.S_ISREG(st.st_mode) and st.st_nlink != 1)):
                 raise PermissionError("unsafe source/companion tree entry")
             digest.update(str(entry.relative_to(path)).encode() + b"\0")
             if stat.S_ISREG(st.st_mode):
                 digest.update(entry.read_bytes())
-    return _sha(digest.digest())
+    return "sha256:" + digest.hexdigest()
 
 
 def _legacy():
@@ -215,6 +215,9 @@ class NativeOwner:
         if _protected_tree(installed["root_control_python_root"]) != installed[
                 "root_control_tree_sha256"]:
             raise PermissionError("installed root-control executable bytes changed")
+        if _protected_tree(installed["host_deploy_python_root"]) != installed[
+                "host_deploy_tree_sha256"]:
+            raise PermissionError("installed host-deploy native owner source changed")
         if installed["boot_id"] != _boot():
             raise RuntimeError("installation selected another native boot")
         self.validate_old_baseline(installed["legacy_baseline_sha256"])
@@ -401,13 +404,117 @@ def recover():
     watch()
 
 
+
+ADMISSION_PATH = STATE / "reviewed-admission.json"
+
+
+def _admission(plan):
+    """Admission receipt is a root-owned, exact-structure authorization.
+
+    It is intentionally not created by the gateway or GitHub dispatcher.
+    The native protected installer must provide it only after independent
+    seed/source/host/capacity and no-old-job-mutation review.
+    """
+    a = _read_json(ADMISSION_PATH)
+    if (type(a) is not dict or set(a) != {
+            "schema", "plan_sha256", "host_id", "request_id",
+            "seed_generation", "seed_manifest_sha256",
+            "capabilities_sha256", "available_after_reservations_bytes",
+            "writable_roots", "fresh_slice"})
+        raise RuntimeError("fresh admission receipt incomplete")
+    if (a["schema"] != "host-deploy-fresh-native-admission-v1"
+            or a["plan_sha256"] != plan["sha256"]
+            or a["host_id"] != plan["host_id"]
+            or a["fresh_slice"] != SLICE_UNIT
+            or a["writable_roots"] != [str(quota.MOUNT)]
+            or type(a["available_after_reservations_bytes"]) is not int
+            or a["available_after_reservations_bytes"] < budget.ADDITIONAL_DISK_BYTES
+            or not budget._HEX.fullmatch(a["request_id"])
+            or not all(isinstance(a[field], str) and (
+                a[field].startswith("sha256:") and len(a[field]) == 71)
+                for field in ("seed_manifest_sha256", "capabilities_sha256"))
+            or not isinstance(a["seed_generation"], str)
+            or not a["seed_generation"]):
+        raise RuntimeError("fresh native admission differs from reviewed authority")
+    return a
+
+
+def install_approved():
+    """Real once-only privileged installation using fixed local receipts.
+
+    Destructive creation is restricted to the previously empty new quota
+    image and new transient sidecar. Nothing changes the original controller.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("reviewed native sidecar plan changed")
+    a = _admission(plan)
+    owner = NativeOwner()
+    owner.verify_source_and_nss(plan)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if _sha(schedule_text().encode()) != plan["installed"]["watchdog_receipt_sha256"]:
+        raise RuntimeError("unreviewed watchdog schedule source")
+    # Install and verify a reboot-persistent scheduled guard BEFORE sidecar
+    # and any compilation. An interrupted installer keeps its durable state
+    # and requires explicit read-only disposition, never automatic replay.
+    install_schedule()
+    volume = quota.provision(
+        available_after_reservations_bytes=a["available_after_reservations_bytes"],
+        mounted_writable_roots=a["writable_roots"])
+    if volume["capacity_bytes"] > budget.ADDITIONAL_DISK_BYTES:
+        raise RuntimeError("fresh kernel quota limit exceeded")
+    # Controller may not write build output; make the entire quota image root
+    # writable only for the independent selected build UID/primary GID.
+    os.chown(quota.MOUNT, plan["identity"]["build_uid"],
+             plan["identity"]["build_gid"])
+    os.chmod(quota.MOUNT, 0o700)
+    receipt = sidecar.install(plan, host_owner=owner)
+    _store(STATE / "activation.json", receipt, exclusive=True)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    return receipt
+
+
+def arm_approved():
+    """Durably arm one admitted new request AFTER kernel + cgroup acceptance."""
+    _root()
+    plan = _read_json(PLAN_PATH)
+    a = _admission(plan)
+    owner = NativeOwner()
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
+        raise RuntimeError("sidecar activation not authenticated")
+    if not verify_schedule() or _show(CRON_SERVICE).get("ActiveState") != "active":
+        raise RuntimeError("independent reboot-persistent watchdog missing")
+    if owner.observe_unit(sidecar.UNIT)["active"] is not True:
+        raise RuntimeError("sidecar not active")
+    _slice_identity()
+    current = quota.inspect()
+    if current["capacity_bytes"] > budget.ADDITIONAL_DISK_BYTES:
+        raise RuntimeError("kernel disk quota not active")
+    x = budget.begin(
+        request_id=a["request_id"], host_id=a["host_id"],
+        project_root=plan["project_root"], boot_id=_boot(),
+        now_seconds=int(time.time()), monotonic_seconds=int(time.monotonic()),
+        used_bytes=current["used_bytes"], sidecar_plan_sha256=plan["sha256"],
+        monitor_receipt_sha256=plan["installed"]["watchdog_receipt_sha256"])
+    budget.write_once(BUDGET_DIR, x)
+    return {"request_id": x["request_id"], "status": x["status"],
+            "deadline_seconds": x["deadline_seconds"],
+            "kernel_quota_bytes": current["capacity_bytes"]}
+
+
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("watch", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "arm", "watch", "recover"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "recover":
         recover()
+    elif sys.argv[1] == "install":
+        install_approved()
+    elif sys.argv[1] == "arm":
+        arm_approved()
     else:
         watch()
 
