@@ -168,6 +168,17 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     monkeypatch.setattr(owner, "schedule_text", lambda: "fixed cron")
     monkeypatch.setattr(owner, "install_schedule",
                         lambda: calls.append("persistent-cron"))
+    monkeypatch.setattr(owner, "_show", lambda unit: {
+        "LoadState": "not-found" if unit == owner.independent_watchdog.UNIT
+        and "pid1-watchdog" not in calls else "loaded",
+        "ActiveState": "active", "MainPID": "123",
+        "ControlGroup": "/system.slice/" + owner.independent_watchdog.UNIT,
+    })
+    monkeypatch.setattr(owner, "WATCHDOG_ATTEMPT",
+                        state / "watchdog-attempt.json")
+    monkeypatch.setattr(owner.independent_watchdog, "start",
+                        lambda plan: calls.append("pid1-watchdog"))
+    monkeypatch.setattr(owner, "_boot", lambda: "test-boot")
     def provision(**kwargs):
         calls.append("kernel-quota")
         assert kwargs["mounted_writable_roots"] == [str(quota.MOUNT)]
@@ -184,6 +195,8 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     result = owner.install_approved()
     assert result["invocation_id"] == "new-only"
     assert calls.index("persistent-cron") < calls.index("kernel-quota")
+    assert calls.index("kernel-quota") < calls.index("pid1-watchdog")
+    assert calls.index("pid1-watchdog") < calls.index("pid1-start")
     assert calls.index("kernel-quota") < calls.index("pid1-start")
     assert calls.index("pid1-start") < calls.index("activation-checkpoint")
     assert calls.count("old-baseline") == 2
@@ -199,7 +212,8 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch
     original = "f"*32
     monkeypatch.setattr(owner, "_root", lambda: None)
     monkeypatch.setattr(owner, "_read_json", lambda path:
-                        {"plan_sha256": x["sha256"]} if path == owner.STATE / "activation.json"
+                        {"plan_sha256": x["sha256"]} if path in (
+                            owner.STATE / "activation.json", owner.WATCHDOG_ATTEMPT)
                         else x)
     monkeypatch.setattr(owner, "_admission", lambda plan: {
         "request_id": original, "host_id": x["host_id"],
@@ -209,7 +223,9 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch
         def observe_unit(self, unit): return {"active": True}
     monkeypatch.setattr(owner, "NativeOwner", Native)
     monkeypatch.setattr(owner, "verify_schedule", lambda: True)
-    monkeypatch.setattr(owner, "_show", lambda unit: {"ActiveState": "active"})
+    monkeypatch.setattr(owner, "_show", lambda unit: {
+        "ActiveState": "active", "MainPID": "123",
+    })
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
     monkeypatch.setattr(owner, "_boot", lambda: "fresh-boot")
     monkeypatch.setattr(quota, "inspect", lambda: {
