@@ -21,6 +21,7 @@ from . import fresh_budget_guard as budget
 from . import fresh_quota_volume as quota
 from . import fresh_sidecar_dbus as dbus
 from . import fresh_sidecar_install as sidecar
+from . import fresh_watchdog_service as independent_watchdog
 
 STATE = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25")
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -28,6 +29,7 @@ INSTALL_PATH = STATE / "sidecar-install.json"
 BASELINE_PATH = STATE / "legacy-baseline.json"
 BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
+WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
 CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
 SLICE_UNIT = sidecar.SLICE_UNIT
 CRON_SERVICE = "crond.service"
@@ -111,7 +113,7 @@ def _command(args, *, timeout=15):
 
 
 def _show(unit):
-    known = {sidecar.UNIT, SLICE_UNIT, CRON_SERVICE,
+    known = {sidecar.UNIT, independent_watchdog.UNIT, SLICE_UNIT, CRON_SERVICE,
              "root-control.service", "zog-root-control.service",
              "zog-certbot-seed-root.service"}
     if unit not in known:
@@ -296,8 +298,10 @@ class NativeOwner:
             "monotonic_seconds": int(time.monotonic()),
             "used_bytes": result["used_bytes"],
             "monitor_receipt_sha256": x["monitor_receipt_sha256"],
-            "watchdog_active": _show(CRON_SERVICE).get("ActiveState") == "active"
-                and verify_schedule(), 
+            # Cron failure must reach budget.watch_once via independent PID1
+            # watchdog, not preemptively escape the cancellation path.
+            "watchdog_active": (_show(CRON_SERVICE).get("ActiveState") == "active"
+                and verify_schedule()), 
             "sidecar_active": _show(sidecar.UNIT).get("ActiveState") == "active",
         }
 
@@ -392,10 +396,9 @@ def install_schedule():
 def watch():
     _root()
     owner = NativeOwner()
-    if not verify_schedule():
-        raise RuntimeError("host-owned watchdog schedule changed")
-    if _show(CRON_SERVICE).get("ActiveState") != "active":
-        raise RuntimeError("native scheduler not running")
+    # NEVER return early on crond/schedule loss: the separate PID1 watchdog
+    # must observe that failure in sample_exact and durably cancel the fresh
+    # compiler. A missing schedule is not a reason to omit the budget check.
     budget._protected_root(BUDGET_DIR)
     requests = sorted(p.stem for p in BUDGET_DIR.glob("*.json"))
     if len(requests) > 1:
@@ -404,6 +407,19 @@ def watch():
         if not budget._HEX.fullmatch(request):
             raise RuntimeError("unreviewed budget filename")
         budget.watch_once(BUDGET_DIR, request, native_owner=owner)
+
+
+def watch_loop():
+    """Independent PID1-supervised fast watchdog, not scheduled by crond.
+
+    Systemd Restart=always makes it an independent enforcement path for
+    crond outages. On errors, let PID1 restart rather than silently exiting.
+    Native acceptance must test actual PID1 restart and missed deadline.
+    """
+    _root()
+    while True:
+        watch()
+        time.sleep(independent_watchdog.INTERVAL_SECONDS)
 
 
 def recover():
@@ -507,6 +523,25 @@ def install_approved():
         mounted_writable_roots=a["writable_roots"])
     if volume["capacity_bytes"] > budget.ADDITIONAL_DISK_BYTES:
         raise RuntimeError("fresh kernel quota limit exceeded")
+    # Start a distinct PID1-supervised watchdog outside the compiler slice,
+    # not through cron. A PID1 reply lost after this durable marker is an
+    # UNCERTAIN installation, never permission for a second start.
+    if _show(independent_watchdog.UNIT).get("LoadState") != "not-found":
+        raise RuntimeError("independent watchdog already present")
+    if WATCHDOG_ATTEMPT.exists() or WATCHDOG_ATTEMPT.is_symlink():
+        raise RuntimeError("watchdog attempted-start already recorded")
+    _store(WATCHDOG_ATTEMPT, {
+        "schema": "host-deploy-fresh-watchdog-start-attempt-v1",
+        "plan_sha256": plan["sha256"], "boot_id": _boot(),
+        "state": "attempted",
+    }, exclusive=True)
+    independent_watchdog.start(plan)
+    active_watchdog = _show(independent_watchdog.UNIT)
+    if (active_watchdog.get("ActiveState") != "active"
+            or active_watchdog.get("MainPID") in (None, "", "0")
+            or active_watchdog.get("ControlGroup", "").startswith(
+                "/" + sidecar.SLICE_UNIT)):
+        raise RuntimeError("independent PID1 watchdog activation unproven")
     # Controller may not write build output; make the entire quota image root
     # writable only for the independent selected build UID/primary GID.
     os.chown(quota.MOUNT, plan["identity"]["build_uid"],
@@ -527,8 +562,12 @@ def arm_approved():
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
     if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
         raise RuntimeError("sidecar activation not authenticated")
-    if not verify_schedule() or _show(CRON_SERVICE).get("ActiveState") != "active":
-        raise RuntimeError("independent reboot-persistent watchdog missing")
+    if (not verify_schedule()
+            or _show(CRON_SERVICE).get("ActiveState") != "active"
+            or _show(independent_watchdog.UNIT).get("ActiveState") != "active"
+            or _show(independent_watchdog.UNIT).get("MainPID") in (None, "", "0")
+            or _read_json(WATCHDOG_ATTEMPT).get("plan_sha256") != plan["sha256"]):
+        raise RuntimeError("independent PID1 and reboot-persistent watchdog missing")
     if owner.observe_unit(sidecar.UNIT)["active"] is not True:
         raise RuntimeError("sidecar not active")
     _slice_identity()
@@ -550,7 +589,7 @@ def arm_approved():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "arm", "watch", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "arm", "watch", "watch-loop", "recover"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "recover":
         recover()
@@ -558,6 +597,8 @@ def main():
         install_approved()
     elif sys.argv[1] == "arm":
         arm_approved()
+    elif sys.argv[1] == "watch-loop":
+        watch_loop()
     else:
         watch()
 
