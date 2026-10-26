@@ -31,6 +31,7 @@ CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
 SLICE_UNIT = sidecar.SLICE_UNIT
 CRON_SERVICE = "crond.service"
 SCHEMA = "host-deploy-native-sidecar-owner-v1"
+HISTORICAL_REQUEST_ID = "371da99f23764180aad37d8e4e83595b"
 
 
 def _root():
@@ -450,6 +451,7 @@ def _admission(plan):
             or type(a["available_after_reservations_bytes"]) is not int
             or a["available_after_reservations_bytes"] < budget.ADDITIONAL_DISK_BYTES
             or not budget._HEX.fullmatch(a["request_id"])
+            or a["request_id"] == HISTORICAL_REQUEST_ID
             or not all(isinstance(a[field], str) and (
                 a[field].startswith("sha256:") and len(a[field]) == 71)
                 for field in ("seed_manifest_sha256", "capabilities_sha256"))
