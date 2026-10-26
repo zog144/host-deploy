@@ -23,8 +23,9 @@ from . import fresh_sidecar_dbus as dbus
 from . import fresh_sidecar_install as sidecar
 from . import fresh_watchdog_service as independent_watchdog
 from . import fresh_deadline_timer as hard_deadline
+from . import fresh_aggregate_disk as aggregate
 
-STATE = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25")
+STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
 INSTALL_PATH = STATE / "sidecar-install.json"
 BASELINE_PATH = STATE / "legacy-baseline.json"
@@ -295,6 +296,9 @@ class NativeOwner:
     def sample_exact(self, x):
         _root()
         result = quota.inspect()
+        external = aggregate.inspect_external_native()
+        aggregate.validate(
+            result, external, host_owner_verified=self.is_trusted_native_owner())
         return {
             "host_id": x["host_id"], "project_root": x["project_root"],
             "boot_id": _boot(), "now_seconds": int(time.time()),
@@ -470,6 +474,11 @@ def recover():
     owner does NOT resubmit cross-bootstrap or blindly restore a transient
     controller after a power loss without a reviewed fresh-boot receipt.
     """
+    if os.geteuid() != 0:
+        raise PermissionError("reboot recovery requires protected native root")
+    # Reattach the small accounting pool first: all owner state and the
+    # original budget journal live there, never on unbounded host storage.
+    aggregate.reattach_external_after_boot()
     _root()
     if not verify_schedule():
         raise RuntimeError("untrusted reboot hook")
@@ -562,8 +571,11 @@ def install_approved():
     volume = quota.provision(
         available_after_reservations_bytes=a["available_after_reservations_bytes"],
         mounted_writable_roots=a["writable_roots"])
-    if volume["capacity_bytes"] > budget.ADDITIONAL_DISK_BYTES:
+    if volume["capacity_bytes"] > aggregate.BUILD_BYTES:
         raise RuntimeError("fresh kernel quota limit exceeded")
+    external = aggregate.inspect_external_native()
+    aggregate.validate(
+        volume, external, host_owner_verified=owner.is_trusted_native_owner())
     # Start a distinct PID1-supervised watchdog outside the compiler slice,
     # not through cron. A PID1 reply lost after this durable marker is an
     # UNCERTAIN installation, never permission for a second start.
@@ -613,8 +625,13 @@ def arm_approved():
         raise RuntimeError("sidecar not active")
     _slice_identity()
     current = quota.inspect()
-    if current["capacity_bytes"] > budget.ADDITIONAL_DISK_BYTES:
+    if current["capacity_bytes"] > aggregate.BUILD_BYTES:
         raise RuntimeError("kernel disk quota not active")
+    # Every root-owned journal, metadata artifact and new process log must
+    # have independently verified kernel backing in the OTHER bounded pool.
+    external = aggregate.inspect_external_native()
+    aggregate.validate(
+        current, external, host_owner_verified=owner.is_trusted_native_owner())
     # Install an independent PID1-monotonic overall deadline BEFORE
     # recording the new budget start. Its deadline is strictly earlier
     # than the allowed 21,600-second span even if both watchdogs die.
@@ -647,12 +664,28 @@ def arm_approved():
             "kernel_quota_bytes": current["capacity_bytes"]}
 
 
+def prepare_external():
+    """Privileged once-only 2-GiB accounting pool BEFORE operator stages plan.
+
+    Does not allocate the compiler volume, start services, mutate shared
+    controller, or authorize compilation.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("protected native owner required")
+    available = os.statvfs(aggregate.EXTERNAL_MOUNT.rsplit("/", 1)[0])
+    remaining = available.f_bavail * available.f_frsize
+    return aggregate.provision_external(
+        available_after_reservations_bytes=remaining)
+
+
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
-    if sys.argv[1] == "recover":
+    if sys.argv[1] == "prepare-external":
+        prepare_external()
+    elif sys.argv[1] == "recover":
         recover()
     elif sys.argv[1] == "install":
         install_approved()
