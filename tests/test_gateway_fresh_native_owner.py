@@ -404,6 +404,8 @@ def test_f5_cron_loss_does_not_short_circuit_budget_cancellation(monkeypatch):
                                     owner.CRON_SERVICE else "active"})
     monkeypatch.setattr(owner, "verify_schedule", lambda: True)
     monkeypatch.setattr(quota, "inspect", lambda: {"used_bytes": 100})
+    monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
+    monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner, "_boot", lambda: "boot")
     sample = owner.NativeOwner().sample_exact({
         "host_id": "i-fresh", "project_root": "/reviewed-project",
