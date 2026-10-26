@@ -31,7 +31,7 @@ this change neither adjudicates nor clears historical uncertainty.
 | --- | --- |
 | image-build | `53ad8c2166e6b73dffbc722c2e47ccf3593612ec` |
 | box-control | `b7934882cfacd2fbfd60c7964713ed3dde7f9460` |
-| root-control executable | `19d423cdf16531474de5680117867e12b5bb0620` |
+| root-control executable | `97481da26ae1294c9bf474f93f2ed90b4512b9b1` |
 | build-record | `a866c9c4b0dd385045f00ce2de7d809f5b67c104` |
 | October monthly lock | `project/pins/2026-10-01/commit-pin.py` · `sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36` |
 
@@ -159,7 +159,7 @@ were made by Regular implementation.
 ## Root-control #11 restricted sidecar correction and no-reload native hold
 
 The root-control build-only role was implemented on the exact new executable
-source `19d423cdf16531474de5680117867e12b5bb0620` (documentation review
+source `97481da26ae1294c9bf474f93f2ed90b4512b9b1` (documentation review
 head `231bb7a64df2e1f645fcdfae8e953d83cf932816`).
 The earlier `bc52f2e9...` build backend alone was **not safe** for this
 new socket: its general `systemd_*` / issuer / application APIs remained
