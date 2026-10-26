@@ -22,6 +22,7 @@ from . import fresh_quota_volume as quota
 from . import fresh_sidecar_dbus as dbus
 from . import fresh_sidecar_install as sidecar
 from . import fresh_watchdog_service as independent_watchdog
+from . import fresh_deadline_timer as hard_deadline
 
 STATE = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25")
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -30,6 +31,7 @@ BASELINE_PATH = STATE / "legacy-baseline.json"
 BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
 WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
+DEADLINE_ATTEMPT = STATE / "hard-deadline-attempt.json"
 CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
 SLICE_UNIT = sidecar.SLICE_UNIT
 CRON_SERVICE = "crond.service"
@@ -113,7 +115,8 @@ def _command(args, *, timeout=15):
 
 
 def _show(unit):
-    known = {sidecar.UNIT, independent_watchdog.UNIT, SLICE_UNIT, CRON_SERVICE,
+    known = {sidecar.UNIT, independent_watchdog.UNIT,
+             hard_deadline.UNIT, SLICE_UNIT, CRON_SERVICE,
              "root-control.service", "zog-root-control.service",
              "zog-certbot-seed-root.service"}
     if unit not in known:
@@ -125,7 +128,7 @@ def _show(unit):
             raise ValueError("unapproved systemd readback target")
     raw = _command(["/usr/bin/systemctl", "show", unit,
                     "--property=LoadState,ActiveState,MainPID,InvocationID,"
-                    "ControlGroup,Environment,FragmentPath"])
+                    "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic"])
     return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
 
 
@@ -425,6 +428,41 @@ def watch_loop():
         time.sleep(independent_watchdog.INTERVAL_SECONDS)
 
 
+def hard_stop():
+    """PID1 deadline auxiliary oneshot; never a generic root cancel API.
+
+    Exact original request is reloaded from protected admission. The kernel
+    timer fires early by a margin, and forces the same durable one-attempt
+    stop protocol; unknown cancellation is inspected, never replayed.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    a = _admission(plan)
+    record = budget.read(BUDGET_DIR, a["request_id"])
+    attempt = _read_json(DEADLINE_ATTEMPT)
+    if (attempt.get("plan_sha256") != plan["sha256"]
+            or attempt.get("request_id") != record["request_id"]
+            or attempt.get("boot_id") != record["boot_id"]
+            or attempt.get("state") != "attempted"):
+        raise RuntimeError("PID1 hard deadline ownership changed")
+
+    class KernelDeadlineOwner(NativeOwner):
+        def sample_exact(self, x):
+            result = super().sample_exact(x)
+            # A fixed, protected PID1 timer firing is itself a trusted
+            # termination event; explicitly expire the budget even if an
+            # untrusted wall clock was rolled back or telemetry is missing.
+            result["now_seconds"] = max(result["now_seconds"], x["deadline_seconds"])
+            result["monotonic_seconds"] = max(
+                result["monotonic_seconds"],
+                x["started_monotonic_seconds"] + budget.DEADLINE_SECONDS,
+            )
+            return result
+
+    budget.watch_once(BUDGET_DIR, record["request_id"],
+                      native_owner=KernelDeadlineOwner())
+
+
 def recover():
     """Actual @reboot recovery: restore quota and inspect, never replay jobs.
 
@@ -577,6 +615,26 @@ def arm_approved():
     current = quota.inspect()
     if current["capacity_bytes"] > budget.ADDITIONAL_DISK_BYTES:
         raise RuntimeError("kernel disk quota not active")
+    # Install an independent PID1-monotonic overall deadline BEFORE
+    # recording the new budget start. Its deadline is strictly earlier
+    # than the allowed 21,600-second span even if both watchdogs die.
+    if DEADLINE_ATTEMPT.exists() or DEADLINE_ATTEMPT.is_symlink():
+        raise RuntimeError("hard deadline has already been attempted")
+    if _show(hard_deadline.UNIT).get("LoadState") != "not-found":
+        raise RuntimeError("hard deadline transient timer already exists")
+    _store(DEADLINE_ATTEMPT, {
+        "schema": "host-deploy-fresh-hard-deadline-attempt-v1",
+        "plan_sha256": plan["sha256"], "request_id": a["request_id"],
+        "boot_id": _boot(), "state": "attempted",
+    }, exclusive=True)
+    hard_deadline.start(plan)
+    timer = _show(hard_deadline.UNIT)
+    if (timer.get("LoadState") != "loaded"
+            or timer.get("ActiveState") != "active"
+            or timer.get("Unit") != hard_deadline.STOP_UNIT
+            or not timer.get("NextElapseUSecMonotonic", "").isdigit()
+            or int(timer["NextElapseUSecMonotonic"]) <= int(time.monotonic()*1e6)):
+        raise RuntimeError("independent kernel-backed deadline timer unverified")
     x = budget.begin(
         request_id=a["request_id"], host_id=a["host_id"],
         project_root=plan["project_root"], boot_id=_boot(),
@@ -592,7 +650,7 @@ def arm_approved():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "arm", "watch", "watch-loop", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "recover":
         recover()
@@ -602,6 +660,8 @@ def main():
         arm_approved()
     elif sys.argv[1] == "watch-loop":
         watch_loop()
+    elif sys.argv[1] == "hard-stop":
+        hard_stop()
     else:
         watch()
 
