@@ -141,3 +141,83 @@ def inspect_external_native():
         "unaccounted_writable_roots": ["worker-mounts-unverified",
                                       "journald-namespace-unverified"],
     }
+
+
+
+def provision_external(*, available_after_reservations_bytes):
+    """One-shot native 2-GiB accounting pool, before staging reviewed PLAN.
+
+    Caller must already have independent authority to reserve host capacity.
+    Cannot format any existing rootfs, partition, file, mount or old Project.
+    """
+    import os
+    import stat
+    from .fresh_quota_volume import _private, _run, _BACKEND
+
+    if os.geteuid() != 0:
+        raise PermissionError("protected native accounting pool owner required")
+    if (type(available_after_reservations_bytes) is not int
+            or available_after_reservations_bytes < TOTAL_BYTES):
+        raise RuntimeError("no approved total host capacity for accounting pool")
+    image = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25/external.img")
+    mount = Path(EXTERNAL_MOUNT)
+    _private(image.parent)
+    fs = os.statvfs(image.parent)
+    if fs.f_bavail * fs.f_frsize < available_after_reservations_bytes:
+        raise RuntimeError("host reservation changed before external pool")
+    if image.exists() or image.is_symlink() or os.path.ismount(mount):
+        raise RuntimeError("external accounting already exists; never replace")
+    st = mount.lstat()
+    if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
+            or st.st_mode & 0o022 or mount.is_symlink()
+            or any(mount.iterdir())):
+        raise PermissionError("external accounting mount not empty and trusted")
+    fd = os.open(image, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        os.posix_fallocate(fd, 0, EXTERNAL_BYTES)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    parent_fd = os.open(image.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", "-E", "nodiscard",
+          str(image)], output=False)
+    st = image.stat()
+    if (st.st_size != EXTERNAL_BYTES
+            or st.st_blocks * 512 < EXTERNAL_BYTES):
+        raise RuntimeError("external mkfs discarded reserved host capacity")
+    loop = _run(["/usr/sbin/losetup", "--find", "--show", "--nooverlap",
+                 str(image)])
+    if not _BACKEND.fullmatch(loop):
+        raise RuntimeError("external accounting got unexpected loop backing")
+    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
+          loop, str(mount)], output=False)
+    for suffix in ("owner-state", "owner-state/budget", "artifacts",
+                   "compiler-logs", "controller-logs", "systemd-journal"):
+        new = mount / suffix
+        new.mkdir(mode=0o700, parents=True, exist_ok=False)
+        os.chown(new, 0, 0)
+        os.chmod(new, 0o700)
+    return inspect_external_native()
+
+
+def reattach_external_after_boot():
+    """Recover the SAME allocated accounting image. Never reformat or select another."""
+    import os
+    from .fresh_quota_volume import _private, _run, _BACKEND
+    if os.geteuid() != 0:
+        raise PermissionError("protected external pool reboot recovery requires root")
+    image = Path("/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25/external.img")
+    mount = Path(EXTERNAL_MOUNT)
+    _private(image, file=True)
+    if not os.path.ismount(mount):
+        loop = _run(["/usr/sbin/losetup", "--find", "--show", "--nooverlap",
+                     str(image)])
+        if not _BACKEND.fullmatch(loop):
+            raise RuntimeError("unreviewed external loop on reboot")
+        _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
+              loop, str(mount)], output=False)
+    return inspect_external_native()
