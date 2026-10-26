@@ -260,7 +260,9 @@ def test_native_transient_transport_encodes_exact_pid1_properties(monkeypatch):
         "a(sasb)", [["/usr/bin/python3",
                     ["/usr/bin/python3", "-B", "-m", "zog.root_control"],
                     False]])
-    assert properties["RestartUSec"] == ("t", 5_000_000)
+    assert properties["RestartUSec"] == ("t", 0)
+    assert properties["Restart"] == ("s", "no")
+    assert properties["StartLimitBurst"] == ("u", 1)
     assert properties["StartLimitIntervalUSec"] == ("t", 60_000_000)
     assert properties["Environment"][0] == "as"
     assert properties["NoNewPrivileges"] == ("b", True)
