@@ -41,9 +41,9 @@ def _private(path, *, file=False):
                 or st.st_mode & 0o022):
             raise PermissionError("unprotected quota ancestry")
     st = path.lstat()
-    if (st.st_uid != 0 or st.st_nlink != 1
-            or (not stat.S_ISREG(st.st_mode) if file
-                else not stat.S_ISDIR(st.st_mode))
+    if (st.st_uid != 0
+            or (file and (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1))
+            or (not file and not stat.S_ISDIR(st.st_mode))
             or st.st_mode & 0o022):
         raise PermissionError("unprotected quota object")
     return path
@@ -126,7 +126,16 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
         os.close(directory_fd)
     # Never run mkfs on a caller-selected device: it accepts ONLY the newly
     # reserved frozen image file. Failure keeps it for manual disposition.
-    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", str(IMAGE)], output=False)
+    # mke2fs's default discard issues a hole punch on regular-file-backed
+    # devices. -E nodiscard must retain the fully reserved allocation.
+    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", "-E", "nodiscard",
+          str(IMAGE)], output=False)
+    # Do not mount an incompletely reserved image: a sparse successor could
+    # consume unbudgeted blocks during the compiler's write-heavy phases.
+    formatted = IMAGE.stat()
+    if (formatted.st_size != ADDITIONAL_DISK_BYTES
+            or formatted.st_blocks * 512 < ADDITIONAL_DISK_BYTES):
+        raise RuntimeError("ext4 formatting discarded the reserved image blocks")
     loop = _run(["/usr/sbin/losetup", "--find", "--show", "--nooverlap",
                  str(IMAGE)])
     if not _BACKEND.fullmatch(loop):
