@@ -101,13 +101,17 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
                 for p in mounted_writable_roots)):
         raise RuntimeError("quota capacity or mutable build mounts not approved")
     _private(IMAGE.parent)
+    free = os.statvfs(IMAGE.parent)
+    if free.f_bavail * free.f_frsize < available_after_reservations_bytes:
+        raise RuntimeError("fresh host capacity shrank below protected admission")
     if IMAGE.exists() or IMAGE.is_symlink() or os.path.ismount(MOUNT):
         raise RuntimeError("fresh filesystem already exists; inspect, never replace")
     # Caller precreates/attests the empty mount directory under the strictly
     # new controller Project. This file is root-only and never chmod-writable.
     target = MOUNT.lstat()
-    if not stat.S_ISDIR(target.st_mode) or target.st_mode & 0o022:
-        raise PermissionError("fresh quota mount directory is unsafe")
+    if (not stat.S_ISDIR(target.st_mode) or target.st_mode & 0o022
+            or MOUNT.is_symlink() or any(MOUNT.iterdir())):
+        raise PermissionError("fresh quota mount directory is unsafe or nonempty")
     fd = os.open(IMAGE, os.O_CREAT | os.O_EXCL | os.O_WRONLY |
                  os.O_NOFOLLOW, 0o600)
     try:
