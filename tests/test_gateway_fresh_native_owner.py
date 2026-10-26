@@ -138,3 +138,91 @@ def test_admission_freezes_unique_request_and_mount_under_approved_plan(monkeypa
     monkeypatch.setattr(owner, "_read_json", lambda path: bad)
     with pytest.raises(RuntimeError, match="native admission differs"):
         owner._admission(plan)
+
+
+
+def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatch):
+    """Exercise install orchestrator through fixed root-owned syscall adapters."""
+    calls = []
+    state = tmp_path / "private"
+    state.mkdir(mode=0o700)
+    monkeypatch.setattr(owner, "STATE", state)
+    monkeypatch.setattr(owner, "BUDGET_DIR", state / "budget")
+    monkeypatch.setattr(owner, "_root", lambda: None)
+    plan = {
+        "sha256": "sha256:"+"a"*64, "identity": {
+            "build_uid": 24302, "build_gid": 24302,
+        }, "installed": {"legacy_baseline_sha256": "sha256:"+"b"*64,
+                         "watchdog_receipt_sha256": owner._sha(b"fixed cron")},
+    }
+    monkeypatch.setattr(owner, "_read_json", lambda path: plan)
+    monkeypatch.setattr(sidecar, "review_plan", lambda *_: plan)
+    monkeypatch.setattr(owner, "_admission", lambda plan: {
+        "available_after_reservations_bytes": budget.ADDITIONAL_DISK_BYTES,
+        "writable_roots": [str(quota.MOUNT)],
+    })
+    class Back:
+        def verify_source_and_nss(self, plan): calls.append("native-attest")
+        def validate_old_baseline(self, digest): calls.append("old-baseline")
+    monkeypatch.setattr(owner, "NativeOwner", Back)
+    monkeypatch.setattr(owner, "schedule_text", lambda: "fixed cron")
+    monkeypatch.setattr(owner, "install_schedule",
+                        lambda: calls.append("persistent-cron"))
+    def provision(**kwargs):
+        calls.append("kernel-quota")
+        assert kwargs["mounted_writable_roots"] == [str(quota.MOUNT)]
+        return {"capacity_bytes": budget.ADDITIONAL_DISK_BYTES}
+    monkeypatch.setattr(quota, "provision", provision)
+    monkeypatch.setattr(owner.os, "chown", lambda *a: calls.append("quota-owner"))
+    monkeypatch.setattr(owner.os, "chmod", lambda *a: calls.append("quota-mode"))
+    monkeypatch.setattr(sidecar, "install", lambda p, *, host_owner:
+                        (calls.append("pid1-start") or {
+                            "plan_sha256": p["sha256"], "invocation_id": "new-only",
+                        }))
+    monkeypatch.setattr(owner, "_store", lambda path, item, *, exclusive:
+                        calls.append("activation-checkpoint"))
+    result = owner.install_approved()
+    assert result["invocation_id"] == "new-only"
+    assert calls.index("persistent-cron") < calls.index("kernel-quota")
+    assert calls.index("kernel-quota") < calls.index("pid1-start")
+    assert calls.index("pid1-start") < calls.index("activation-checkpoint")
+    assert calls.count("old-baseline") == 2
+
+
+def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(monkeypatch):
+    x = {
+        "sha256": "sha256:"+"a"*64, "host_id": "i-fresh",
+        "project_root": "/home/zog-cross-owner/fresh-cross-bootstrap-oct25",
+        "installed": {"legacy_baseline_sha256": "sha256:"+"b"*64,
+                     "watchdog_receipt_sha256": "sha256:"+"c"*64},
+    }
+    original = "f"*32
+    monkeypatch.setattr(owner, "_root", lambda: None)
+    monkeypatch.setattr(owner, "_read_json", lambda path:
+                        {"plan_sha256": x["sha256"]} if path == owner.STATE / "activation.json"
+                        else x)
+    monkeypatch.setattr(owner, "_admission", lambda plan: {
+        "request_id": original, "host_id": x["host_id"],
+    })
+    class Native:
+        def validate_old_baseline(self, digest): assert digest == "sha256:"+"b"*64
+        def observe_unit(self, unit): return {"active": True}
+    monkeypatch.setattr(owner, "NativeOwner", Native)
+    monkeypatch.setattr(owner, "verify_schedule", lambda: True)
+    monkeypatch.setattr(owner, "_show", lambda unit: {"ActiveState": "active"})
+    monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
+    monkeypatch.setattr(owner, "_boot", lambda: "fresh-boot")
+    monkeypatch.setattr(quota, "inspect", lambda: {
+        "capacity_bytes": budget.ADDITIONAL_DISK_BYTES,
+        "used_bytes": 4096,
+    })
+    monkeypatch.setattr(owner.time, "time", lambda: 100000)
+    monkeypatch.setattr(owner.time, "monotonic", lambda: 1000)
+    record = []
+    monkeypatch.setattr(owner.budget, "write_once",
+                        lambda path, value: record.append(value))
+    result = owner.arm_approved()
+    assert result["request_id"] == original
+    assert result["kernel_quota_bytes"] == budget.ADDITIONAL_DISK_BYTES
+    assert len(record) == 1 and record[0]["request_id"] == original
+    assert record[0]["status"] == "active"
