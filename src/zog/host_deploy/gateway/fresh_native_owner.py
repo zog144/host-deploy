@@ -112,13 +112,14 @@ def _command(args, *, timeout=15):
 
 def _show(unit):
     known = {sidecar.UNIT, SLICE_UNIT, CRON_SERVICE,
-             "root-control.service", "zog-root-control.service"}
+             "root-control.service", "zog-root-control.service",
+             "zog-certbot-seed-root.service"}
     if unit not in known:
         # The historical unit identity comes only from an exact protected
         # root-only baseline, never from a GitHub/SSM request.
         historic = _read_json(BASELINE_PATH)
         if (unit != historic.get("historical_unit")
-                or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}\\.service", unit)):
+                or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}\.service", unit)):
             raise ValueError("unapproved systemd readback target")
     raw = _command(["/usr/bin/systemctl", "show", unit,
                     "--property=LoadState,ActiveState,MainPID,InvocationID,"
@@ -160,7 +161,8 @@ def _legacy():
             "shared_unit", "root_control_show", "historical_unit",
             "historical_show", "historical_bad_setting_sha256"}
             or historic["shared_unit"] not in (
-                "root-control.service", "zog-root-control.service")
+                "root-control.service", "zog-root-control.service",
+                "zog-certbot-seed-root.service")
             or not isinstance(historic["historical_show"], dict)
             or historic["historical_show"].get("LoadState") != "bad-setting"
             or _sha(_bytes(historic["historical_show"])) !=
