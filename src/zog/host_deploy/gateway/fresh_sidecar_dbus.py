@@ -7,7 +7,7 @@ No disk .service file, daemon-reload, generic unit or arbitrary ExecStart.
 import asyncio
 import os
 
-from .fresh_sidecar_install import UNIT, ROLE, SOCKET, SLICE_UNIT, LOG_NAMESPACE
+from .fresh_sidecar_install import UNIT, ROLE, SOCKET, SLICE_UNIT, LOG_NAMESPACE, REGISTRATION_SOURCE, REGISTRATION_DEST
 
 
 def _checked_properties(unit, mode, properties):
@@ -17,7 +17,7 @@ def _checked_properties(unit, mode, properties):
         "Description", "Type", "ExecStart", "Environment", "User", "Group",
         "Restart", "RestartSec", "StartLimitBurst",
         "StartLimitIntervalSec", "StandardOutput", "StandardError",
-        "NoNewPrivileges", "Slice", "LogNamespace",
+        "NoNewPrivileges", "Slice", "LogNamespace", "BindPaths",
     }
     if set(properties) != required:
         raise ValueError("unsupported transient systemd service property")
@@ -34,6 +34,7 @@ def _checked_properties(unit, mode, properties):
             or properties["StartLimitBurst"] != 1
             or properties["StartLimitIntervalSec"] != "60s"
             or properties["StandardOutput"] != "journal"
+            or properties["BindPaths"] != [[REGISTRATION_SOURCE, REGISTRATION_DEST, False, 0]]
             or properties["LogNamespace"] != LOG_NAMESPACE
             or properties["StandardError"] != "journal"
             or properties["NoNewPrivileges"] is not True):
@@ -68,6 +69,7 @@ def _checked_properties(unit, mode, properties):
         ("StandardOutput", "s", "journal"),
         ("StandardError", "s", "journal"),
         ("LogNamespace", "s", LOG_NAMESPACE),
+        ("BindPaths", "a(ssbt)", [[REGISTRATION_SOURCE, REGISTRATION_DEST, False, 0]]),
         ("NoNewPrivileges", "b", True),
     ]
 
