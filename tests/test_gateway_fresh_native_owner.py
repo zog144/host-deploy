@@ -149,13 +149,15 @@ def test_admission_freezes_unique_request_and_mount_under_approved_plan(monkeypa
 
 
 
-def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatch):
+def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     """Exercise install orchestrator through fixed root-owned syscall adapters."""
     calls = []
     state = tmp_path / "private"
     state.mkdir(mode=0o700)
     monkeypatch.setattr(owner, "STATE", state)
     monkeypatch.setattr(owner, "BUDGET_DIR", state / "budget")
+    (state / "budget").mkdir(mode=0o700)
+    monkeypatch.setattr(owner.budget, "_protected_root", lambda path: Path(path))
     monkeypatch.setattr(owner, "_root", lambda: None)
     plan = {
         "sha256": "sha256:"+"a"*64, "identity": {
@@ -200,7 +202,10 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     # This fixture exercises ordering; aggregate kernel proof has separate
     # real policy/negative tests in test_gateway_aggregate_budget.py.
     monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
+    monkeypatch.setattr(owner.aggregate, "inspect_external_pool_native", lambda: {})
     monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
+    monkeypatch.setattr(quota, "inspect", lambda: {"capacity_bytes": aggregate.BUILD_BYTES})
+    monkeypatch.setattr(owner.project_state, "inspect", lambda uid: {"mount_verified": True})
     monkeypatch.setattr(owner.os, "chown", lambda *a: calls.append("quota-owner"))
     monkeypatch.setattr(owner.os, "chmod", lambda *a: calls.append("quota-mode"))
     monkeypatch.setattr(sidecar, "install", lambda p, *, host_owner:
@@ -210,9 +215,11 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     monkeypatch.setattr(owner, "_store", lambda path, item, *, exclusive:
                         calls.append("watchdog-attempt" if path == owner.WATCHDOG_ATTEMPT
                                      else "activation-checkpoint"))
+    prepared = owner.prepare_work()
+    assert prepared["compiler_authorized"] is False
     result = owner.install_approved()
     assert result["invocation_id"] == "new-only"
-    assert calls.index("persistent-cron") < calls.index("kernel-quota")
+    assert calls.index("kernel-quota") < calls.index("persistent-cron")
     assert calls.index("kernel-quota") < calls.index("project-state-bind")
     assert calls.index("project-state-bind") < calls.index("pid1-watchdog")
     assert calls.index("kernel-quota") < calls.index("pid1-watchdog")
@@ -220,7 +227,7 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     assert calls.index("pid1-watchdog") < calls.index("pid1-start")
     assert calls.index("kernel-quota") < calls.index("pid1-start")
     assert calls.index("pid1-start") < calls.index("activation-checkpoint")
-    assert calls.count("old-baseline") == 2
+    assert calls.count("old-baseline") == 4
 
 
 def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, monkeypatch):
