@@ -129,7 +129,8 @@ def test_reboot_reconciles_quota_and_stores_blocked_receipt_without_submit(tmp_p
 def test_admission_freezes_unique_request_and_mount_under_approved_plan(monkeypatch):
     plan = {"sha256": "sha256:"+"a"*64, "host_id": "i-new"}
     receipt = {
-        "schema": "host-deploy-fresh-native-admission-v1",
+        "schema": "host-deploy-fresh-native-admission-dedicated-v2",
+        "budget_scope": aggregate.BUDGET_SCOPE,
         "plan_sha256": plan["sha256"], "host_id": "i-new",
         "request_id": "f"*32, "seed_generation": "new-immutable",
         "seed_manifest_sha256": "sha256:"+"c"*64,
@@ -139,6 +140,17 @@ def test_admission_freezes_unique_request_and_mount_under_approved_plan(monkeypa
     }
     monkeypatch.setattr(owner, "_read_json", lambda path: receipt)
     assert owner._admission(plan) == receipt
+    old_policy = deepcopy(receipt)
+    old_policy["schema"] = "host-deploy-fresh-native-admission-v1"
+    monkeypatch.setattr(owner, "_read_json", lambda path: old_policy)
+    with pytest.raises(RuntimeError, match="native admission differs"):
+        owner._admission(plan)
+    changed_scope = deepcopy(receipt)
+    changed_scope["budget_scope"] = "strict-total-host-writes"
+    monkeypatch.setattr(owner, "_read_json", lambda path: changed_scope)
+    with pytest.raises(RuntimeError, match="native admission differs"):
+        owner._admission(plan)
+    monkeypatch.setattr(owner, "_read_json", lambda path: receipt)
     bad = deepcopy(receipt)
     bad["writable_roots"] = ["/state/old-root"]
     monkeypatch.setattr(owner, "_read_json", lambda path: bad)
