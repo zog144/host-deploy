@@ -280,6 +280,9 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
     monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
     monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
+    monkeypatch.setattr(owner.project_state, "inspect",
+                        lambda uid: {"mount_verified": True} if uid == 24301
+                        else pytest.fail("wrong controller UID"))
     monkeypatch.setattr(owner, "_boot", lambda: "fresh-boot")
     monkeypatch.setattr(quota, "inspect", lambda: {
         "capacity_bytes": aggregate.BUILD_BYTES,
