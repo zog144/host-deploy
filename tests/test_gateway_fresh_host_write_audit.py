@@ -29,7 +29,7 @@ def test_pid1_mount_covering_and_kernel_device_boundaries():
 
 @pytest.mark.parametrize("bad", [
     b"", b"invalid\n", b"1 2 8:1 / relative rw - ext4 dev rw\n",
-    b"1 2 8:1 / / rw - ext4 dev rw\n",
+    b"1 2 8:1 / / rw - ext4\n",
     b"0" * (audit._MAX_MOUNTINFO_BYTES + 1),
 ])
 def test_missing_root_and_invalid_mountinfo_fail_closed(bad):
