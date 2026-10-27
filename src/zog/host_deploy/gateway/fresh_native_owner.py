@@ -612,9 +612,10 @@ def _admission(plan):
             "schema", "plan_sha256", "host_id", "request_id",
             "seed_generation", "seed_manifest_sha256",
             "capabilities_sha256", "available_after_reservations_bytes",
-            "writable_roots", "fresh_slice"}):
+            "writable_roots", "fresh_slice", "budget_scope"}):
         raise RuntimeError("fresh admission receipt incomplete")
-    if (a["schema"] != "host-deploy-fresh-native-admission-v1"
+    if (a["schema"] != "host-deploy-fresh-native-admission-dedicated-v2"
+            or a["budget_scope"] != aggregate.BUDGET_SCOPE
             or a["plan_sha256"] != plan["sha256"]
             or a["host_id"] != plan["host_id"]
             or a["fresh_slice"] != SLICE_UNIT
@@ -805,8 +806,10 @@ def arm_approved():
         monitor_receipt_sha256=plan["installed"]["watchdog_receipt_sha256"])
     budget.write_once(BUDGET_DIR, x)
     return {"request_id": x["request_id"], "status": x["status"],
+            "budget_scope": aggregate.BUDGET_SCOPE,
             "deadline_seconds": x["deadline_seconds"],
-            "kernel_quota_bytes": current["capacity_bytes"]}
+            "dedicated_build_capacity_bytes": current["capacity_bytes"],
+            "dedicated_total_reserved_bytes": aggregate.TOTAL_BYTES}
 
 
 def prepare_journal():
