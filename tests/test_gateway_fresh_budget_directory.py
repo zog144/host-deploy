@@ -24,6 +24,7 @@ def prepared(tmp_path, monkeypatch):
     monkeypatch.setattr(owner, "STATE", state)
     monkeypatch.setattr(owner, "BUDGET_DIR", budget)
     monkeypatch.setattr(owner.budget, "_protected_root", lambda p: Path(p))
+    monkeypatch.setattr(owner.os.path, "ismount", lambda p: str(p) == str(pool))
     # CI runs as a nonroot actor. Substitute only the budget directory's
     # UID/GID readback; keep real filesystem inodes and directory contents.
     original_lstat = Path.lstat
@@ -68,6 +69,15 @@ def test_missing_budget_directory_does_not_autocreate(tmp_path, monkeypatch):
     assert not budget.exists()
 
 
+def test_absent_external_mount_is_not_treated_as_bounded(
+        tmp_path, monkeypatch):
+    _, _, budget = prepared(tmp_path, monkeypatch)
+    monkeypatch.setattr(owner.os.path, "ismount", lambda path: False)
+    with pytest.raises(RuntimeError, match="accounting filesystem absent"):
+        owner._budget_directory_prepared(require_empty=True)
+    assert budget.is_dir()
+
+
 def test_foreign_dev_or_mode_are_not_trusted(tmp_path, monkeypatch):
     _, _, budget = prepared(tmp_path, monkeypatch)
     original = Path.lstat
@@ -95,3 +105,5 @@ def test_no_duplicate_mkdir_and_preflight_precedes_30gib_allocation():
     assert "_budget_directory_prepared(require_empty=True)" in install
     assert "_budget_directory_prepared(require_empty=True)" in arm
     assert "BUDGET_DIR.mkdir" not in prepare + install + arm
+    assert install.index("aggregate.validate_pre_activation(") < (
+        install.index("install_schedule()"))
