@@ -100,3 +100,24 @@ def test_diagnostic_entrypoint_has_no_generic_path_or_grant():
     assert "aggregate.validate" not in inspect.getsource(owner.inspect_host_write_surfaces)
     assert "additional_shared_host_write_limit_verified" in inspect.getsource(audit.inspect)
     assert set(audit.SURFACES).issubset(set(aggregate.UNVERIFIED_WRITERS))
+
+
+def test_readonly_pid1_audit_requires_no_preallocated_owner_state(monkeypatch):
+    """Stage A Work can obtain evidence without any 2/30 GiB image creation."""
+    monkeypatch.setattr(owner.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(owner.Path, "read_text", lambda *_: "systemd\n")
+    monkeypatch.setattr(owner, "_root", lambda: pytest.fail(
+        "read-only preflight must not require mutable quota owner-state"))
+    receipt = {"status": "evidence-only-no-aggregate-admission"}
+    monkeypatch.setattr(owner.host_write_audit, "inspect", lambda: receipt)
+    assert owner.inspect_host_write_surfaces() is receipt
+
+
+def test_pid1_readonly_audit_refuses_unprivileged_or_nonsystemd(monkeypatch):
+    monkeypatch.setattr(owner.os, "geteuid", lambda: 1000)
+    with pytest.raises(PermissionError):
+        owner.inspect_host_write_surfaces()
+    monkeypatch.setattr(owner.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(owner.Path, "read_text", lambda *_: "python\n")
+    with pytest.raises(PermissionError):
+        owner.inspect_host_write_surfaces()
