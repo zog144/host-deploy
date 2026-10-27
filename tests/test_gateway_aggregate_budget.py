@@ -147,3 +147,30 @@ def test_external_provision_returns_preparation_not_final_attestation():
     assert "return inspect_external_pool_native()" in recovery
     assert "return inspect_external_native()" not in source
     assert "return inspect_external_native()" not in recovery
+
+
+def test_preactivation_allows_only_fixed_unresolved_classes_without_arming():
+    external_pool = external()
+    expected = [
+        "worker-mounts-unverified",
+        "root-control-registration-unverified",
+        "default-journal-and-pid1-unverified",
+    ]
+    external_pool["unaccounted_writable_roots"] = expected
+    preparation = aggregate.validate_pre_activation(
+        work(), external_pool, host_owner_verified=True)
+    assert preparation["status"] == "preactivation-only"
+    assert preparation["outstanding_classes"] == expected
+    assert external_pool["unaccounted_writable_roots"] == expected
+    # No caller may use the relaxed preparation result as final admission.
+    with pytest.raises(RuntimeError):
+        aggregate.validate(work(), external_pool, host_owner_verified=True)
+    for bad in ([], expected[:-1], list(reversed(expected)),
+                expected + ["new-unaccounted-writer"]):
+        changed = deepcopy(external_pool)
+        changed["unaccounted_writable_roots"] = bad
+        with pytest.raises(RuntimeError):
+            aggregate.validate_pre_activation(
+                work(), changed, host_owner_verified=True)
+    with pytest.raises(PermissionError):
+        aggregate.validate_pre_activation(work(), external_pool)
