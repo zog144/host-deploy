@@ -1,4 +1,4 @@
-"""Source security contract for 6h PID1 timer and 30+2 GiB TOTAL pool."""
+"""Source contract for 6h timer and fixed 30+2 GiB dedicated reservation."""
 from copy import deepcopy
 import io
 
@@ -16,6 +16,8 @@ from zog.host_deploy.gateway import compiler_execution_identity as identity
 def external():
     return {
         "schema": aggregate.SCHEMA,
+        "budget_scope": aggregate.BUDGET_SCOPE,
+        "excluded_shared_host_overhead": list(aggregate.EXCLUDED_SHARED_HOST_WRITERS),
         "mount": aggregate.EXTERNAL_MOUNT,
         "limit_bytes": aggregate.EXTERNAL_BYTES,
         "kernel_enforced": True, "mount_verified": True,
@@ -51,7 +53,10 @@ def test_total_disk_source_policy_and_separate_build_quota():
     assert aggregate.BUILD_BYTES + aggregate.EXTERNAL_BYTES == aggregate.TOTAL_BYTES
     assert quota.BUILD_BYTES == aggregate.BUILD_BYTES
     result = aggregate.validate(work(), external(), host_owner_verified=True)
-    assert result["aggregate_max_bytes"] == aggregate.TOTAL_BYTES
+    assert result["dedicated_reserved_max_bytes"] == aggregate.TOTAL_BYTES
+    assert result["budget_scope"] == aggregate.BUDGET_SCOPE
+    assert result["excluded_shared_host_overhead"] == list(
+        aggregate.EXCLUDED_SHARED_HOST_WRITERS)
     assert "systemd-journal" in result["bounded_classes"]
 
 
@@ -151,7 +156,7 @@ def test_external_provision_returns_preparation_not_final_attestation():
 
 def test_preactivation_allows_only_fixed_unresolved_classes_without_arming():
     external_pool = external()
-    expected = list(aggregate.UNVERIFIED_WRITERS)
+    expected = list(aggregate.DEDICATED_UNVERIFIED_WRITERS)
     external_pool["unaccounted_writable_roots"] = expected
     preparation = aggregate.validate_pre_activation(
         work(), external_pool, host_owner_verified=True)
@@ -186,11 +191,63 @@ def test_shared_host_writes_do_not_disappear_when_images_are_fully_bounded():
     ):
         assert expected in names
     pool = external()
-    pool["unaccounted_writable_roots"] = list(aggregate.UNVERIFIED_WRITERS)
+    pool["unaccounted_writable_roots"] = list(aggregate.DEDICATED_UNVERIFIED_WRITERS)
     with pytest.raises(RuntimeError, match="not kernel bounded"):
         aggregate.validate(work(), pool, host_owner_verified=True)
     claim = aggregate.validate_pre_activation(
         work(), pool, host_owner_verified=True)
     assert claim["status"] == "preactivation-only"
-    assert set(claim["outstanding_classes"]) == names
-    assert pool["unaccounted_writable_roots"] == list(aggregate.UNVERIFIED_WRITERS)
+    assert set(claim["outstanding_classes"]) == set(
+        aggregate.DEDICATED_UNVERIFIED_WRITERS)
+    assert set(claim["excluded_shared_host_overhead"]) == set(
+        aggregate.EXCLUDED_SHARED_HOST_WRITERS)
+    assert pool["unaccounted_writable_roots"] == list(
+        aggregate.DEDICATED_UNVERIFIED_WRITERS)
+
+
+@pytest.mark.parametrize("change", ["old-schema", "wrong-scope",
+                                     "altered-exclusion", "omitted-exclusion"])
+def test_dedicated_budget_scope_cannot_be_omitted_or_forged(change):
+    item = external()
+    if change == "old-schema":
+        item["schema"] = "host-deploy-fresh-aggregate-kernel-storage-v1"
+    elif change == "wrong-scope":
+        item["budget_scope"] = "strict-total-host-writes"
+    elif change == "altered-exclusion":
+        item["excluded_shared_host_overhead"].append(
+            "worker-mounts-unverified")
+    else:
+        del item["excluded_shared_host_overhead"]
+    with pytest.raises(RuntimeError):
+        aggregate.validate(work(), item, host_owner_verified=True)
+
+
+def test_only_dedicated_unresolved_writer_blocks_final_admission():
+    item = external()
+    item["unaccounted_writable_roots"] = [
+        "worker-mounts-unverified"]
+    with pytest.raises(RuntimeError):
+        aggregate.validate(work(), item, host_owner_verified=True)
+    assert set(aggregate.DEDICATED_UNVERIFIED_WRITERS).isdisjoint(
+        aggregate.EXCLUDED_SHARED_HOST_WRITERS)
+
+
+def test_budget_clock_unchanged_and_build_image_usage_enforced():
+    start = budget.begin(
+        request_id="b"*32, host_id="fresh", project_root="/fresh",
+        boot_id="new", now_seconds=500, monotonic_seconds=100,
+        used_bytes=10, sidecar_plan_sha256="sha256:"+"a"*64,
+        monitor_receipt_sha256="sha256:"+"c"*64)
+    assert start["deadline_seconds"] == 500 + 21600
+    telemetry = {
+        "host_id": "fresh", "project_root": "/fresh", "boot_id": "new",
+        "now_seconds": 510, "monotonic_seconds": 110,
+        "used_bytes": budget.BUILD_IMAGE_BYTES,
+        "monitor_receipt_sha256": "sha256:"+"c"*64,
+        "watchdog_active": True, "sidecar_active": True,
+    }
+    assert budget.evaluate(start, **telemetry) == "stop"
+    telemetry["used_bytes"] = 11
+    assert budget.evaluate(start, **telemetry) == "active"
+    telemetry["monotonic_seconds"] = 100 + 21600
+    assert budget.evaluate(start, **telemetry) == "stop"
