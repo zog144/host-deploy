@@ -24,15 +24,19 @@ def _fixture(tmp_path, monkeypatch):
     work = project / "work"
     source = work / "state"
     dest = project / "state"
+    resources = work / "controller-build-resources"
     source.mkdir(parents=True, mode=0o700)
+    resources.mkdir(mode=0o700)
     dest.mkdir(mode=0o700)
     os.chmod(project, 0o700)
     os.chmod(work, 0o700)
     os.chmod(source, 0o700)
+    os.chmod(resources, 0o700)
     os.chmod(dest, 0o700)
     monkeypatch.setattr(state, "PROJECT_ROOT", project)
     monkeypatch.setattr(state, "SOURCE", source)
     monkeypatch.setattr(state, "DESTINATION", dest)
+    monkeypatch.setattr(state, "RESOURCE_ROOT", resources)
     monkeypatch.setattr(quota, "MOUNT", work)
     monkeypatch.setattr(quota, "inspect", lambda: {
         "backing_device": "/dev/loop7", "image_bytes": 30 * 1024**3,
@@ -42,6 +46,10 @@ def _fixture(tmp_path, monkeypatch):
 
 def test_same_device_is_not_a_mount_proof(tmp_path, monkeypatch):
     _, _, source, dest = _fixture(tmp_path, monkeypatch)
+    original = state._directory
+    monkeypatch.setattr(state, "_directory", lambda p, uid, **k:
+                        source.stat() if Path(p) == state.RESOURCE_ROOT
+                        else original(p, uid, **k))
     monkeypatch.setattr(state, "_command", lambda args: pytest.fail(
         "inode mismatch must reject before trusting mount labels"))
     with pytest.raises(RuntimeError, match="escaped"):
@@ -56,7 +64,7 @@ def test_real_bind_identity_requires_loop_source_and_no_nested_mounts(
     # Simulate same inode after an actual bind; retain genuine filesystem dev.
     original_directory = state._directory
     monkeypatch.setattr(state, "_directory", lambda path, x, **kwargs:
-                        stat_result if Path(path) == dest
+                        stat_result if Path(path) in (dest, state.RESOURCE_ROOT)
                         else original_directory(path, x, **kwargs))
     device = f"{os.major(stat_result.st_dev)}:{os.minor(stat_result.st_dev)}"
     responses = {
@@ -85,6 +93,7 @@ def test_real_bind_identity_requires_loop_source_and_no_nested_mounts(
 def test_protected_install_fs_syncs_intent_before_fixed_mount(tmp_path, monkeypatch):
     project, work, source, dest = _fixture(tmp_path, monkeypatch)
     source.rmdir()
+    state.RESOURCE_ROOT.rmdir()
     log = []
     protected = tmp_path / "owner-state"
     protected.mkdir()
@@ -114,6 +123,7 @@ def test_protected_install_fs_syncs_intent_before_fixed_mount(tmp_path, monkeypa
 def test_active_sidecar_is_rejected_before_mount(tmp_path, monkeypatch):
     _, _, source, _ = _fixture(tmp_path, monkeypatch)
     source.rmdir()
+    state.RESOURCE_ROOT.rmdir()
     monkeypatch.setattr(state.os, "geteuid", lambda: 0)
     monkeypatch.setattr(owner, "_root", lambda: None)
     monkeypatch.setattr(state, "_directory", lambda *a, **k: SimpleNamespace())
