@@ -28,3 +28,12 @@ The source does **not yet prove** the whole total 32-GiB bound. The native accou
 - **Trusted installed receipts:** After installed-byte/machine/UID/primary-GID/seed/archive and old hash readback, Work may make a separately reviewed disposable native verification. The branch remains DRAFT until all source/native gates pass.
 
 **No retained EC2 mutation, protected daemon activation, mount, reboot, compiler resubmission or new EC2 resource is part of this Regular source pass.** Original #4 remains frozen. Existing authorization still applies only to one **new** fresh cross-bootstrap *after* Stage A GO.
+
+
+## 2026-10-27 follow-up — prepare/final inspection ordering
+
+Fresh first-boot provisioning and reboot image reattachment must not call the final journal-backed readback before the new journal namespace bind mounts have been installed. The initial 2-GiB image cannot be mounted until it is provisioned; checking for the as-yet-uninstalled journal binds inside the image preparation step creates a circular, irrecoverable dependency. Source now separates `inspect_external_pool_native` (real loop/ext4/allocated bytes and protected class roots, explicitly retaining all unverified writable-root classes) from `inspect_external_native` (same pool plus actual journal bind-mount evidence). Provisioning and reboot reattachment return only the preliminary pool observation. **Neither permits `aggregate.validate` to arm a job**: all three unverified classes remain fail-closed, and final journal inspection must succeed separately.
+
+**Native sequencing:** preauthorize retained-host capacity; prepare the original fixed external image once; mount it and validate its backing without treating it as admission; create/validate exact empty journal target directories under separately reviewed host ownership; install BOTH fixed journal bind mounts before namespace activation; verify final journal inode and device; only afterward attempt the rest of the independent admission. Reboot recovery must never reformat the image or assume that former bind mounts survived; re-establish/verify mounts before any namespace process and block uncertain recovery. A partial bind setup must be reviewed and recovered, not blindly rerun.
+
+**Remaining total-budget gap is unchanged:** host-native PID1/default journald, cron/SSM and installation/mountpoint metadata, plus proof of every worker mount and write path, cannot be counted by assertion. Source remains NO-GO, draft/unmerged. No original job mutation, EC2 operation, or compiler submission.
