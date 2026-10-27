@@ -37,6 +37,7 @@ DEADLINE_ATTEMPT = STATE / "hard-deadline-attempt.json"
 CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
 SLICE_UNIT = sidecar.SLICE_UNIT
 CRON_SERVICE = "crond.service"
+CRON_LOG = aggregate.EXTERNAL_MOUNT + "/controller-logs/cron.log"
 SCHEMA = "host-deploy-native-sidecar-owner-v1"
 HISTORICAL_REQUEST_ID = "371da99f23764180aad37d8e4e83595b"
 
@@ -386,8 +387,8 @@ def schedule_text():
             raise PermissionError("unreviewed scheduler executable path")
     prefix = "PYTHONPATH=" + source + " " + binary + " -B -m zog.host_deploy.gateway.fresh_native_owner"
     return ("SHELL=/bin/sh\nPATH=/usr/sbin:/usr/bin:/bin\n"
-            "* * * * * root " + prefix + " watch\n"
-            "@reboot root " + prefix + " recover\n")
+            "* * * * * root " + prefix + " watch >>" + CRON_LOG + " 2>&1\n"
+            "@reboot root " + prefix + " recover >>" + CRON_LOG + " 2>&1\n")
 
 
 def install_schedule():
