@@ -1,0 +1,21 @@
+name: Disposable fresh storage and journal acceptance
+on:
+  push:
+    branches: [work/native-storage-20261027]
+permissions:
+  contents: read
+jobs:
+  native-storage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Native component acceptance on disposable runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            PYTHONDONTWRITEBYTECODE=1 python3 -B tests/native/fresh_storage_acceptance.py
