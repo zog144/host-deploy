@@ -13,7 +13,7 @@ RESTART_SECONDS = 1
 
 
 def properties(plan):
-    from .fresh_sidecar_install import SCHEMA
+    from .fresh_sidecar_install import SCHEMA, LOG_NAMESPACE
     from .fresh_native_owner import STATE
     if (type(plan) is not dict or plan.get("schema") != SCHEMA
             or plan.get("unit") != "zog-fresh-cross-bootstrap-oct25-controller.service"):
@@ -36,6 +36,7 @@ def properties(plan):
         "Restart": "always", "RestartUSec": 1_000_000,
         "NoNewPrivileges": True,
         "StandardOutput": "journal", "StandardError": "journal",
+        "LogNamespace": LOG_NAMESPACE,
     }
 
 
@@ -54,6 +55,7 @@ def message(plan):
         "Restart": ("s", "always"), "RestartUSec": ("t", 1_000_000),
         "NoNewPrivileges": ("b", True),
         "StandardOutput": ("s", "journal"), "StandardError": ("s", "journal"),
+        "LogNamespace": ("s", p["LogNamespace"]),
     }
     return Message(
         destination="org.freedesktop.systemd1",
