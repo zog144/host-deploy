@@ -488,7 +488,7 @@ def hard_stop():
         # do not invent a successful cancellation receipt.
         if _events()["populated"] == "1":
             with (CGROUP / "cgroup.kill").open("w") as stream:
-                stream.write("1\\n")
+                stream.write("1\n")
                 stream.flush()
         raise RuntimeError(
             "kernel deadline stop issued/uncertain; ledger requires native "
