@@ -25,6 +25,7 @@ from . import fresh_watchdog_service as independent_watchdog
 from . import fresh_deadline_timer as hard_deadline
 from . import fresh_aggregate_disk as aggregate
 from . import fresh_journal_backing as journal_backing
+from . import fresh_project_state as project_state
 
 STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -314,6 +315,7 @@ class NativeOwner:
     def sample_exact(self, x):
         _root()
         result = quota.inspect()
+        project_state.inspect(_read_json(PLAN_PATH)["identity"]["controller_uid"])
         external = aggregate.inspect_external_native()
         aggregate.validate(
             result, external, host_owner_verified=self.is_trusted_native_owner())
@@ -528,6 +530,15 @@ def recover():
     if not verify_schedule():
         raise RuntimeError("untrusted reboot hook")
     volume = quota.reattach_after_boot()
+    # Mounts installed on the previous boot are not persistent. Do not
+    # silently restore a host-wide Project bind: a new boot needs a separate
+    # reviewed native binding. Until then, the existing request must fail
+    # closed and watchdog inspection cannot resume work.
+    try:
+        project_state.inspect(_read_json(PLAN_PATH)["identity"]["controller_uid"])
+        state_status = "verified"
+    except (OSError, RuntimeError, PermissionError, KeyError, ValueError):
+        state_status = "project-state-bind-unverified-no-replay"
     # Every boot is independently identified; we do not trust a transient
     # pre-reboot PID1 InvocationID or assume running compiler services survived.
     # No auto-submit, cleanup, old-controller reset or silent new sidecar start.
@@ -539,6 +550,7 @@ def recover():
             "quota_image": str(quota.IMAGE),
             "quota_capacity_bytes": volume["capacity_bytes"],
             "status": "observed-reboot-needs-fresh-controller-attestation",
+            "project_state": state_status,
         }, exclusive=True)
     else:
         recorded = _read_json(journal)
@@ -618,6 +630,10 @@ def install_approved():
         mounted_writable_roots=a["writable_roots"])
     if volume["capacity_bytes"] > aggregate.BUILD_BYTES:
         raise RuntimeError("fresh kernel quota limit exceeded")
+    # root-control writes imported roots and workspaces under Project/state,
+    # not under Project/work. Bind that exact new state directory to the
+    # protected 30-GiB image before any privileged controller activation.
+    project_state.install_bind(plan["identity"]["controller_uid"])
     external = aggregate.inspect_external_native()
     aggregate.validate(
         volume, external, host_owner_verified=owner.is_trusted_native_owner())
@@ -670,6 +686,7 @@ def arm_approved():
         raise RuntimeError("sidecar not active")
     _slice_identity()
     current = quota.inspect()
+    project_state.inspect(plan["identity"]["controller_uid"])
     if current["capacity_bytes"] > aggregate.BUILD_BYTES:
         raise RuntimeError("kernel disk quota not active")
     # Every root-owned journal, metadata artifact and new process log must
