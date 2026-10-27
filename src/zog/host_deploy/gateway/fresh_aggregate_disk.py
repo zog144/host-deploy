@@ -131,15 +131,27 @@ def inspect_external_native():
         if (not stat.S_ISDIR(st.st_mode) or st.st_dev != dev
                 or path.is_symlink() or path.resolve() != path):
             raise RuntimeError("external accounting root is not on bounded mount: " + cls)
+    # Both real journal paths must be mounted from this exact loop filesystem
+    # BEFORE a fresh log namespace service may be started. No directory-name
+    # shortcut can clear this requirement.
+    from . import fresh_journal_backing
+    journal = fresh_journal_backing.inspect()
+    if (journal.get("external_pool") != str(mount)
+            or journal.get("verified") is not True):
+        raise RuntimeError("journal namespace backing is unverified")
     return {
         "schema": SCHEMA, "mount": str(mount), "limit_bytes": limit,
         "kernel_enforced": True, "mount_verified": True,
         "allocation_verified": True,
         "class_roots": {key: str(path) for key, path in roots.items()},
-        # UNKNOWN UNTIL actual kernel-worker mount and journal-namespace
-        # acceptance. Do not infer an empty escape list just from 6 dirs.
-        "unaccounted_writable_roots": ["worker-mounts-unverified",
-                                      "journald-namespace-unverified"],
+        # These kernel/provenance classes are still outstanding. The only
+        # permitted positive proof is a reviewed fixed source correction
+        # plus independent native mount/log/ENOSPC acceptance.
+        "unaccounted_writable_roots": [
+            "worker-mounts-unverified",
+            "root-control-registration-unverified",
+            "default-journal-and-pid1-unverified",
+        ],
     }
 
 
