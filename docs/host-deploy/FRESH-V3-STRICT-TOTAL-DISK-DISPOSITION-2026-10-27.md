@@ -1,4 +1,4 @@
-# Host-deploy #5 — strict total host write accounting: engineering disposition
+> **Historical analysis, superseded for fresh-v3 by user decision on 2026-10-27.** The owner expressly chose a 32-GiB cap on **dedicated compiler storage reservation** (not total shared-host writes). The approved replacement policy and the successful disposable PID1 preflight are recorded in [FRESH-V3-DEDICATED-STORAGE-BUDGET-2026-10-27.md](FRESH-V3-DEDICATED-STORAGE-BUDGET-2026-10-27.md). This document remains as the strict-total alternative's evidence and must not be treated as the current compiler policy. Native admission is still blocked.\n\n# Host-deploy #5 — strict total host write accounting: engineering disposition
 
 **Date:** 2026-10-27. **Scope:** one fresh cross-bootstrap on the retained shared host.
 **Pull request:** draft #2, `regular/toolchain-gateway-20261019`.
