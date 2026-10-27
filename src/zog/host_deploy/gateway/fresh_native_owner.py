@@ -830,8 +830,14 @@ def prepare_external():
 
 
 def inspect_host_write_surfaces():
-    """One fixed, read-only PID1 write-surface diagnostic, never admission."""
-    _root()
+    """One fixed, read-only native diagnostic, safe BEFORE any pool allocation.
+
+    This diagnostic cannot prepare storage, arm a compiler, or mutate PID1.
+    Unlike the protected owner mutations, it must not require mounted
+    owner-state: Work needs evidence before choosing the disk topology.
+    """
+    if os.geteuid() != 0 or Path("/proc/1/comm").read_text().strip() != "systemd":
+        raise PermissionError("native root with PID1 systemd required")
     return host_write_audit.inspect()
 
 
