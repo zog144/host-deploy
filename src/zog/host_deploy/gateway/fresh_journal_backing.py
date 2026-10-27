@@ -104,7 +104,8 @@ def install_binds_before_activation():
             st = path.lstat()
             if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
                     or st.st_mode & 0o022 or path.is_symlink()
-                    or any(path.iterdir())):
+                    or (set(x.name for x in path.iterdir()) != {"volatile"}
+                        if path == JOURNAL_SOURCE else bool(list(path.iterdir())))):
                 raise PermissionError("journal bind source/target not empty/protected")
         if src.stat().st_dev != pool_dev:
             raise PermissionError("journal bind source is not within accounting pool")
