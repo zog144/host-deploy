@@ -567,6 +567,34 @@ def recover():
 ADMISSION_PATH = STATE / "reviewed-admission.json"
 
 
+
+def _budget_directory_prepared(*, require_empty):
+    """Read-only receipt for the already precreated budget directory.
+
+    prepare-external creates owner-state/budget exactly once INSIDE the
+    bounded 2-GiB pool. prepare-work and install must consume this existing
+    directory, never mkdir it again or silently repair interrupted state.
+    An unexpected record, lock, foreign inode or a missing directory is an
+    explicit NO-GO before a build volume or new PID1 unit can be started.
+    """
+    if BUDGET_DIR != STATE / "budget":
+        raise PermissionError("fresh budget path differs from reviewed owner-state")
+    root = budget._protected_root(BUDGET_DIR)
+    parent = budget._protected_root(STATE)
+    observed = root.lstat()
+    if (not stat.S_ISDIR(observed.st_mode) or root.is_symlink()
+            or observed.st_uid != 0 or observed.st_gid != 0
+            or stat.S_IMODE(observed.st_mode) != 0o700
+            or observed.st_dev != parent.stat().st_dev):
+        raise PermissionError("preexisting budget directory is not the bounded owner directory")
+    from .fresh_aggregate_disk import EXTERNAL_MOUNT
+    if parent.stat().st_dev != Path(EXTERNAL_MOUNT).stat().st_dev:
+        raise PermissionError("budget directory is not backed by 2-GiB external pool")
+    if require_empty and any(root.iterdir()):
+        raise RuntimeError("budget directory contains an existing/uncertain request; no replay")
+    return root
+
+
 def _admission(plan):
     """Admission receipt is a root-owned, exact-structure authorization.
 
@@ -615,6 +643,9 @@ def prepare_work():
     owner.verify_source_and_nss(plan)
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
     aggregate.inspect_external_pool_native()
+    # Catch the exact pre-created budget-directory conflict BEFORE the first
+    # 30-GiB allocation. Do not create it here: provision_external already did.
+    _budget_directory_prepared(require_empty=True)
     # The original host capacity authorization includes BOTH pools. The
     # external 2-GiB image has already been fully allocated, so enforce the
     # remaining 30-GiB budget against the current host backing filesystem.
@@ -647,11 +678,9 @@ def install_approved():
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
     if _sha(schedule_text().encode()) != plan["installed"]["watchdog_receipt_sha256"]:
         raise RuntimeError("unreviewed watchdog schedule source")
-    # prepare-external creates the protected budget directory before either
-    # storage preflight or immutable seed import. Never create a second one.
-    budget._protected_root(BUDGET_DIR)
-    if any(BUDGET_DIR.iterdir()):
-        raise RuntimeError("preexisting fresh budget request: do not overwrite")
+    # Consume the exact prepared 0700 root-owned directory; do not mkdir,
+    # reset, delete, or replace even after an interrupted preparation.
+    _budget_directory_prepared(require_empty=True)
     directory_fd = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(directory_fd)
@@ -721,6 +750,7 @@ def arm_approved():
             or _show(independent_watchdog.UNIT).get("MainPID") in (None, "", "0")
             or _read_json(WATCHDOG_ATTEMPT).get("plan_sha256") != plan["sha256"]):
         raise RuntimeError("independent PID1 and reboot-persistent watchdog missing")
+    _budget_directory_prepared(require_empty=True)
     if owner.observe_unit(sidecar.UNIT)["active"] is not True:
         raise RuntimeError("sidecar not active")
     _slice_identity()
