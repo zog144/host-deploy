@@ -26,6 +26,7 @@ from . import fresh_deadline_timer as hard_deadline
 from . import fresh_aggregate_disk as aggregate
 from . import fresh_journal_backing as journal_backing
 from . import fresh_project_state as project_state
+from . import fresh_host_write_audit as host_write_audit
 
 STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -828,12 +829,20 @@ def prepare_external():
         available_after_reservations_bytes=remaining)
 
 
+def inspect_host_write_surfaces():
+    """One fixed, read-only PID1 write-surface diagnostic, never admission."""
+    _root()
+    return host_write_audit.inspect()
+
+
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover", "inspect-host-write-surfaces"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
-    if sys.argv[1] == "prepare-external":
+    if sys.argv[1] == "inspect-host-write-surfaces":
+        sys.stdout.write(_bytes(inspect_host_write_surfaces()).decode("ascii"))
+    elif sys.argv[1] == "prepare-external":
         prepare_external()
     elif sys.argv[1] == "prepare-work":
         prepare_work()
