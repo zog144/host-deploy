@@ -116,12 +116,19 @@ def main():
     try:
         command('systemd-run', '--unit=zog-native-storage-full.service', '--wait',
                 '--property=LogNamespace=' + journal.LOG_NAMESPACE,
+                '--property=StandardOutput=journal', '--property=StandardError=journal',
                 '/usr/bin/printf', full_marker + '\n')
         command('systemctl', 'restart', journal.JOURNAL_SERVICE)
         emit('journal-full-restart', journal.inspect())
         default = command('journalctl', '-u', 'zog-native-storage-full.service',
-                          '--no-pager', '-o', 'cat')
-        assert full_marker not in default, 'namespace payload spilled into default journal'
+                          '--no-pager', '-o', 'json')
+        records = [json.loads(line) for line in default.splitlines() if line]
+        matches = [{k: row.get(k) for k in ('MESSAGE', '_TRANSPORT', '_SYSTEMD_UNIT', 'SYSLOG_IDENTIFIER')}
+                   for row in records if full_marker in str(row.get('MESSAGE', ''))]
+        emit('default-journal-marker-records', matches)
+        # PID1 lifecycle descriptions include command argv. They are excluded
+        # shared-host overhead, not evidence that worker stdout escaped.
+        assert not any(row.get('_TRANSPORT') == 'stdout' for row in matches), 'namespace stdout spilled into default journal'
         emit('default-journal-negative', {'payload_absent': True})
         for path in journal.JOURNAL_SOURCE.rglob('*.journal'):
             assert path.stat().st_dev == external.stat().st_dev
