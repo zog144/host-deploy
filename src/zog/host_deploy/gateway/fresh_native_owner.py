@@ -588,6 +588,10 @@ def _budget_directory_prepared(*, require_empty):
             or observed.st_dev != parent.stat().st_dev):
         raise PermissionError("preexisting budget directory is not the bounded owner directory")
     from .fresh_aggregate_disk import EXTERNAL_MOUNT
+    # Same-device comparison can succeed on the underlying host directory
+    # when the external image has NOT been mounted. Refuse that fallback.
+    if not os.path.ismount(EXTERNAL_MOUNT):
+        raise RuntimeError("budget backing external accounting filesystem absent")
     if parent.stat().st_dev != Path(EXTERNAL_MOUNT).stat().st_dev:
         raise PermissionError("budget directory is not backed by 2-GiB external pool")
     if require_empty and any(root.iterdir()):
@@ -686,10 +690,6 @@ def install_approved():
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
-    # Install and verify a reboot-persistent scheduled guard BEFORE sidecar
-    # and any compilation. An interrupted installer keeps its durable state
-    # and requires explicit read-only disposition, never automatic replay.
-    install_schedule()
     # This is inspection-only. Build quota + exact Project/state bind MUST
     # already be in place before the separately verified immutable seed import.
     # Never create the quota here or the earlier import may escape to host disk.
@@ -703,6 +703,10 @@ def install_approved():
     # admission, and never clears the mandatory strict arm/watch gates.
     aggregate.validate_pre_activation(
         volume, external, host_owner_verified=owner.is_trusted_native_owner())
+    # Verify ALL fixed backing before installing /etc/cron.d or starting
+    # native PID1 units. No ordinary shared-host side effects on failed
+    # preactivation storage proof.
+    install_schedule()
     # Start a distinct PID1-supervised watchdog outside the compiler slice,
     # not through cron. A PID1 reply lost after this durable marker is an
     # UNCERTAIN installation, never permission for a second start.
