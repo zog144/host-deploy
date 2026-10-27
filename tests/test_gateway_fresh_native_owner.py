@@ -204,6 +204,7 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
     monkeypatch.setattr(owner.aggregate, "inspect_external_pool_native", lambda: {})
     monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
+    monkeypatch.setattr(owner.aggregate, "validate_pre_activation", lambda *a, **k: True)
     monkeypatch.setattr(quota, "inspect", lambda: {"capacity_bytes": aggregate.BUILD_BYTES})
     monkeypatch.setattr(owner.project_state, "inspect", lambda uid: {"mount_verified": True})
     monkeypatch.setattr(owner.os, "chown", lambda *a: calls.append("quota-owner"))
