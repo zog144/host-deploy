@@ -75,6 +75,33 @@ def validate(work, external, *, host_owner_verified=False):
 
 
 
+def validate_pre_activation(work, external, *, host_owner_verified=False):
+    """Allow only storage/controller observation, NEVER compiler admission.
+
+    Final quota admission requires independent live proof of workers,
+    registration and PID1/default-journal write classes. Those observations
+    cannot all exist before the new sidecar has started. Keep the strict
+    validate() policy for arm, watch and supervisor advance; only this
+    separately named pre-activation check may tolerate the exact enumerated
+    outstanding classes returned from genuine native kernel inspection.
+    """
+    expected_blockers = [
+        "worker-mounts-unverified",
+        "root-control-registration-unverified",
+        "default-journal-and-pid1-unverified",
+    ]
+    if (type(external) is not dict
+            or external.get("unaccounted_writable_roots") != expected_blockers):
+        raise RuntimeError("unreviewed or falsely certified pre-activation classes")
+    # Validate unchanged byte caps, mount/source and quota fields, but do NOT
+    # return or persist a fabricated all-writers-verified observation.
+    checked = dict(external, unaccounted_writable_roots=[])
+    shape = validate(work, checked, host_owner_verified=host_owner_verified)
+    return {"schema": SCHEMA, "status": "preactivation-only",
+            "aggregate_max_bytes": shape["aggregate_max_bytes"],
+            "outstanding_classes": expected_blockers}
+
+
 def inspect_external_pool_native():
     """Inspect the fixed ext4 backing independently of journal bind setup.
 
