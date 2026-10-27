@@ -145,3 +145,15 @@ def test_budget_owner_inspects_bind_before_watching_or_arming():
         "sidecar.install(")
     assert "project_state.inspect(" in arm
     assert "project-state-bind-unverified-no-replay" in recovery
+
+
+def test_rootfs_import_is_in_build_image_not_journal_pool():
+    from zog.host_deploy.gateway import fresh_sidecar_install as sidecar
+    from zog.host_deploy.gateway import fresh_aggregate_disk as aggregate
+    assert sidecar.REGISTRATION_SOURCE == str(state.RESOURCE_ROOT)
+    assert sidecar.REGISTRATION_SOURCE.startswith(str(quota.MOUNT) + "/")
+    assert not sidecar.REGISTRATION_SOURCE.startswith(aggregate.EXTERNAL_MOUNT)
+    source = python_inspect.getsource(owner.install_approved)
+    assert "os.chown(quota.MOUNT, 0, 0)" in source
+    assert "os.chmod(quota.MOUNT, 0o755)" in source
+    assert "sidecar.install(plan" in source
