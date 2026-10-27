@@ -1,9 +1,11 @@
-"""Immutable two-pool, kernel-bounded TOTAL host disk envelope.
+"""Fixed 32-GiB DEDICATED storage reservation for the fresh compiler.
 
-A fully reserved build image by itself is NOT evidence of an aggregate cap.
-A separately kernel-bounded pool must contain all fresh writable host-owned
-state, metadata and logs. If any writable bytes escape both pools, native
-admission is forbidden. Requires separate native /proc/mount + journal proof.
+This policy excludes ordinary shared-host PID1/default journal, SSM, cron and
+host-fs management overhead from the DEDICATED storage allowance, per explicit
+2026-10-27 owner decision. These host writes are still observable, but this
+policy does NOT assert or enforce a TOTAL shared-host write limit. Every fresh
+compiler-owned data/workspace/log path must be backed by the two capped images.
+Native admission remains fail-closed pending independent worker mount proof.
 """
 from pathlib import Path
 
@@ -11,7 +13,8 @@ TOTAL_BYTES = 32 * 1024**3
 BUILD_BYTES = 30 * 1024**3
 EXTERNAL_BYTES = 2 * 1024**3
 EXTERNAL_MOUNT = "/var/lib/zog/host-deploy/fresh-cross-bootstrap-oct25/external"
-SCHEMA = "host-deploy-fresh-aggregate-kernel-storage-v1"
+SCHEMA = "host-deploy-fresh-dedicated-storage-v2"
+BUDGET_SCOPE = "fresh-dedicated-reservation-32gib-v1"
 # These logical classes must have no additional writable backing outside the
 # two reviewed kernel-bounded pools; a path string alone cannot prove that.
 REQUIRED_CLASSES = frozenset({
@@ -34,6 +37,27 @@ UNVERIFIED_WRITERS = (
     "installer-filesystem-metadata-unverified",
     "other-attributable-host-writes-unverified",
 )
+
+
+# Revised approved boundary. Shared-host management overhead is excluded
+# ONLY from dedicated storage reservation accounting, not from diagnostic
+# visibility or the six-hour execution budget.
+EXCLUDED_SHARED_HOST_WRITERS = (
+    "pid1-default-journald-unverified",
+    "ssm-transport-and-agent-unverified",
+    "cron-schedule-and-daemon-unverified",
+    "installer-filesystem-metadata-unverified",
+)
+# These are compiler-owned writes; absence of real mount/inode proof still
+# prevents native admission. The last class catches unenumerated fresh writes.
+DEDICATED_UNVERIFIED_WRITERS = (
+    "worker-mounts-unverified",
+    "worker-private-tmp-coredump-unverified",
+    "root-control-registration-unverified",
+    "other-attributable-host-writes-unverified",
+)
+assert set(UNVERIFIED_WRITERS) == set(
+    EXCLUDED_SHARED_HOST_WRITERS + DEDICATED_UNVERIFIED_WRITERS)
 
 
 def _within(path, mount):
@@ -63,8 +87,12 @@ def validate(work, external, *, host_owner_verified=False):
     if (set(external) != {
             "schema", "mount", "limit_bytes", "kernel_enforced",
             "mount_verified", "allocation_verified", "class_roots",
-            "unaccounted_writable_roots"}
+            "unaccounted_writable_roots", "budget_scope",
+            "excluded_shared_host_overhead"}
             or external["schema"] != SCHEMA
+            or external["budget_scope"] != BUDGET_SCOPE
+            or external["excluded_shared_host_overhead"] !=
+                list(EXCLUDED_SHARED_HOST_WRITERS)
             or external["mount"] != EXTERNAL_MOUNT
             or type(external["limit_bytes"]) is not int
             or external["limit_bytes"] > EXTERNAL_BYTES
@@ -77,14 +105,16 @@ def validate(work, external, *, host_owner_verified=False):
             or set(external["class_roots"]) != REQUIRED_CLASSES
             or not all(_within(p, EXTERNAL_MOUNT)
                        for p in external["class_roots"].values())):
-        raise RuntimeError("external host state/journal/logs not kernel bounded")
+        raise RuntimeError("dedicated compiler state/journal/logs not kernel bounded")
     if work["image_bytes"] + external["limit_bytes"] > TOTAL_BYTES:
-        raise RuntimeError("aggregate host disk exceeds approved 32 GiB")
+        raise RuntimeError("dedicated storage reservation exceeds approved 32 GiB")
     return {
         "schema": SCHEMA,
         "build_image_bytes": work["image_bytes"],
         "external_kernel_limit_bytes": external["limit_bytes"],
-        "aggregate_max_bytes": work["image_bytes"] + external["limit_bytes"],
+        "dedicated_reserved_max_bytes": work["image_bytes"] + external["limit_bytes"],
+        "budget_scope": BUDGET_SCOPE,
+        "excluded_shared_host_overhead": list(EXCLUDED_SHARED_HOST_WRITERS),
         "external_mount": EXTERNAL_MOUNT,
         "bounded_classes": sorted(REQUIRED_CLASSES),
     }
@@ -94,14 +124,12 @@ def validate(work, external, *, host_owner_verified=False):
 def validate_pre_activation(work, external, *, host_owner_verified=False):
     """Allow only storage/controller observation, NEVER compiler admission.
 
-    Final quota admission requires independent live proof of workers,
-    registration and PID1/default-journal write classes. Those observations
-    cannot all exist before the new sidecar has started. Keep the strict
-    validate() policy for arm, watch and supervisor advance; only this
-    separately named pre-activation check may tolerate the exact enumerated
-    outstanding classes returned from genuine native kernel inspection.
+    Final dedicated storage admission still requires independent live proof
+    that worker/registration writes stay inside the two images. Shared-host
+    management overhead is explicitly excluded by fixed scope, not passed as
+    falsely verified. This pre-activation receipt NEVER arms a compiler.
     """
-    expected_blockers = list(UNVERIFIED_WRITERS)
+    expected_blockers = list(DEDICATED_UNVERIFIED_WRITERS)
     if (type(external) is not dict
             or external.get("unaccounted_writable_roots") != expected_blockers):
         raise RuntimeError("unreviewed or falsely certified pre-activation classes")
@@ -110,8 +138,10 @@ def validate_pre_activation(work, external, *, host_owner_verified=False):
     checked = dict(external, unaccounted_writable_roots=[])
     shape = validate(work, checked, host_owner_verified=host_owner_verified)
     return {"schema": SCHEMA, "status": "preactivation-only",
-            "aggregate_max_bytes": shape["aggregate_max_bytes"],
-            "outstanding_classes": expected_blockers}
+            "budget_scope": BUDGET_SCOPE,
+            "dedicated_reserved_max_bytes": shape["dedicated_reserved_max_bytes"],
+            "outstanding_classes": expected_blockers,
+            "excluded_shared_host_overhead": list(EXCLUDED_SHARED_HOST_WRITERS)}
 
 
 def inspect_external_pool_native():
@@ -172,14 +202,16 @@ def inspect_external_pool_native():
                 or path.is_symlink() or path.resolve() != path):
             raise RuntimeError("external accounting root is not on bounded mount: " + cls)
     return {
-        "schema": SCHEMA, "mount": str(mount), "limit_bytes": limit,
+        "schema": SCHEMA, "budget_scope": BUDGET_SCOPE,
+        "excluded_shared_host_overhead": list(EXCLUDED_SHARED_HOST_WRITERS),
+        "mount": str(mount), "limit_bytes": limit,
         "kernel_enforced": True, "mount_verified": True,
         "allocation_verified": True,
         "class_roots": {key: str(path) for key, path in roots.items()},
         # These kernel/provenance classes are still outstanding. The only
         # permitted positive proof is a reviewed fixed source correction
         # plus independent native mount/log/ENOSPC acceptance.
-        "unaccounted_writable_roots": list(UNVERIFIED_WRITERS),
+        "unaccounted_writable_roots": list(DEDICATED_UNVERIFIED_WRITERS),
     }
 
 
