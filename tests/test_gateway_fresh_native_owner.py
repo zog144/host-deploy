@@ -60,6 +60,9 @@ def test_fixed_slice_matches_start_transient_and_scoped_kernel_target():
 def test_cancel_only_frozen_fresh_cgroup_and_original_cancellation_id(tmp_path, monkeypatch):
     monkeypatch.setattr(owner, "_root", lambda: None)
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
+    monkeypatch.setattr(owner.project_state, "inspect",
+                        lambda uid: {"mount_verified": True} if uid == 24301
+                        else pytest.fail("wrong controller UID"))
     monkeypatch.setattr(owner, "CGROUP", tmp_path)
     (tmp_path / "cgroup.kill").write_text("")
     x = budget.begin(
@@ -157,6 +160,7 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     plan = {
         "sha256": "sha256:"+"a"*64, "identity": {
             "build_uid": 24302, "build_gid": 24302,
+            "controller_uid": 24301,
         }, "installed": {"legacy_baseline_sha256": "sha256:"+"b"*64,
                          "watchdog_receipt_sha256": owner._sha(b"fixed cron")},
     }
@@ -190,6 +194,9 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
         assert kwargs["mounted_writable_roots"] == [str(quota.MOUNT)]
         return {"capacity_bytes": aggregate.BUILD_BYTES}
     monkeypatch.setattr(quota, "provision", provision)
+    monkeypatch.setattr(owner.project_state, "install_bind",
+                        lambda uid: calls.append("project-state-bind") if uid == 24301
+                        else pytest.fail("wrong controller UID"))
     # This fixture exercises ordering; aggregate kernel proof has separate
     # real policy/negative tests in test_gateway_aggregate_budget.py.
     monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
@@ -206,6 +213,8 @@ def test_concrete_install_orders_watchdog_quota_before_pid1(tmp_path, monkeypatc
     result = owner.install_approved()
     assert result["invocation_id"] == "new-only"
     assert calls.index("persistent-cron") < calls.index("kernel-quota")
+    assert calls.index("kernel-quota") < calls.index("project-state-bind")
+    assert calls.index("project-state-bind") < calls.index("pid1-watchdog")
     assert calls.index("kernel-quota") < calls.index("pid1-watchdog")
     assert calls.index("watchdog-attempt") < calls.index("pid1-watchdog")
     assert calls.index("pid1-watchdog") < calls.index("pid1-start")
@@ -218,6 +227,7 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
     x = {
         "sha256": "sha256:"+"a"*64, "host_id": "i-fresh",
         "project_root": "/home/zog-cross-owner/fresh-cross-bootstrap-oct25",
+        "identity": {"controller_uid": 24301},
         "installed": {"legacy_baseline_sha256": "sha256:"+"b"*64,
                      "watchdog_receipt_sha256": "sha256:"+"c"*64},
     }
@@ -408,6 +418,11 @@ def test_f5_cron_loss_does_not_short_circuit_budget_cancellation(monkeypatch):
     monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
     monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner, "_boot", lambda: "boot")
+    monkeypatch.setattr(owner, "_read_json", lambda path: {
+        "identity": {"controller_uid": 24301}})
+    monkeypatch.setattr(owner.project_state, "inspect",
+                        lambda uid: {"mount_verified": True} if uid == 24301
+                        else pytest.fail("wrong controller UID"))
     sample = owner.NativeOwner().sample_exact({
         "host_id": "i-fresh", "project_root": "/reviewed-project",
         "monitor_receipt_sha256": "sha256:"+"a"*64,
