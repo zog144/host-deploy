@@ -128,7 +128,7 @@ from pathlib import Path
 # Exact root-control executable revision. The documentation-only receipt
 # head is different and cannot substitute for executable provenance.
 REVIEWED_ROOT_CONTROL_REVISION = "e4f25110c854c000bdde5ec564c8119370da9a52"
-FRESH_ROOT_CONTROL_REVISION = "c03815b18efc96797ba868f2412f073f758a6cad"
+FRESH_ROOT_CONTROL_REVISION = "cacacbee66c0401e04dfe702d6b90e87215280d0"
 
 def _trusted_identity(value, source, record_root, controller_root):
     if os.geteuid() != 0:
