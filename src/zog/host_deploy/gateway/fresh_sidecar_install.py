@@ -19,6 +19,7 @@ UNIT = "zog-fresh-cross-bootstrap-oct25-controller.service"
 SOCKET = "/run/zog/root-control-fresh-cross-bootstrap-oct25.sock"
 PROJECT = "fresh-cross-bootstrap-oct25"
 SLICE_UNIT = "zogfreshcrossbootstrapoct25.slice"
+LOG_NAMESPACE = "zogfreshcrossbootstrapoct25"
 REQUIRED_ENV = frozenset({
     "ROOT_CONTROL_SOCKET", "ROOT_CONTROL_SOCKET_GID",
     "ROOT_CONTROL_CONTROLLER_UID", "ROOT_CONTROL_ROLE",
@@ -107,6 +108,7 @@ def review_plan(binding, installed):
         "Restart": "no", "RestartSec": "0s",
         "StartLimitBurst": 1, "StartLimitIntervalSec": "60s",
         "StandardOutput": "journal", "StandardError": "journal",
+        "LogNamespace": LOG_NAMESPACE,
         "NoNewPrivileges": True,
     }
     # Do not permit environment inheritance, ExecStartEx, daemon reload,
