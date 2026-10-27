@@ -435,38 +435,65 @@ def watch_loop():
 
 
 def hard_stop():
-    """PID1 deadline auxiliary oneshot; never a generic root cancel API.
+    """Fixed PID1 deadline: never rely solely on writable quota metadata.
 
-    Exact original request is reloaded from protected admission. The kernel
-    timer fires early by a margin, and forces the same durable one-attempt
-    stop protocol; unknown cancellation is inspected, never replayed.
+    Stage A must prove the timer executes within its 30-second safety margin.
+    The frozen timer intent is fsynced before the timer starts and binds the
+    same original request/project/cgroup. If the journal is full at expiry,
+    directly issue the kernel's exact fresh-parent kill without another
+    arbitrary host operation; normal ledger reconciliation remains uncertain.
     """
     _root()
     plan = _read_json(PLAN_PATH)
     a = _admission(plan)
-    record = budget.read(BUDGET_DIR, a["request_id"])
-    attempt = _read_json(DEADLINE_ATTEMPT)
-    if (attempt.get("plan_sha256") != plan["sha256"]
-            or attempt.get("request_id") != record["request_id"]
-            or attempt.get("boot_id") != record["boot_id"]
-            or attempt.get("state") != "attempted"):
-        raise RuntimeError("PID1 hard deadline ownership changed")
+    marker = _read_json(DEADLINE_ATTEMPT)
+    expected = budget._digest({
+        "schema": budget.SCHEMA, "request_id": a["request_id"],
+        "host_id": a["host_id"], "project_root": plan["project_root"],
+    })
+    if (type(marker) is not dict
+            or set(marker) != {
+                "schema", "plan_sha256", "request_id", "host_id",
+                "project_root", "cancellation_id", "boot_id", "state"}
+            or marker["schema"] != "host-deploy-fresh-hard-deadline-attempt-v1"
+            or marker["plan_sha256"] != plan["sha256"]
+            or marker["request_id"] != a["request_id"]
+            or marker["host_id"] != a["host_id"]
+            or marker["project_root"] != plan["project_root"]
+            or marker["cancellation_id"] != expected
+            or marker["boot_id"] != _boot()
+            or marker["state"] != "attempted"):
+        raise RuntimeError("PID1 hard deadline authority changed")
 
     class KernelDeadlineOwner(NativeOwner):
         def sample_exact(self, x):
             result = super().sample_exact(x)
-            # A fixed, protected PID1 timer firing is itself a trusted
-            # termination event; explicitly expire the budget even if an
-            # untrusted wall clock was rolled back or telemetry is missing.
-            result["now_seconds"] = max(result["now_seconds"], x["deadline_seconds"])
+            result["now_seconds"] = max(
+                result["now_seconds"], x["deadline_seconds"])
             result["monotonic_seconds"] = max(
                 result["monotonic_seconds"],
-                x["started_monotonic_seconds"] + budget.DEADLINE_SECONDS,
-            )
+                x["started_monotonic_seconds"] + budget.DEADLINE_SECONDS)
             return result
 
-    budget.watch_once(BUDGET_DIR, record["request_id"],
-                      native_owner=KernelDeadlineOwner())
+    try:
+        record = budget.read(BUDGET_DIR, a["request_id"])
+        if (record["cancellation_id"] != expected
+                or record["boot_id"] != marker["boot_id"]):
+            raise RuntimeError("deadline budget identity changed")
+        budget.watch_once(BUDGET_DIR, record["request_id"],
+                          native_owner=KernelDeadlineOwner())
+    except OSError:
+        # Disk-full/failed-fsync exception only. The already-durable timer
+        # intent is enough to enforce the fixed parent cgroup boundary;
+        # do not invent a successful cancellation receipt.
+        if _events()["populated"] == "1":
+            with (CGROUP / "cgroup.kill").open("w") as stream:
+                stream.write("1\\n")
+                stream.flush()
+        raise RuntimeError(
+            "kernel deadline stop issued/uncertain; ledger requires native "
+            "reconciliation; no new submission permitted")
+
 
 
 def recover():
@@ -641,9 +668,18 @@ def arm_approved():
         raise RuntimeError("hard deadline has already been attempted")
     if _show(hard_deadline.UNIT).get("LoadState") != "not-found":
         raise RuntimeError("hard deadline transient timer already exists")
+    # Root-owned, fsynced timer intent must carry the exact same
+    # cancellation identity even if the accounting filesystem fills before
+    # the independent kernel timer fires.
+    cancellation_id = budget._digest({
+        "schema": budget.SCHEMA, "request_id": a["request_id"],
+        "host_id": a["host_id"], "project_root": plan["project_root"],
+    })
     _store(DEADLINE_ATTEMPT, {
         "schema": "host-deploy-fresh-hard-deadline-attempt-v1",
         "plan_sha256": plan["sha256"], "request_id": a["request_id"],
+        "host_id": a["host_id"], "project_root": plan["project_root"],
+        "cancellation_id": cancellation_id,
         "boot_id": _boot(), "state": "attempted",
     }, exclusive=True)
     hard_deadline.start(plan)
