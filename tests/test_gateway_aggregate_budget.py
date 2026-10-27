@@ -119,3 +119,31 @@ def test_deadline_source_does_not_accept_other_unit_or_untrusted_path():
     bad["installed"]["python_executable"] = "/tmp/foreign root.py"
     with pytest.raises(ValueError):
         deadline.message(bad)
+
+
+def test_external_preparation_does_not_pretend_journal_is_installed(monkeypatch):
+    """Initial pool setup and post-reboot image reattach precede bind mounts."""
+    calls = []
+    monkeypatch.setattr(aggregate, "inspect_external_pool_native",
+                        lambda: calls.append("pool") or {"mount": aggregate.EXTERNAL_MOUNT,
+                                                          "unaccounted_writable_roots": [
+                                                              "worker-mounts-unverified"]})
+    from zog.host_deploy.gateway import fresh_journal_backing as journal
+    monkeypatch.setattr(journal, "inspect",
+                        lambda: (_ for _ in ()).throw(RuntimeError("journal absent")))
+    prepared = aggregate.inspect_external_pool_native()
+    assert prepared["unaccounted_writable_roots"]
+    assert calls == ["pool"]
+    with pytest.raises(RuntimeError, match="journal absent"):
+        aggregate.inspect_external_native()
+
+
+def test_external_provision_returns_preparation_not_final_attestation():
+    """Source contract: no first-install circular dependency on bind mounts."""
+    import inspect
+    source = inspect.getsource(aggregate.provision_external)
+    recovery = inspect.getsource(aggregate.reattach_external_after_boot)
+    assert "return inspect_external_pool_native()" in source
+    assert "return inspect_external_pool_native()" in recovery
+    assert "return inspect_external_native()" not in source
+    assert "return inspect_external_native()" not in recovery
