@@ -669,7 +669,10 @@ def install_approved():
         raise RuntimeError("fresh kernel quota limit exceeded")
     project_state.inspect(plan["identity"]["controller_uid"])
     external = aggregate.inspect_external_native()
-    aggregate.validate(
+    # Observe only the protected sidecar; it must start before Work can attest
+    # its live registration mount. This pre-activation path is not an aggregate
+    # admission, and never clears the mandatory strict arm/watch gates.
+    aggregate.validate_pre_activation(
         volume, external, host_owner_verified=owner.is_trusted_native_owner())
     # Start a distinct PID1-supervised watchdog outside the compiler slice,
     # not through cron. A PID1 reply lost after this durable marker is an
