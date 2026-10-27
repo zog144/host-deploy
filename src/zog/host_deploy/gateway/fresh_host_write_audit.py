@@ -85,7 +85,8 @@ def _mounts(raw):
 
 def _covering(mounts, path):
     matching = [
-        item for item in mounts if path == item["point"]
+        item for item in mounts if item["point"] == "/"
+        or path == item["point"]
         or path.startswith(item["point"].rstrip("/") + "/")
     ]
     if not matching:
