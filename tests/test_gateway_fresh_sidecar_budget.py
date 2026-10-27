@@ -174,7 +174,7 @@ def test_aggregate_guard_counts_elapsed_and_bytes_across_repeated_jobs():
     assert x["last_tick_seconds"] == 1_000_015
     t["now_seconds"] = 1_000_030
     t["monotonic_seconds"] = 130
-    t["used_bytes"] = x["baseline_disk_used_bytes"] + guard.ADDITIONAL_DISK_BYTES - 1
+    t["used_bytes"] = guard.BUILD_IMAGE_BYTES - 1
     assert guard.evaluate(x, **t) == "active"
     t["used_bytes"] += 1
     assert guard.evaluate(x, **t) == "stop"
