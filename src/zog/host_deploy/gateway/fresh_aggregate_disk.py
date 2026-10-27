@@ -208,6 +208,7 @@ def provision_external(*, available_after_reservations_bytes):
     _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
           loop, str(mount)], output=False)
     for suffix in ("owner-state", "owner-state/budget", "artifacts",
+                   "artifacts/build-resources",
                    "compiler-logs", "controller-logs", "systemd-journal",
                    "systemd-journal/volatile"):
         new = mount / suffix
