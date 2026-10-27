@@ -250,4 +250,9 @@ def test_budget_clock_unchanged_and_build_image_usage_enforced():
     telemetry["used_bytes"] = 11
     assert budget.evaluate(start, **telemetry) == "active"
     telemetry["monotonic_seconds"] = 100 + 21600
+    assert budget.evaluate(start, **telemetry) == "uncertain"
+    # Missed heartbeats must never be converted to apparent permission to
+    # continue; only valid intermediate ticks can produce a measured stop.
+    start["last_monotonic_seconds"] = telemetry["monotonic_seconds"] - 1
+    start["last_tick_seconds"] = telemetry["now_seconds"] - 1
     assert budget.evaluate(start, **telemetry) == "stop"
