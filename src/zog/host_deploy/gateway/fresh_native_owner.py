@@ -599,6 +599,38 @@ def _admission(plan):
     return a
 
 
+def prepare_work():
+    """Once-only Stage A storage: quota and Project/state BEFORE seed import.
+
+    This consumes a protected independently reviewed admission identity, but
+    cannot install a controller, arm a budget, or submit a compiler job. The
+    exact immutable seed must be imported only AFTER this bind is proven.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("reviewed native storage binding changed")
+    a = _admission(plan)
+    owner = NativeOwner()
+    owner.verify_source_and_nss(plan)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    aggregate.inspect_external_pool_native()
+    # The original host capacity authorization includes BOTH pools. The
+    # external 2-GiB image has already been fully allocated, so enforce the
+    # remaining 30-GiB budget against the current host backing filesystem.
+    available = a["available_after_reservations_bytes"] - aggregate.EXTERNAL_BYTES
+    if available < aggregate.BUILD_BYTES:
+        raise RuntimeError("approved host capacity cannot cover both pools")
+    volume = quota.provision(
+        available_after_reservations_bytes=available,
+        mounted_writable_roots=a["writable_roots"])
+    state = project_state.install_bind(plan["identity"]["controller_uid"])
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    return {"schema": SCHEMA, "phase": "storage-prepared-only",
+            "work_capacity_bytes": volume["capacity_bytes"],
+            "project_state": state, "compiler_authorized": False}
+
+
 def install_approved():
     """Real once-only privileged installation using fixed local receipts.
 
@@ -615,7 +647,11 @@ def install_approved():
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
     if _sha(schedule_text().encode()) != plan["installed"]["watchdog_receipt_sha256"]:
         raise RuntimeError("unreviewed watchdog schedule source")
-    BUDGET_DIR.mkdir(mode=0o700, exist_ok=False)
+    # prepare-external creates the protected budget directory before either
+    # storage preflight or immutable seed import. Never create a second one.
+    budget._protected_root(BUDGET_DIR)
+    if any(BUDGET_DIR.iterdir()):
+        raise RuntimeError("preexisting fresh budget request: do not overwrite")
     directory_fd = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(directory_fd)
@@ -625,15 +661,13 @@ def install_approved():
     # and any compilation. An interrupted installer keeps its durable state
     # and requires explicit read-only disposition, never automatic replay.
     install_schedule()
-    volume = quota.provision(
-        available_after_reservations_bytes=a["available_after_reservations_bytes"],
-        mounted_writable_roots=a["writable_roots"])
+    # This is inspection-only. Build quota + exact Project/state bind MUST
+    # already be in place before the separately verified immutable seed import.
+    # Never create the quota here or the earlier import may escape to host disk.
+    volume = quota.inspect()
     if volume["capacity_bytes"] > aggregate.BUILD_BYTES:
         raise RuntimeError("fresh kernel quota limit exceeded")
-    # root-control writes imported roots and workspaces under Project/state,
-    # not under Project/work. Bind that exact new state directory to the
-    # protected 30-GiB image before any privileged controller activation.
-    project_state.install_bind(plan["identity"]["controller_uid"])
+    project_state.inspect(plan["identity"]["controller_uid"])
     external = aggregate.inspect_external_native()
     aggregate.validate(
         volume, external, host_owner_verified=owner.is_trusted_native_owner())
@@ -758,10 +792,12 @@ def prepare_external():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "prepare-external":
         prepare_external()
+    elif sys.argv[1] == "prepare-work":
+        prepare_work()
     elif sys.argv[1] == "prepare-journal":
         prepare_journal()
     elif sys.argv[1] == "recover":
