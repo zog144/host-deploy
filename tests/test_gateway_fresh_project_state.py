@@ -136,12 +136,19 @@ def test_active_sidecar_is_rejected_before_mount(tmp_path, monkeypatch):
 
 def test_budget_owner_inspects_bind_before_watching_or_arming():
     sample = python_inspect.getsource(owner.NativeOwner.sample_exact)
+    prepare = python_inspect.getsource(owner.prepare_work)
     install = python_inspect.getsource(owner.install_approved)
     arm = python_inspect.getsource(owner.arm_approved)
     recovery = python_inspect.getsource(owner.recover)
     assert "project_state.inspect(" in sample
-    assert "project_state.install_bind(" in install
-    assert install.index("project_state.install_bind(") < install.index(
+    # Correct reviewed order: bind before seed import, not during the later
+    # controller install; installer must only inspect the existing mount.
+    assert "project_state.install_bind(" in prepare
+    assert prepare.index("quota.provision(") < prepare.index(
+        "project_state.install_bind(")
+    assert "project_state.install_bind(" not in install
+    assert "project_state.inspect(" in install
+    assert install.index("project_state.inspect(") < install.index(
         "sidecar.install(")
     assert "project_state.inspect(" in arm
     assert "project-state-bind-unverified-no-replay" in recovery
