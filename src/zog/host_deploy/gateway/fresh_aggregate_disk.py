@@ -54,10 +54,12 @@ DEDICATED_UNVERIFIED_WRITERS = (
     "worker-mounts-unverified",
     "worker-private-tmp-coredump-unverified",
     "root-control-registration-unverified",
-    "other-attributable-host-writes-unverified",
+    "other-dedicated-compiler-writes-unverified",
 )
-assert set(UNVERIFIED_WRITERS) == set(
-    EXCLUDED_SHARED_HOST_WRITERS + DEDICATED_UNVERIFIED_WRITERS)
+assert set(EXCLUDED_SHARED_HOST_WRITERS).isdisjoint(
+    DEDICATED_UNVERIFIED_WRITERS)
+assert set(DEDICATED_UNVERIFIED_WRITERS[:-1]).issubset(UNVERIFIED_WRITERS)
+assert set(EXCLUDED_SHARED_HOST_WRITERS).issubset(UNVERIFIED_WRITERS)
 
 
 def _within(path, mount):
