@@ -151,11 +151,7 @@ def test_external_provision_returns_preparation_not_final_attestation():
 
 def test_preactivation_allows_only_fixed_unresolved_classes_without_arming():
     external_pool = external()
-    expected = [
-        "worker-mounts-unverified",
-        "root-control-registration-unverified",
-        "default-journal-and-pid1-unverified",
-    ]
+    expected = list(aggregate.UNVERIFIED_WRITERS)
     external_pool["unaccounted_writable_roots"] = expected
     preparation = aggregate.validate_pre_activation(
         work(), external_pool, host_owner_verified=True)
@@ -174,3 +170,27 @@ def test_preactivation_allows_only_fixed_unresolved_classes_without_arming():
                 work(), changed, host_owner_verified=True)
     with pytest.raises(PermissionError):
         aggregate.validate_pre_activation(work(), external_pool)
+
+
+def test_shared_host_writes_do_not_disappear_when_images_are_fully_bounded():
+    """Explicitly model the root-owned writes the two loop limits do NOT cap."""
+    names = set(aggregate.UNVERIFIED_WRITERS)
+    assert len(names) == len(aggregate.UNVERIFIED_WRITERS)
+    for expected in (
+        "pid1-default-journald-unverified",
+        "ssm-transport-and-agent-unverified",
+        "cron-schedule-and-daemon-unverified",
+        "installer-filesystem-metadata-unverified",
+        "worker-private-tmp-coredump-unverified",
+        "other-attributable-host-writes-unverified",
+    ):
+        assert expected in names
+    pool = external()
+    pool["unaccounted_writable_roots"] = list(aggregate.UNVERIFIED_WRITERS)
+    with pytest.raises(RuntimeError, match="not kernel bounded"):
+        aggregate.validate(work(), pool, host_owner_verified=True)
+    claim = aggregate.validate_pre_activation(
+        work(), pool, host_owner_verified=True)
+    assert claim["status"] == "preactivation-only"
+    assert set(claim["outstanding_classes"]) == names
+    assert pool["unaccounted_writable_roots"] == list(aggregate.UNVERIFIED_WRITERS)
