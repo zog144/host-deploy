@@ -10,6 +10,7 @@ import os
 
 from .fresh_budget_guard import DEADLINE_SECONDS
 from .fresh_watchdog_service import UNIT as WATCHDOG_UNIT
+from .fresh_sidecar_install import LOG_NAMESPACE
 
 UNIT = "zogfreshcrossbootstrapoct25-deadline.timer"
 STOP_UNIT = "zogfreshcrossbootstrapoct25-deadline.service"
@@ -60,6 +61,7 @@ def message(plan):
         ["NoNewPrivileges", Variant("b", True)],
         ["StandardOutput", Variant("s", "journal")],
         ["StandardError", Variant("s", "journal")],
+        ["LogNamespace", Variant("s", LOG_NAMESPACE)],
     ]
     return Message(
         destination="org.freedesktop.systemd1",
