@@ -107,7 +107,7 @@ def test_no_unreviewed_pid1_deadline_override():
     assert message.member == "StartTransientUnit"
     assert 0 < deadline.TRIGGER_SECONDS < budget.DEADLINE_SECONDS
     assert identity.FRESH_ROOT_CONTROL_REVISION == (
-        "c03815b18efc96797ba868f2412f073f758a6cad")
+        "cacacbee66c0401e04dfe702d6b90e87215280d0")
 
 
 def test_deadline_source_does_not_accept_other_unit_or_untrusted_path():
