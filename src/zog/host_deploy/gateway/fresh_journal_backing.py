@@ -52,9 +52,7 @@ def _mount_points():
 
 def inspect():
     """Return only trusted actual backing. Never mark a missing mount valid."""
-    from .fresh_aggregate_disk import inspect_external_native
     # This is a read-only native proof, not permission to perform a mount.
-    pool = inspect_external_native()
     persistent, volatile = targets()
     source = JOURNAL_SOURCE
     volatile_source = VOLATILE_SOURCE
@@ -68,7 +66,6 @@ def inspect():
                 or st.st_dev != fs_dev or dest.st_dev != fs_dev
                 or str(dst) not in mounts):
             raise RuntimeError("journal namespace has unbounded fallback path")
-        src_majmin = _mount_points().get(str(src))
         dst_info = mounts[str(dst)]
         if (len(dst_info) != 3 or dst_info[1] != "ext4"
                 or not dst_info[0].startswith("/dev/loop")
