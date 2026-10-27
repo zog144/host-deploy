@@ -208,7 +208,8 @@ def provision_external(*, available_after_reservations_bytes):
     _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
           loop, str(mount)], output=False)
     for suffix in ("owner-state", "owner-state/budget", "artifacts",
-                   "compiler-logs", "controller-logs", "systemd-journal"):
+                   "compiler-logs", "controller-logs", "systemd-journal",
+                   "systemd-journal/volatile"):
         new = mount / suffix
         new.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chown(new, 0, 0)
