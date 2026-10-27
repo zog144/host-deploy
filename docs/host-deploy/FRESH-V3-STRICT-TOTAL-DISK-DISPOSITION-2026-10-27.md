@@ -130,3 +130,24 @@ is required before any 6-hour GO claim.
 **Issue #5 should stay open** as a scope/architecture decision requiring
 approval plus native acceptance, not be labeled fully solved merely
 because every source CI workflow passes.
+
+
+## 2026-10-27 security-suite coverage and non-mutating preflight
+
+The earlier source/contract workflows ran explicit pytest filenames and
+inadvertently excluded the Project/state-backing test, budget-directory
+preparation tests and PID1 host-write-audit tests. Both maintained workflow
+test lists now include all three. The first expanded run found an obsolete
+test assumption: Project/state bind creation was still expected during
+`install`, although the accepted safer source provisions it in
+`prepare-work` BEFORE the seed importer writes there. Corrected the test
+to enforce actual preparation order and prevent an accidental future
+regression. The expanded suite passed on the corrected revision.
+
+The native diagnostic is safe to run before both pool images are allocated:
+it requires only effective root and actual systemd PID1 with a matching mount
+namespace. It must not depend on `owner-state` or call `_root()` (which
+requires an already-mounted external image). Results remain
+`evidence-only-no-aggregate-admission` even when sampling succeeds. Run
+only on an independently reviewed disposable host; on the retained host,
+read-only inspection still requires the existing native acceptance boundary.
