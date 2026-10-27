@@ -303,7 +303,7 @@ class NativeOwner:
                 or not stat.S_ISDIR(seen.st_mode)
                 or original.st_dev != seen.st_dev
                 or original.st_ino != seen.st_ino):
-            raise RuntimeError("root-control registration path escaped 2GiB pool")
+            raise RuntimeError("root-control imported build root escaped 30GiB pool")
         return {
             "unit": unit, "active": data.get("ActiveState") == "active",
             "invocation_id": data.get("InvocationID"),
@@ -693,11 +693,13 @@ def install_approved():
             or active_watchdog.get("ControlGroup", "").startswith(
                 "/" + sidecar.SLICE_UNIT)):
         raise RuntimeError("independent PID1 watchdog activation unproven")
-    # Controller may not write build output; make the entire quota image root
-    # writable only for the independent selected build UID/primary GID.
-    os.chown(quota.MOUNT, plan["identity"]["build_uid"],
-             plan["identity"]["build_gid"])
-    os.chmod(quota.MOUNT, 0o700)
+    # The top of the quota image is ROOT-owned and not writable by either
+    # isolated nonroot UID. Otherwise the build UID could rename the protected
+    # imported rootfs/registration directory despite that child being root
+    # owned. root-control grants write access only to specific copied source
+    # and output workspaces inside the bounded Project/state mount.
+    os.chown(quota.MOUNT, 0, 0)
+    os.chmod(quota.MOUNT, 0o755)
     receipt = sidecar.install(plan, host_owner=owner)
     _store(STATE / "activation.json", receipt, exclusive=True)
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
