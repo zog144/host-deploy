@@ -315,7 +315,7 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
                         lambda path, value: record.append(value))
     result = owner.arm_approved()
     assert result["request_id"] == original
-    assert result["kernel_quota_bytes"] == aggregate.BUILD_BYTES
+    assert result["dedicated_build_capacity_bytes"] == aggregate.BUILD_BYTES
     assert len(record) == 1 and record[0]["request_id"] == original
     assert record[0]["status"] == "active"
 
