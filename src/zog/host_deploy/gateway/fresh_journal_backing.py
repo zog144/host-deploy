@@ -92,11 +92,11 @@ def install_binds_before_activation():
     from .fresh_native_owner import _show
     if os.geteuid() != 0:
         raise PermissionError("journal mounting requires protected root")
-    pool_dev = Path(EXTERNAL_MOUNT).stat().st_dev
     for unit in (JOURNAL_SERVICE, *JOURNAL_SOCKETS):
         entry = _show(unit)
         if entry.get("ActiveState") not in ("inactive", "dead"):
             raise RuntimeError("namespaced journal already active or uncertain")
+    pool_dev = Path(EXTERNAL_MOUNT).stat().st_dev
     persistent, volatile = targets()
     for src, dest in ((JOURNAL_SOURCE, persistent),
                       (VOLATILE_SOURCE, volatile)):
