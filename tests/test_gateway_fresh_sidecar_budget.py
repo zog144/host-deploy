@@ -266,6 +266,15 @@ def test_native_transient_transport_encodes_exact_pid1_properties(monkeypatch):
     assert properties["StartLimitIntervalUSec"] == ("t", 60_000_000)
     assert properties["Environment"][0] == "as"
     assert properties["NoNewPrivileges"] == ("b", True)
+    assert properties["LogNamespace"] == ("s", sidecar.LOG_NAMESPACE)
+    assert properties["BindPaths"] == (
+        "a(ssbt)", [[sidecar.REGISTRATION_SOURCE,
+                     sidecar.REGISTRATION_DEST, False, 0]])
+    bad_mount = deepcopy(p["properties"])
+    bad_mount["BindPaths"] = [[sidecar.REGISTRATION_SOURCE,
+                              "/var/lib/zog/other", False, 0]]
+    with pytest.raises(ValueError):
+        native._checked_properties(sidecar.UNIT, "fail", bad_mount)
     with pytest.raises(ValueError, match="only one absent"):
         native._checked_properties(
             sidecar.UNIT, "replace", p["properties"])
@@ -307,6 +316,10 @@ def test_dbus_next_real_wire_serialization_and_roundtrip():
     ]
     assert props["Environment"].signature == "as"
     assert props["NoNewPrivileges"].value is True
+    assert props["LogNamespace"].value == sidecar.LOG_NAMESPACE
+    assert props["BindPaths"].signature == "a(ssbt)"
+    assert props["BindPaths"].value == [[sidecar.REGISTRATION_SOURCE,
+                                         sidecar.REGISTRATION_DEST, False, 0]]
 
 def test_budget_crash_safe_cancel_once_and_read_only_recovery(tmp_path, monkeypatch):
     from pathlib import Path
