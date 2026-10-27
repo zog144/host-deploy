@@ -22,6 +22,7 @@ from . import fresh_quota_volume as quota
 PROJECT_ROOT = quota.MOUNT.parent
 SOURCE = quota.MOUNT / "state"
 DESTINATION = PROJECT_ROOT / "state"
+RESOURCE_ROOT = quota.MOUNT / "controller-build-resources"
 ATTEMPT = "project-state-bind-attempt.json"
 SCHEMA = "host-deploy-fresh-project-state-bind-v1"
 _LOOP_SOURCE = re.compile(r"/dev/loop[0-9]+\[/state\]\Z")
@@ -54,6 +55,9 @@ def inspect(controller_uid):
     project = _directory(PROJECT_ROOT, controller_uid)
     src = _directory(SOURCE, controller_uid)
     dst = _directory(DESTINATION, controller_uid)
+    resources = _directory(RESOURCE_ROOT, 0)
+    if resources.st_dev != src.st_dev:
+        raise RuntimeError("controller rootfs import escaped build quota")
     if (src.st_dev != dst.st_dev or src.st_ino != dst.st_ino
             or src.st_dev != quota.MOUNT.stat().st_dev):
         raise RuntimeError("Project state escaped the quota image")
@@ -96,7 +100,7 @@ def install_bind(controller_uid):
         raise PermissionError("fixed controller identity required")
     _directory(PROJECT_ROOT, controller_uid)
     _directory(DESTINATION, controller_uid, empty=True)
-    if SOURCE.exists() or SOURCE.is_symlink():
+    if SOURCE.exists() or SOURCE.is_symlink() or RESOURCE_ROOT.exists() or RESOURCE_ROOT.is_symlink():
         raise RuntimeError("Project state source already exists; inspect only")
     if owner._show(owner.sidecar.UNIT).get("LoadState") != "not-found":
         raise RuntimeError("cannot overlay active/uncertain controller Project")
@@ -104,6 +108,9 @@ def install_bind(controller_uid):
     SOURCE.mkdir(mode=0o700)
     os.chown(SOURCE, controller_uid, -1)
     _directory(SOURCE, controller_uid, empty=True)
+    RESOURCE_ROOT.mkdir(mode=0o700)
+    os.chown(RESOURCE_ROOT, 0, 0)
+    _directory(RESOURCE_ROOT, 0, empty=True)
     marker = owner.STATE / ATTEMPT
     if marker.exists() or marker.is_symlink():
         raise RuntimeError("Project state bind already attempted")
