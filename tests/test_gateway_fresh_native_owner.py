@@ -23,7 +23,7 @@ def test_cron_contains_fixed_watch_and_boot_hooks(monkeypatch):
     monkeypatch.setattr(owner, "_read_json", lambda path: plan)
     contents = owner.schedule_text()
     assert "* * * * * root PYTHONPATH=/opt/zog/accepted/host-deploy/src" in contents
-    assert " -B -m zog.host_deploy.gateway.fresh_native_owner watch\n" in contents
+    assert " -B -m zog.host_deploy.gateway.fresh_native_owner watch >>" in contents\n    assert contents.count(">>" + owner.CRON_LOG + " 2>&1") == 2
     assert "@reboot root " in contents
     assert contents.count("root ") == 2
     assert "daemon-reload" not in contents
