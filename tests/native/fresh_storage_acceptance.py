@@ -32,7 +32,7 @@ def identity(path):
             'mount': command('findmnt', '-n', '-o', 'TARGET,SOURCE,FSTYPE,MAJ:MIN', '-T', str(p))}
 
 
-def exhaust(path):
+def exhaust(path, *, retain=False):
     """Allocate actual filesystem blocks until kernel ENOSPC; no mocked limits."""
     leaf = Path(path) / 'acceptance-enospc'
     fd = os.open(leaf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -56,7 +56,8 @@ def exhaust(path):
         assert observed
     finally:
         os.close(fd)
-        leaf.unlink()
+        if not retain:
+            leaf.unlink()
         d = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
         os.fsync(d)
         os.close(d)
@@ -108,10 +109,31 @@ def main():
     for path in files:
         assert path.stat().st_dev == external.stat().st_dev
         emit('journal-file', identity(path))
+    # Hold ENOSPC while journald is active; exercise namespace restart with
+    # fixed mounts still present. No default journal changes or vacuuming.
+    exhaust(external, retain=True)
+    full_marker = 'zog-native-full-journal-no-default-spill'
+    try:
+        command('systemd-run', '--unit=zog-native-storage-full.service', '--wait',
+                '--property=LogNamespace=' + journal.LOG_NAMESPACE,
+                '/usr/bin/printf', full_marker + '\n')
+        command('systemctl', 'restart', journal.JOURNAL_SERVICE)
+        emit('journal-full-restart', journal.inspect())
+        default = command('journalctl', '-u', 'zog-native-storage-full.service',
+                          '--no-pager', '-o', 'cat')
+        assert full_marker not in default, 'namespace payload spilled into default journal'
+        emit('default-journal-negative', {'payload_absent': True})
+        for path in journal.JOURNAL_SOURCE.rglob('*.journal'):
+            assert path.stat().st_dev == external.stat().st_dev
+            emit('full-journal-file', identity(path))
+    finally:
+        (external / 'acceptance-enospc').unlink()
+    command('systemctl', 'restart', journal.JOURNAL_SERVICE)
+    emit('journal-after-release', journal.inspect())
     emit('journal-service', command('systemctl', 'show', journal.JOURNAL_SERVICE,
                                    '-p', 'MainPID,ControlGroup,InvocationID,LogsDirectory'))
     emit('result', {'storage_and_journal_probe': 'PASS', 'compiler_admission': False,
-                    'untested': ['controller-workers', 'full-journal-fallback',
+                    'untested': ['controller-workers',
                                  'six-hour-deadline', 'cancellation', 'reboot']})
 
 
