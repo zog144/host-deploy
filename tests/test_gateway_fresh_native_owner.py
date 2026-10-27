@@ -159,6 +159,9 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     state.mkdir(mode=0o700)
     monkeypatch.setattr(owner, "STATE", state)
     monkeypatch.setattr(owner, "BUDGET_DIR", state / "budget")
+    monkeypatch.setattr(owner, "_budget_directory_prepared",
+                        lambda *, require_empty: calls.append(
+                            "budget-ready" if require_empty else "budget-observe"))
     (state / "budget").mkdir(mode=0o700)
     monkeypatch.setattr(owner.budget, "_protected_root", lambda path: Path(path))
     monkeypatch.setattr(owner, "_root", lambda: None)
@@ -223,6 +226,7 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     assert prepared["compiler_authorized"] is False
     result = owner.install_approved()
     assert result["invocation_id"] == "new-only"
+    assert calls.index("budget-ready") < calls.index("kernel-quota")
     assert calls.index("kernel-quota") < calls.index("persistent-cron")
     assert calls.index("kernel-quota") < calls.index("project-state-bind")
     assert calls.index("project-state-bind") < calls.index("pid1-watchdog")
@@ -243,6 +247,8 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
                      "watchdog_receipt_sha256": "sha256:"+"c"*64},
     }
     original = "f"*32
+    monkeypatch.setattr(owner, "_budget_directory_prepared",
+                        lambda *, require_empty: True)
     monkeypatch.setattr(owner, "_root", lambda: None)
     monkeypatch.setattr(owner, "_read_json", lambda path:
                         {"plan_sha256": x["sha256"]} if path in (
