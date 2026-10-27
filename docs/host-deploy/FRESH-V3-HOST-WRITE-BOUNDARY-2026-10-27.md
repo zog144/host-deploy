@@ -41,3 +41,64 @@ Draft PR #2 remains unmerged; Stage B `toolchain.submit(cross-bootstrap)` remain
 A further cross-source inspection of `root-control@c03815b1` `BuildBackend.register()` found that the protected `/var/lib/zog/build-resources` directory contains `registration.json`, jobs **and an actual copied immutable build root filesystem** (`shutil.copytree(prepared_root, path / 'root')`). Placing that entire directory in the 2-GiB external log/owner-state pool risks ENOSPC during legitimate rootfs preparation. Fresh-only `fresh_sidecar_install.REGISTRATION_SOURCE` is now the 30-GiB image's protected `controller-build-resources` directory. The exact new transient root-control unit alone binds this into its `/var/lib/zog/build-resources`; the historical shared directory remains untouched. The live sidecar `MainPID` device/inode check still applies and now checks **30-GiB build** backing.
 
 The quota image's mount root must remain **root-owned, 0755 and non-writable by both fresh nonroot UIDs**. Project/state (controller-owned 0700) and the copied source/output workspaces have their own narrowly assigned write permissions, while controller-build-resources stays root-owned 0700. Making the 30-GiB image root owned by the build user would allow that user to rename the root-owned registration import directory merely by controlling its parent. The native Work acceptance must test a fresh nonroot worker's attempt to rename/replace that directory fails, and that image-build source/output/seed preparations still work through the explicitly selected state bind.
+
+
+## 2026-10-27 reprise: budget-directory conflict and exact shared-host writer ledger
+
+**Reproduced preparation boundary.** `prepare-external` already creates
+`external/owner-state/budget` as root-owned private directory. It must not be
+created a second time by `install`, `prepare-work`, or `arm`. All three
+operations now use an explicit read-only `_budget_directory_prepared()` guard:
+exact directory under owner-state, root ownership/mode, actual external
+filesystem mount, same filesystem device, and **empty before first arming**.
+A missing, redirected, pre-populated, substituted, or interrupted directory
+fails closed without deleting or replacing anything. `prepare-work` performs
+this check **before** allocating the 30-GiB work image. `install` validates the
+work volume, Project state bind, and real bounded journald source before
+installing the cron file. Tests exercise an actual prepared temporary
+directory and absence, non-empty, missing-mount, and foreign-device negatives.
+
+**Explicit unresolved write ledger in source**
+(`fresh_aggregate_disk.UNVERIFIED_WRITERS`):
+
+| Writer class | Expected backing / risk | Status |
+| --- | --- | --- |
+| Worker mounts, outputs and workspaces | 30-GiB ext4 quota and kernel namespace | Root-control + native witness required |
+| Worker private /tmp, /var/tmp and coredumps | PID1 PrivateTmp/host filesystem may escape the image | NO-GO |
+| Root-control registration and imported rootfs | Fixed sidecar private bind into 30-GiB pool | Native PID/inode proof required |
+| Namespaced journald | Fixed persistent + volatile binds in 2-GiB pool | Native 252/ENOSPC/reboot proof required |
+| **PID1 and default journald** | Shared rootfs/log filesystem, independent of LogNamespace | **Unbounded, NO-GO** |
+| **SSM transport and agent records** | Shared host logs/state outside both loop images | **Unbounded, NO-GO** |
+| **Cron daemon and schedule** | External cron program output capped; daemon events and /etc/cron.d are not | **Unbounded, NO-GO** |
+| **Installer and filesystem metadata** | Host-side image names, loop/mountpoint metadata, bootstrap files, journal side effects | **Unbounded, NO-GO** |
+| **Other attributable host writes** | Background shared services, kernel crash/core and unspecified writers | **Unbounded until classified, NO-GO** |
+
+The fixed 30 + 2 GiB kernel image **capacity** covers image contents and
+their ext4 metadata, but not every host-root filesystem write triggered by
+allocating or using the images. A periodic sampling process, copied JSON
+receipt or heuristic baseline delta is not a kernel-enforced *total* bound.
+At the present exact cap, no independently enforceable byte budget exists
+for host PID1/default journal/SSM/crond/metadata outside the images.
+
+**Engineering disposition:** The current retained *shared host* design cannot
+honestly certify an absolute 32-GiB **additional host-write** ceiling solely
+from these two images. Completing that specific proof needs a separately
+authorized/reviewed kernel-enforced host-wide accounting/isolation boundary
+that covers shared writers, or an explicit change to the allowed accounting
+scope or host architecture. A small estimated reserve within 32 GiB is not
+sufficient without kernel enforcement over the residual host writes.
+This decision is not authority to change default host journald, SSM,
+partitioning, allocate a new EC2 resource, or touch the historical Project.
+
+**Six-hour enforcement:** The fixed monotonic PID1 timer remains independent
+of the two user-space monitors and targets only the accepted fresh slice,
+with a 30-second safety margin. The exact real PID1 firing, reboot,
+combined watchdog-loss, ENOSPC fallback and all-descendants termination
+must still pass disposable native acceptance. No source-only assertion
+counts as that acceptance.
+
+**Final admission remains NO-GO:** `validate_pre_activation` returns only
+`preactivation-only` with the full explicit unresolved writer list.
+`aggregate.validate` (used by `arm` and native watchdog) rejects any
+nonempty list. No fake empty list, flag override or source-only test permits
+the new cross-bootstrap until those source+native blockers are resolved.
