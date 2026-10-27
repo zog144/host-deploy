@@ -24,6 +24,7 @@ from . import fresh_sidecar_install as sidecar
 from . import fresh_watchdog_service as independent_watchdog
 from . import fresh_deadline_timer as hard_deadline
 from . import fresh_aggregate_disk as aggregate
+from . import fresh_journal_backing as journal_backing
 
 STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -118,6 +119,7 @@ def _command(args, *, timeout=15):
 def _show(unit):
     known = {sidecar.UNIT, independent_watchdog.UNIT,
              hard_deadline.UNIT, SLICE_UNIT, CRON_SERVICE,
+             journal_backing.JOURNAL_SERVICE, *journal_backing.JOURNAL_SOCKETS,
              "root-control.service", "zog-root-control.service",
              "zog-certbot-seed-root.service"}
     if unit not in known:
@@ -129,7 +131,7 @@ def _show(unit):
             raise ValueError("unapproved systemd readback target")
     raw = _command(["/usr/bin/systemctl", "show", unit,
                     "--property=LoadState,ActiveState,MainPID,InvocationID,"
-                    "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic"])
+                    "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic,LogNamespace"])
     return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
 
 
