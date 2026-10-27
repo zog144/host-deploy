@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import PurePosixPath
 
-from .fresh_aggregate_disk import EXTERNAL_MOUNT
+from .fresh_quota_volume import MOUNT as BUILD_MOUNT
 from .compiler_execution_identity import (
     FRESH_ROOT_CONTROL_REVISION, FRESH_SCHEMA, validate,
 )
@@ -21,7 +21,7 @@ SOCKET = "/run/zog/root-control-fresh-cross-bootstrap-oct25.sock"
 PROJECT = "fresh-cross-bootstrap-oct25"
 SLICE_UNIT = "zogfreshcrossbootstrapoct25.slice"
 LOG_NAMESPACE = "zogfreshcrossbootstrapoct25"
-REGISTRATION_SOURCE = EXTERNAL_MOUNT + "/artifacts/build-resources"
+REGISTRATION_SOURCE = str(BUILD_MOUNT / "controller-build-resources")
 REGISTRATION_DEST = "/var/lib/zog/build-resources"
 REQUIRED_ENV = frozenset({
     "ROOT_CONTROL_SOCKET", "ROOT_CONTROL_SOCKET_GID",
@@ -112,7 +112,8 @@ def review_plan(binding, installed):
         "StartLimitBurst": 1, "StartLimitIntervalSec": "60s",
         "StandardOutput": "journal", "StandardError": "journal",
         "LogNamespace": LOG_NAMESPACE,
-        # Only this transient service sees the protected registration pool.
+        # Full imported worker rootfs belongs in the 30-GiB build volume;
+        # only this sidecar sees its root-owned registration directory.
         # No host-wide bind or modification of historical build-resources.
         "BindPaths": [[REGISTRATION_SOURCE, REGISTRATION_DEST, False, 0]],
         "NoNewPrivileges": True,
