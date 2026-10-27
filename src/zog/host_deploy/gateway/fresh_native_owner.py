@@ -702,6 +702,12 @@ def arm_approved():
             "kernel_quota_bytes": current["capacity_bytes"]}
 
 
+def prepare_journal():
+    """One-shot exact journal bind backing before any fresh PID1 activation."""
+    _root()
+    return journal_backing.install_binds_before_activation()
+
+
 def prepare_external():
     """Privileged once-only 2-GiB accounting pool BEFORE operator stages plan.
 
@@ -719,10 +725,12 @@ def prepare_external():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "prepare-external":
         prepare_external()
+    elif sys.argv[1] == "prepare-journal":
+        prepare_journal()
     elif sys.argv[1] == "recover":
         recover()
     elif sys.argv[1] == "install":
