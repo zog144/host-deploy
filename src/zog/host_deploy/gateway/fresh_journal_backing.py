@@ -64,6 +64,7 @@ def inspect():
         if (not stat.S_ISDIR(st.st_mode) or not stat.S_ISDIR(dest.st_mode)
                 or src.is_symlink() or dst.is_symlink()
                 or st.st_dev != fs_dev or dest.st_dev != fs_dev
+                or st.st_ino != dest.st_ino
                 or str(dst) not in mounts):
             raise RuntimeError("journal namespace has unbounded fallback path")
         dst_info = mounts[str(dst)]
