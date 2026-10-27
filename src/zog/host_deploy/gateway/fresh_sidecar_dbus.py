@@ -7,7 +7,7 @@ No disk .service file, daemon-reload, generic unit or arbitrary ExecStart.
 import asyncio
 import os
 
-from .fresh_sidecar_install import UNIT, ROLE, SOCKET, SLICE_UNIT
+from .fresh_sidecar_install import UNIT, ROLE, SOCKET, SLICE_UNIT, LOG_NAMESPACE
 
 
 def _checked_properties(unit, mode, properties):
@@ -17,7 +17,7 @@ def _checked_properties(unit, mode, properties):
         "Description", "Type", "ExecStart", "Environment", "User", "Group",
         "Restart", "RestartSec", "StartLimitBurst",
         "StartLimitIntervalSec", "StandardOutput", "StandardError",
-        "NoNewPrivileges", "Slice",
+        "NoNewPrivileges", "Slice", "LogNamespace",
     }
     if set(properties) != required:
         raise ValueError("unsupported transient systemd service property")
@@ -34,6 +34,7 @@ def _checked_properties(unit, mode, properties):
             or properties["StartLimitBurst"] != 1
             or properties["StartLimitIntervalSec"] != "60s"
             or properties["StandardOutput"] != "journal"
+            or properties["LogNamespace"] != LOG_NAMESPACE
             or properties["StandardError"] != "journal"
             or properties["NoNewPrivileges"] is not True):
         raise ValueError("unreviewed root-control lifecycle properties")
@@ -66,6 +67,7 @@ def _checked_properties(unit, mode, properties):
         ("StartLimitIntervalUSec", "t", 60_000_000),
         ("StandardOutput", "s", "journal"),
         ("StandardError", "s", "journal"),
+        ("LogNamespace", "s", LOG_NAMESPACE),
         ("NoNewPrivileges", "b", True),
     ]
 
