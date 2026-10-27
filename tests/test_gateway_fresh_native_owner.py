@@ -62,6 +62,9 @@ def test_cancel_only_frozen_fresh_cgroup_and_original_cancellation_id(tmp_path, 
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
     monkeypatch.setattr(owner.project_state, "inspect",
                         lambda uid: {"mount_verified": True} if uid == 24301
+                        else pytest.fail("wrong reviewed controller UID"))
+    monkeypatch.setattr(owner.project_state, "inspect",
+                        lambda uid: {"mount_verified": True} if uid == 24301
                         else pytest.fail("wrong controller UID"))
     monkeypatch.setattr(owner, "CGROUP", tmp_path)
     (tmp_path / "cgroup.kill").write_text("")
