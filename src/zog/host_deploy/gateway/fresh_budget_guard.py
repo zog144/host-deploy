@@ -13,9 +13,13 @@ import re
 import stat
 import uuid
 
-SCHEMA = "host-deploy-fresh-cross-bootstrap-budget-v1"
+SCHEMA = "host-deploy-fresh-dedicated-storage-budget-v2"
 DEADLINE_SECONDS = 21600
-ADDITIONAL_DISK_BYTES = 34359738368
+# Maximum preallocated compiler-specific filesystem backing, not a claim
+# about ordinary shared host journald/SSM/crond/default filesystem overhead.
+DEDICATED_STORAGE_BYTES = 34359738368
+ADDITIONAL_DISK_BYTES = DEDICATED_STORAGE_BYTES  # older internal reference
+BUILD_IMAGE_BYTES = 30 * 1024**3
 MAX_HEARTBEAT_SECONDS = 60
 _HEX = re.compile(r"[0-9a-f]{32}\Z")
 
@@ -133,7 +137,12 @@ def evaluate(value, *, host_id, project_root, boot_id, now_seconds,
         return "uncertain"
     if (now_seconds >= x["deadline_seconds"]
             or monotonic_seconds - x["started_monotonic_seconds"] >= DEADLINE_SECONDS
-            or max(0, used_bytes - x["baseline_disk_used_bytes"]) >= ADDITIONAL_DISK_BYTES):
+            # The two image files are fully reserved BEFORE arming. Sampling
+            # host-wide used bytes is neither an attribution mechanism nor a
+            # runtime dedicated-quota limit; the 30-GiB image supplies this
+            # observed kernel-bound work usage. All other dedicated storage
+            # must independently live in the preallocated 2-GiB image.
+            or used_bytes >= BUILD_IMAGE_BYTES):
         return "stop"
     return "active"
 
