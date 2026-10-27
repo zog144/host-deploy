@@ -19,6 +19,22 @@ REQUIRED_CLASSES = frozenset({
     "compiler-logs", "controller-logs", "systemd-journal",
 })
 
+# Every attributable writer class outside the two kernel-limited images
+# remains explicitly NOT PROVEN. Shared PID1/crond/SSM writes cannot be
+# attributed to a private loop quota merely by configuring unit LogNamespace.
+# New generic classes require separately reviewed confinement/provenance and
+# disposable native negative proof; they are never auto-credited as bounded.
+UNVERIFIED_WRITERS = (
+    "worker-mounts-unverified",
+    "worker-private-tmp-coredump-unverified",
+    "root-control-registration-unverified",
+    "pid1-default-journald-unverified",
+    "ssm-transport-and-agent-unverified",
+    "cron-schedule-and-daemon-unverified",
+    "installer-filesystem-metadata-unverified",
+    "other-attributable-host-writes-unverified",
+)
+
 
 def _within(path, mount):
     return (type(path) is str and path.startswith("/")
@@ -85,11 +101,7 @@ def validate_pre_activation(work, external, *, host_owner_verified=False):
     separately named pre-activation check may tolerate the exact enumerated
     outstanding classes returned from genuine native kernel inspection.
     """
-    expected_blockers = [
-        "worker-mounts-unverified",
-        "root-control-registration-unverified",
-        "default-journal-and-pid1-unverified",
-    ]
+    expected_blockers = list(UNVERIFIED_WRITERS)
     if (type(external) is not dict
             or external.get("unaccounted_writable_roots") != expected_blockers):
         raise RuntimeError("unreviewed or falsely certified pre-activation classes")
@@ -167,11 +179,7 @@ def inspect_external_pool_native():
         # These kernel/provenance classes are still outstanding. The only
         # permitted positive proof is a reviewed fixed source correction
         # plus independent native mount/log/ENOSPC acceptance.
-        "unaccounted_writable_roots": [
-            "worker-mounts-unverified",
-            "root-control-registration-unverified",
-            "default-journal-and-pid1-unverified",
-        ],
+        "unaccounted_writable_roots": list(UNVERIFIED_WRITERS),
     }
 
 
