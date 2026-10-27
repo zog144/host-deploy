@@ -24,7 +24,7 @@ SOURCE = quota.MOUNT / "state"
 DESTINATION = PROJECT_ROOT / "state"
 ATTEMPT = "project-state-bind-attempt.json"
 SCHEMA = "host-deploy-fresh-project-state-bind-v1"
-_LOOP_SOURCE = re.compile(r"/dev/loop[0-9]+\\[/state\\]\\Z")
+_LOOP_SOURCE = re.compile(r"/dev/loop[0-9]+\[/state\]\Z")
 
 
 def _command(argv):
