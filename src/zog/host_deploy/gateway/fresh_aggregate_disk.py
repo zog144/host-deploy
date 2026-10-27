@@ -75,12 +75,13 @@ def validate(work, external, *, host_owner_verified=False):
 
 
 
-def inspect_external_native():
-    """Read kernel and loop backing rather than accepting a JSON quota claim.
+def inspect_external_pool_native():
+    """Inspect the fixed ext4 backing independently of journal bind setup.
 
-    This verifies the fixed ACCOUNTING pool itself. Native owner must also
-    independently prove the journald namespace and *all* new writable state
-    truly use these class roots; a file merely present here is not enough.
+    This is a PREPARATION receipt only. It deliberately retains all unknown
+    writer classes; it MUST NOT be accepted as aggregate admission proof.
+    Provisioning and reboot recovery cannot call the final journal inspector
+    before the journal bind mounts have been installed on this boot.
     """
     import os
     import re
@@ -131,14 +132,6 @@ def inspect_external_native():
         if (not stat.S_ISDIR(st.st_mode) or st.st_dev != dev
                 or path.is_symlink() or path.resolve() != path):
             raise RuntimeError("external accounting root is not on bounded mount: " + cls)
-    # Both real journal paths must be mounted from this exact loop filesystem
-    # BEFORE a fresh log namespace service may be started. No directory-name
-    # shortcut can clear this requirement.
-    from . import fresh_journal_backing
-    journal = fresh_journal_backing.inspect()
-    if (journal.get("external_pool") != str(mount)
-            or journal.get("verified") is not True):
-        raise RuntimeError("journal namespace backing is unverified")
     return {
         "schema": SCHEMA, "mount": str(mount), "limit_bytes": limit,
         "kernel_enforced": True, "mount_verified": True,
@@ -154,6 +147,21 @@ def inspect_external_native():
         ],
     }
 
+
+
+def inspect_external_native():
+    """Final external readback: pool AND actual journal mounts required.
+
+    Verifying the journal bind paths does not establish that ALL host writes
+    use the bounded volume. The remaining classes deliberately stay NO-GO.
+    """
+    pool = inspect_external_pool_native()
+    from . import fresh_journal_backing
+    journal = fresh_journal_backing.inspect()
+    if (journal.get("external_pool") != pool["mount"]
+            or journal.get("verified") is not True):
+        raise RuntimeError("journal namespace backing is unverified")
+    return pool
 
 
 def provision_external(*, available_after_reservations_bytes):
@@ -215,7 +223,7 @@ def provision_external(*, available_after_reservations_bytes):
         new.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chown(new, 0, 0)
         os.chmod(new, 0o700)
-    return inspect_external_native()
+    return inspect_external_pool_native()
 
 
 def reattach_external_after_boot():
@@ -234,4 +242,4 @@ def reattach_external_after_boot():
             raise RuntimeError("unreviewed external loop on reboot")
         _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
               loop, str(mount)], output=False)
-    return inspect_external_native()
+    return inspect_external_pool_native()
