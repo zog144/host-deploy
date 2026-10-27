@@ -287,6 +287,21 @@ class NativeOwner:
                 or fd.st_gid != expected["identity"]["controller_gid"]
                 or stat.S_IMODE(fd.st_mode) != 0o660):
             raise RuntimeError("unexpected fresh controller socket ownership")
+        pid = data.get("MainPID", "")
+        if (not pid.isdecimal() or int(pid) < 2
+                or data.get("LogNamespace") != sidecar.LOG_NAMESPACE):
+            raise RuntimeError("fresh controller PID/log namespace not attested")
+        registration_source = Path(sidecar.REGISTRATION_SOURCE)
+        registration_visible = Path("/proc") / pid / "root" / sidecar.REGISTRATION_DEST.lstrip("/")
+        # Actual controller PID's mount namespace must see the NEW bounded
+        # registration inode, never the shared historical host directory.
+        original = registration_source.lstat()
+        seen = registration_visible.stat()
+        if (not stat.S_ISDIR(original.st_mode)
+                or not stat.S_ISDIR(seen.st_mode)
+                or original.st_dev != seen.st_dev
+                or original.st_ino != seen.st_ino):
+            raise RuntimeError("root-control registration path escaped 2GiB pool")
         return {
             "unit": unit, "active": data.get("ActiveState") == "active",
             "invocation_id": data.get("InvocationID"),
