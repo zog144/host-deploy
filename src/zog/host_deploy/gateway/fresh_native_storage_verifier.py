@@ -194,7 +194,7 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
             "memory_max": int(memory)}
 
 
-def inspect_live(*, plan, admission, controller_pid, boot_id, host_id):
+def inspect_live(*, plan, admission, controller_pid, controller_cgroup, boot_id, host_id):
     """Fail-closed live, independently sampled proof; no prepared JSON bypass.
 
     Must be called by the root-owned fixed native owner after its independent
@@ -215,8 +215,10 @@ def inspect_live(*, plan, admission, controller_pid, boot_id, host_id):
             or plan.get("project_root") != str(project_state.PROJECT_ROOT)):
         raise RuntimeError("host/boot/Project/storage admission identity drift")
     identity = plan["identity"]
-    if type(controller_pid) is not int or controller_pid < 2:
-        raise RuntimeError("controller MainPID is not verified")
+    expected_controller = ("/" + sidecar.SLICE_UNIT + "/" + sidecar.UNIT)
+    if (type(controller_pid) is not int or controller_pid < 2
+            or controller_cgroup != expected_controller):
+        raise RuntimeError("controller PID/cgroup identity is not verified")
     volume = quota.inspect()
     state = project_state.inspect(identity["controller_uid"])
     external = aggregate.inspect_external_native()
@@ -237,8 +239,8 @@ def inspect_live(*, plan, admission, controller_pid, boot_id, host_id):
     controller = _uid_gid(controller_pid)
     if any(v != 0 for v in controller["Uid"]):
         raise RuntimeError("fresh privileged controller MainPID is not root")
-    if _cgroup(controller_pid) != "/" + sidecar.SLICE_UNIT:
-        raise RuntimeError("fresh controller is outside the exact parent cgroup")
+    if _cgroup(controller_pid) != controller_cgroup:
+        raise RuntimeError("fresh controller is outside its exact service cgroup")
     workers = [
         _verify_worker(pid, build_uid=identity["build_uid"],
                        build_gid=identity["build_gid"], build_device=device)
