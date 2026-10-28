@@ -64,26 +64,58 @@ def _processes():
 
 
 def _mounts(pid):
+    """Use mount IDs for stacks; retain every kernel layer for write review."""
     raw = _one(Path("/proc") / str(pid) / "mountinfo", limit=262144)
-    mounts = {}
+    entries = {}
+    by_point = {}
     for line in raw.splitlines():
         f = line.split()
         if "-" not in f:
             raise RuntimeError("invalid worker mountinfo")
         sep = f.index("-")
-        if sep < 6 or len(f) < sep + 3:
-            raise RuntimeError("truncated worker mountinfo")
-        point = f[4]
-        if (not point.startswith("/") or "\\" in point or point in mounts):
-            raise RuntimeError("unreviewed worker mount point")
-        mounts[point] = {"device": f[2], "flags": frozenset(f[5].split(",")),
-                         "fstype": f[sep + 1], "source": f[sep + 2]}
-        if len(mounts) > _MAX_MOUNTS:
+        if (sep < 6 or len(f) < sep + 4
+                or not f[0].isdecimal() or not f[1].isdecimal()
+                or f[2].count(":") != 1
+                or not f[2].replace(":", "").isdecimal()
+                or not f[3].startswith("/") or "\\" in f[3]
+                or not f[4].startswith("/") or "\\" in f[4]
+                or int(f[0]) in entries):
+            raise RuntimeError("truncated or invalid worker mountinfo")
+        flags = frozenset(f[5].split(","))
+        super_flags = frozenset(f[sep + 3].split(","))
+        if not (flags & {"rw", "ro"}) or not (super_flags & {"rw", "ro"}):
+            raise RuntimeError("worker mount flags unavailable")
+        m = {"id": int(f[0]), "parent": int(f[1]), "point": f[4],
+             "device": f[2], "flags": flags, "super_flags": super_flags,
+             "fstype": f[sep + 1], "source": f[sep + 2]}
+        entries[m["id"]] = m
+        by_point.setdefault(m["point"], []).append(m)
+        if len(entries) > _MAX_MOUNTS:
             raise RuntimeError("too many worker mounts")
-    if "/" not in mounts:
+    if "/" not in by_point:
         raise RuntimeError("worker root mount is absent")
-    return mounts
+    mounts = {}
+    for point, layers in by_point.items():
+        ids = {x["id"] for x in layers}
+        parents = {x["parent"] for x in layers if x["parent"] in ids}
+        tops = [x for x in layers if x["id"] not in parents]
+        if len(tops) != 1:
+            raise RuntimeError("ambiguous worker mount stack: " + point)
+        visited = set()
+        cursor = tops[0]
+        while cursor["id"] not in visited:
+            visited.add(cursor["id"])
+            if cursor["parent"] not in ids:
+                break
+            cursor = entries[cursor["parent"]]
+        if visited != ids:
+            raise RuntimeError("disconnected worker mount stack: " + point)
+        mounts[point] = tops[0]
+    return mounts, tuple(entries.values())
 
+
+def _writable(mount):
+    return "rw" in mount["flags"] and "rw" in mount["super_flags"]
 
 def _uid_gid(pid):
     status = _one(Path("/proc") / str(pid) / "status")
@@ -119,35 +151,47 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
         raise RuntimeError("non-build principal entered worker cgroup")
     if cg == "/" + sidecar.SLICE_UNIT:
         raise RuntimeError("worker is not in a finite descendant cgroup")
-    mounts = _mounts(pid)
+    mounts, all_mounts = _mounts(pid)
     root = Path("/proc") / str(pid) / "root"
     root_st = root.stat()
-    # RootDirectory must be the PID1-host-visible imported root, not merely
-    # another directory that happens to be on the same ext4 device.
+    # The kernel readlink names a candidate, not evidence that PID1 is
+    # executing from the actual inode of that directory. Match both device
+    # and inode against the immutable imported host-visible root.
     root_target = Path(os.readlink(root))
     registered = quota.MOUNT / "controller-build-resources"
-    if (root_st.st_dev != build_device
-            or not root_target.is_relative_to(registered)
+    if (not root_target.is_relative_to(registered)
             or root_target.name != "root"
+            or len(root_target.relative_to(registered).parts) != 3
             or ".." in root_target.parts):
         raise RuntimeError("PID1 worker RootDirectory escaped exact imported root")
+    if (root_target.is_symlink()
+            or not stat.S_ISDIR(root_st.st_mode)):
+        raise RuntimeError("PID1 worker root inode is not a directory")
+    candidate = root_target.stat()
+    if (not stat.S_ISDIR(candidate.st_mode)
+            or (root_st.st_dev, root_st.st_ino) !=
+               (candidate.st_dev, candidate.st_ino)
+            or root_st.st_dev != build_device):
+        raise RuntimeError("PID1 worker RootDirectory inode differs from imported root")
     majmin = f"{os.major(build_device)}:{os.minor(build_device)}"
     # Each separately writable compiler path must be a real kernel bind.
     # Stat through the worker's root, not through the controller's namespace.
     for target in _SAMPLES:
         m = mounts.get(target)
-        if (m is None or m["device"] != majmin
-                or "rw" not in m["flags"]):
+        if (m is None or m["device"] != majmin or not _writable(m)):
             raise RuntimeError("worker writable bind not on reviewed image: " + target)
         fs = (root / target.lstrip("/")).stat()
         if not stat.S_ISDIR(fs.st_mode) or fs.st_dev != build_device:
             raise RuntimeError("worker writable path redirected: " + target)
-    for target, m in mounts.items():
-        if "rw" not in m["flags"]:
+    for m in all_mounts:
+        if not _writable(m):
             continue
-        if m["device"] == majmin:
-            continue
-        if m["fstype"] not in _PSEUDO.get(target, ()):
+        target = m["point"]
+        # HugeTLB pools are not charged to the 30-GiB ext4 image or proven
+        # bounded by memory.max. Writable hugepage pseudo-mounts are NO-GO.
+        if m["fstype"] == "hugetlbfs" or target == "/dev/hugepages" or target.startswith("/dev/hugepages/"):
+            raise RuntimeError("unaccounted writable hugepage mount: " + target)
+        if m["device"] != majmin and m["fstype"] not in _PSEUDO.get(target, ()):
             raise RuntimeError("worker has writable foreign mount: " + target)
     unit_cgroup = CGROUP / cg.lstrip("/").removeprefix(sidecar.SLICE_UNIT).lstrip("/")
     if unit_cgroup.is_symlink() or not unit_cgroup.is_dir():
@@ -189,7 +233,7 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
             raise RuntimeError("worker has unaccounted writable descriptor")
         observed_fds += 1
     return {"pid": pid, "cgroup": cg, "root_dev": majmin,
-            "imported_root": str(root_target), "mount_count": len(mounts),
+            "imported_root": str(root_target), "mount_count": len(all_mounts),
             "writable_fd_count": observed_fds, "swap_max": 0,
             "memory_max": int(memory)}
 
