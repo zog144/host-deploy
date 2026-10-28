@@ -191,20 +191,29 @@ def test_live_inspection_binds_host_boot_request_project_and_worker(
     monkeypatch.setattr(verify, "_uid_gid", lambda pid:
                         {"Uid": (0,)*4} if pid == 400 else
                         {"Uid": (24302,)*4})
+    controller_group = ("/" + verify.sidecar.SLICE_UNIT
+                        + "/" + verify.sidecar.UNIT)
     monkeypatch.setattr(verify, "_cgroup",
-                        lambda pid: "/" + verify.sidecar.SLICE_UNIT)
+                        lambda pid: controller_group)
     monkeypatch.setattr(verify, "_verify_worker",
                         lambda pid, **kwargs: {"pid": pid,
                                                 "root_dev": "7:5"})
     receipt = verify.inspect_live(plan=plan, admission=a, controller_pid=400,
+                                  controller_cgroup=controller_group,
                                   host_id="i-exact", boot_id="boot-111")
     assert receipt["status"] == "live-evidence-only"
     assert receipt["workers"] == [{"pid": 411, "root_dev": "7:5"}]
+    with pytest.raises(RuntimeError, match="controller PID/cgroup"):
+        verify.inspect_live(plan=plan, admission=a, controller_pid=400,
+                            controller_cgroup="/old.slice/foreign.service",
+                            host_id="i-exact", boot_id="boot-111")
     assert checks == ["image-policy"]
     with pytest.raises(RuntimeError, match="identity drift"):
         verify.inspect_live(plan=plan, admission=a, controller_pid=400,
+                            controller_cgroup=controller_group,
                             host_id="i-other", boot_id="boot-111")
     monkeypatch.setattr(verify, "_processes", lambda: [400])
     with pytest.raises(RuntimeError, match="no live finite worker"):
         verify.inspect_live(plan=plan, admission=a, controller_pid=400,
+                            controller_cgroup=controller_group,
                             host_id="i-exact", boot_id="boot-111")
