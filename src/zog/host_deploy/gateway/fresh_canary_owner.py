@@ -33,7 +33,7 @@ COMPILER_TERMINAL = STATE / "compiler-terminal.json"
 # Source-only successor reviewed in root-control draft PR #14. This pin
 # MUST be matched by the actual protected installed-byte attestation before
 # the empty-lane arm can proceed. Source CI is not installed-byte proof.
-REQUIRED_GATE_REVISION = "e81220d5120e413363c684e93a6b0043c77fb664"
+REQUIRED_GATE_REVISION = "4a6ef2252c06a92cbab2550c4fec24a48438a4ba"
 
 
 def require_gate_source(plan):
