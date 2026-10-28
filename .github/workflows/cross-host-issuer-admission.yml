@@ -1,0 +1,46 @@
+name: Cross-host issuer owner source-only admission
+
+on:
+  push:
+    branches: [review/cross-host-issuer-owner-admission-20261028]
+  pull_request:
+    branches: [unstable, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-owner-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout public source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff2737fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install public-only source/test dependencies
+        run: |
+          python -m pip install 'setuptools>=80,<83' 'wheel>=0.45,<1' 'pytest>=8,<10' 'cryptography>=44,<49'
+          python -m pip install --no-build-isolation --no-deps -e .
+      - name: Compile selected source and regressions
+        run: |
+          python -m compileall -q src/zog/host_deploy/certificate_cross_host_admission.py tests/test_certificate_cross_host_admission.py
+      - name: Execute exact issuer owner and delivery negatives without secrets
+        run: |
+          python -m pytest -q tests/test_certificate_cross_host_admission.py
+      - name: Confirm wheel carries guarded admission module
+        run: |
+          python -m pip wheel --no-build-isolation --no-deps --wheel-dir dist .
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          wheel = list(Path("dist").glob("host_deploy-*.whl"))
+          assert len(wheel) == 1
+          with zipfile.ZipFile(wheel[0]) as z:
+              assert "zog/host_deploy/certificate_cross_host_admission.py" in z.namelist()
+          PY
