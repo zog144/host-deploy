@@ -101,9 +101,17 @@ def test_no_unreviewed_pid1_deadline_override():
     props = dict(read.body[2])
     aux = read.body[3]
     assert len(aux) == 1 and aux[0][0] == deadline.STOP_UNIT
-    assert props["Unit"].value == deadline.STOP_UNIT
-    assert props["OnActiveUSec"].value == (
-        budget.DEADLINE_SECONDS - deadline.MARGIN_SECONDS)*1_000_000
+    # systemd 252 only exposes Timer.Unit as read-only and accepts
+    # TimersMonotonic a(st) for transient timer construction.
+    assert set(props) == {"Description", "TimersMonotonic", "AccuracyUSec"}
+    assert "Unit" not in props
+    assert "OnActiveUSec" not in props
+    assert props["TimersMonotonic"].signature == "a(st)"
+    assert props["TimersMonotonic"].value == [[
+        "OnActiveSec", (budget.DEADLINE_SECONDS - deadline.MARGIN_SECONDS) * 1_000_000,
+    ]]
+    assert deadline.UNIT.removesuffix(".timer") == (
+        deadline.STOP_UNIT.removesuffix(".service"))
     assert props["AccuracyUSec"].value == 1_000_000
     service = dict(aux[0][1])
     assert service["ExecStart"].value[0][1][-1] == "hard-stop"
