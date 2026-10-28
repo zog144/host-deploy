@@ -137,7 +137,7 @@ def test_empty_witness_remains_separate_from_live_witness():
     assert verifier.inspect_empty is not verifier.inspect_live
     import inspect
     s = inspect.getsource(verifier._inspect_native)
-    assert 'mode == "empty" and workers' in s
+    assert 'mode in ("empty", "pending") and workers' in s
     assert "_assert_no_unclean_starts(device)" in s
     assert "first != _processes()" in s
     assert "unaccounted_writable_roots=[]" not in inspect.getsource(
