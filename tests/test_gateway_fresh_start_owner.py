@@ -135,3 +135,48 @@ def test_grant_does_not_take_job_command_from_rpc_or_start_pid1(monkeypatch):
     assert records[c.GRANT]["kind"] == "canary"
     assert records[c.GRANT]["budget_scope"] == aggregate.BUDGET_SCOPE
     assert records[c.GRANT]["request_sha256"] == c._digest(intended["request"])
+
+def test_watchdog_auto_captures_claimed_live_canary(monkeypatch):
+    claim = {**BIND, "schema": "root-control-fresh-worker-claim-v1",
+             "kind": "canary", "job_id": "c"*32,
+             "request_sha256": "sha256:"+"d"*64,
+             "attempt_monotonic_ns": time.monotonic_ns() - 1_000_000_000}
+    host, records = setup(monkeypatch, phase="canary-start-attempted",
+                          pending=claim)
+    records[c.STATE/"fresh-canary-claim.json"] = claim
+    class Live(Native):
+        def verify_live_storage(self, plan, admission):
+            return {"status": "live-evidence-only", "workers": [{"pid": 411}]}
+    calls = []
+    monkeypatch.setattr(c, "observe_live", lambda h, n, *, already_locked:
+                        calls.append(already_locked))
+    result = c.watch_allowed(fresh_owner=host, native=Live(), plan=PLAN,
+                             admission=ADMISSION, budget_record=guard())
+    assert result["status"] == "live-evidence-only"
+    assert calls == [True]
+
+
+def test_terminal_pending_cannot_be_silently_authorized_idle(
+        monkeypatch, tmp_path):
+    host, records = setup(monkeypatch, phase="canary-live")
+    live = {**BIND, "invocation_id": "i-1", "job_id": "c"*32}
+    records[c.CANARY_LIVE] = live
+    terminal_path = tmp_path / "terminal"
+    terminal_path.write_text("present")
+    monkeypatch.setattr(c, "CANARY_TERMINAL", terminal_path)
+    terminal = {**BIND, "live_sha256": c._digest(live),
+                "invocation_id": "i-1",
+                "terminal_monotonic_ns": time.monotonic_ns()}
+    records[terminal_path] = terminal
+    monkeypatch.setattr(c, "accept_canary", lambda *args, **kwargs:
+                        (_ for _ in ()).throw(RuntimeError(
+                            "attempted fresh worker missing without cleanup")))
+    pending = c.watch_allowed(fresh_owner=host, native=Native(),
+                              plan=PLAN, admission=ADMISSION,
+                              budget_record=guard())
+    assert pending["status"] == "terminal-cleanup-pending-not-idle"
+    assert pending["compiler_admission"] is False
+    terminal["terminal_monotonic_ns"] -= 20_000_000_000
+    with pytest.raises(RuntimeError, match="window expired"):
+        c.watch_allowed(fresh_owner=host, native=Native(),
+                        plan=PLAN, admission=ADMISSION, budget_record=guard())
