@@ -134,6 +134,15 @@ int main(void) {
         assert data['writes']==1 and data['unshare_result']==-1 and data['root_write_denied']==1
         observed=b.observe(project_root=str(PROJECT),job_id=JOB,build_root_id=RESOURCE)
         emit('pid1',observed)
+        imported=b.resource_path(str(PROJECT), RESOURCE)/'root'
+        host_import=b._pid1_resource_path(imported, fresh=True)
+        emit('imported-root-identities',[ident(imported),ident(host_import),ident(f"/proc/{data['pid']}/root")])
+        cg=Path('/sys/fs/cgroup')/observed['control_group'].lstrip('/')
+        emit('native-limits',{name:(cg/name).read_text().strip() for name in
+                              ('memory.max','memory.swap.max','cgroup.procs')})
+        emit('boot-id',Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+        for dest,src in [(x[1],x[0]) for key,xs in observed['properties'] if key=='BindPaths' for x in xs]:
+            emit('worker-bind-identities',[ident(src),ident(Path(f"/proc/{data['pid']}/root")/dest.lstrip('/'))])
         failures=[]
         for pid in (data['pid'],data['child']):
             emit('kernel-process', {'pid':pid,'root':os.readlink(f'/proc/{pid}/root'),
