@@ -28,6 +28,8 @@ COMPILER_INTENT = STATE / "reviewed-compiler-intent.json"
 CANARY_LIVE = STATE / "canary-live-witness.json"
 CANARY_TERMINAL = STATE / "canary-terminal.json"
 CANARY_ACCEPTED = STATE / "canary-accepted.json"
+COMPILER_LIVE = STATE / "compiler-live-witness.json"
+COMPILER_TERMINAL = STATE / "compiler-terminal.json"
 GRANT_SCHEMA = "host-deploy-fresh-start-grant-v1"
 PHASE_SCHEMA = "host-deploy-fresh-start-phase-v1"
 INTENT_SCHEMA = "host-deploy-fresh-reviewed-worker-intent-v1"
@@ -377,9 +379,20 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
         try:
             return native.verify_live_storage(plan, admission)
         except RuntimeError as exc:
-            if phase != "canary-live" or (
-                    "no live finite worker available" not in str(exc)):
+            if "no live finite worker available" not in str(exc):
                 raise
+        if phase == "compiler-live":
+            terminal = fresh_owner._read_json(COMPILER_TERMINAL)
+            live = fresh_owner._read_json(COMPILER_LIVE)
+            delta = time.monotonic_ns() - terminal["terminal_monotonic_ns"]
+            if (terminal.get("live_sha256") != _digest(live)
+                    or terminal.get("invocation_id") != live["invocation_id"]
+                    or not 0 <= delta <= policy.PENDING_SECONDS*1_000_000_000):
+                raise RuntimeError("compiler terminal cleanup handoff expired")
+            evidence = native.verify_pending_storage(plan, admission)
+            return {"schema": PHASE_SCHEMA, "status": "compiler-cleanup-pending",
+                    "controller_pid": evidence["controller_pid"],
+                    "compiler_admission": False}
         # A finite successful canary can exit before the next watchdog tick.
         # This is NOT authorized idle: require the exact already-persisted
         # terminal PID1 success, a fresh empty native census, and a STRICT
@@ -398,3 +411,97 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
                 "controller_pid": evidence["controller_pid"],
                 "compiler_admission": False}
     raise RuntimeError("unreviewed cold-start watchdog phase")
+
+
+def observe_compiler_live(owner, native):
+    """One exact compilation witness, not reusable authority."""
+    owner._root()
+    plan = owner._read_json(owner.PLAN_PATH)
+    a = owner._admission(plan)
+    with locked(owner):
+        _timer(owner)
+        _budget(owner, a, plan)
+        state = owner._read_json(PHASE)
+        claim = owner._read_json(STATE / "fresh-compiler-claim.json")
+        intent = _intent(owner, COMPILER_INTENT, kind="compiler",
+                         plan=plan, admission=a)
+        if (state.get("phase") != "compiler-start-attempted"
+                or state.get("pending_job") != claim
+                or claim.get("job_id") != intent["job_id"]
+                or COMPILER_LIVE.exists()):
+            raise RuntimeError("compiler is not exact unobserved start attempt")
+        evidence = native.verify_live_storage(plan, a)
+        observed = native.worker_show(intent["job_id"])
+        if (observed.get("ActiveState") != "active"
+                or not observed.get("InvocationID")
+                or not observed.get("MainPID", "").isdigit()
+                or int(observed["MainPID"]) not in
+                    [w["pid"] for w in evidence["workers"]]):
+            raise RuntimeError("compiler PID1 invocation not in live kernel witness")
+        receipt = {**_identity(owner, plan, a),
+                   "schema": "host-deploy-fresh-compiler-live-v1",
+                   "job_id": intent["job_id"],
+                   "invocation_id": observed["InvocationID"],
+                   "worker_pid": int(observed["MainPID"]),
+                   "worker_evidence_sha256": _digest(evidence),
+                   "seen_monotonic_ns": time.monotonic_ns()}
+        owner._store(COMPILER_LIVE, receipt, exclusive=True)
+        owner._store(PHASE, {**state, "phase": "compiler-live",
+                             "pending_job": None}, exclusive=False)
+        return receipt
+
+
+def observe_compiler_terminal(owner, native):
+    """Capture exact PID1 result while the finite unit still exists."""
+    owner._root()
+    plan = owner._read_json(owner.PLAN_PATH)
+    a = owner._admission(plan)
+    with locked(owner):
+        _budget(owner, a, plan)
+        state = owner._read_json(PHASE)
+        live = owner._read_json(COMPILER_LIVE)
+        if state.get("phase") != "compiler-live" or COMPILER_TERMINAL.exists():
+            raise RuntimeError("compiler terminal not available for one-shot record")
+        observed = native.worker_show(live["job_id"])
+        if (observed.get("ActiveState") not in ("inactive", "failed")
+                or observed.get("InvocationID") != live["invocation_id"]
+                or observed.get("ExecMainCode") not in ("1", "2", "3")
+                or not observed.get("ExecMainStatus", "").isdigit()
+                or observed.get("ControlGroup") not in ("", "n/a")
+                and native.worker_cgroup_populated(observed["ControlGroup"])):
+            raise RuntimeError("compiler PID1 terminal identity uncertain")
+        receipt = {**_identity(owner, plan, a),
+                   "schema": "host-deploy-fresh-compiler-terminal-v1",
+                   "job_id": live["job_id"],
+                   "invocation_id": live["invocation_id"],
+                   "live_sha256": _digest(live),
+                   "exit_code": observed["ExecMainStatus"],
+                   "terminal_monotonic_ns": time.monotonic_ns()}
+        owner._store(COMPILER_TERMINAL, receipt, exclusive=True)
+        return receipt
+
+
+def accept_compiler_cleanup(owner, native):
+    """Allow empty lane after authenticated finite compilation cleanup."""
+    owner._root()
+    plan = owner._read_json(owner.PLAN_PATH)
+    a = owner._admission(plan)
+    with locked(owner):
+        _budget(owner, a, plan)
+        _timer(owner)
+        state = owner._read_json(PHASE)
+        live = owner._read_json(COMPILER_LIVE)
+        terminal = owner._read_json(COMPILER_TERMINAL)
+        if (state.get("phase") != "compiler-live"
+                or terminal.get("live_sha256") != _digest(live)
+                or terminal.get("invocation_id") != live["invocation_id"]):
+            raise RuntimeError("compiler cleanup lacks captured finite result")
+        native.verify_empty_storage(plan, a)
+        accepted = owner._read_json(CANARY_ACCEPTED)
+        if accepted.get("status") != "native-canary-accepted":
+            raise RuntimeError("compiler cleanup lost canary acceptance")
+        owner._store(PHASE, {**state, "phase": "compiler-clean-idle",
+                             "pending_job": None}, exclusive=False)
+        return {"status": "kernel-clean-compiler-idle-only",
+                "terminal_sha256": _digest(terminal),
+                "compiler_admission": False}
