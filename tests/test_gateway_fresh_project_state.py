@@ -140,7 +140,7 @@ def test_budget_owner_inspects_bind_before_watching_or_arming():
     install = python_inspect.getsource(owner.install_approved)
     arm = python_inspect.getsource(owner.arm_approved)
     recovery = python_inspect.getsource(owner.recover)
-    assert "self.verify_live_storage(plan, admission)" in sample
+    assert "canary_owner.watch_allowed(" in sample
     verifier = python_inspect.getsource(owner.storage_verifier._inspect_native)
     assert "project_state.inspect(" in verifier
     # Correct reviewed order: bind before seed import, not during the later
