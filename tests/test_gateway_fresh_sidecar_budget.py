@@ -55,7 +55,7 @@ def installed():
 def test_exact_build_only_sidecar_start_transient_specification():
     plan = sidecar.review_plan(fixture_identity(), installed())
     assert plan["root_control_revision"] == (
-        "cacacbee66c0401e04dfe702d6b90e87215280d0")
+        "e81220d5120e413363c684e93a6b0043c77fb664")
     assert plan["unit"] == sidecar.UNIT
     assert plan["mode"] == "replace-irrelevant-only-if-absent"
     assert plan["properties"]["Type"] == "exec"
