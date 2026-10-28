@@ -27,6 +27,7 @@ from . import fresh_aggregate_disk as aggregate
 from . import fresh_journal_backing as journal_backing
 from . import fresh_project_state as project_state
 from . import fresh_host_write_audit as host_write_audit
+from . import fresh_native_storage_verifier as storage_verifier
 
 STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -313,13 +314,39 @@ class NativeOwner:
             "role": values.get("ROOT_CONTROL_ROLE"),
         }
 
+    def verify_live_storage(self, plan, admission):
+        """Build evidence from pinned installed bytes and actual live kernel.
+
+        Never consume user-supplied evidence or turn a JSON list of 'verified'
+        classes into admission. The kernel inspector must see active workers.
+        """
+        _root()
+        if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+            raise RuntimeError("native verifier reviewed plan changed")
+        self.verify_source_and_nss(plan)
+        current = _admission(plan)
+        if current != admission:
+            raise RuntimeError("native verifier admission identity changed")
+        side = self.observe_unit(sidecar.UNIT)
+        if side["active"] is not True:
+            raise RuntimeError("fresh source-attested controller is not active")
+        pid = _show(sidecar.UNIT).get("MainPID", "")
+        if not pid.isdecimal() or int(pid) < 2:
+            raise RuntimeError("fresh controller MainPID is missing")
+        return storage_verifier.inspect_live(
+            plan=plan, admission=admission, controller_pid=int(pid),
+            boot_id=_boot(), host_id=admission["host_id"])
+
     def sample_exact(self, x):
         _root()
+        plan = _read_json(PLAN_PATH)
+        admission = _admission(plan)
+        if (x["request_id"] != admission["request_id"]
+                or x["project_root"] != plan["project_root"]
+                or x["host_id"] != admission["host_id"]):
+            raise RuntimeError("watchdog request/host/Project identity drift")
+        self.verify_live_storage(plan, admission)
         result = quota.inspect()
-        project_state.inspect(_read_json(PLAN_PATH)["identity"]["controller_uid"])
-        external = aggregate.inspect_external_native()
-        aggregate.validate(
-            result, external, host_owner_verified=self.is_trusted_native_owner())
         return {
             "host_id": x["host_id"], "project_root": x["project_root"],
             "boot_id": _boot(), "now_seconds": int(time.time()),
@@ -766,9 +793,10 @@ def arm_approved():
         raise RuntimeError("kernel disk quota not active")
     # Every root-owned journal, metadata artifact and new process log must
     # have independently verified kernel backing in the OTHER bounded pool.
-    external = aggregate.inspect_external_native()
-    aggregate.validate(
-        current, external, host_owner_verified=owner.is_trusted_native_owner())
+    # Root-owned native verifier rechecks the exact host, boot, source bytes,
+    # Project binds, journal and EVERY currently live worker/descendant.
+    # This is not a caller-provided list of cleared writer classes.
+    owner.verify_live_storage(plan, a)
     # Install an independent PID1-monotonic overall deadline BEFORE
     # recording the new budget start. Its deadline is strictly earlier
     # than the allowed 21,600-second span even if both watchdogs die.
@@ -832,6 +860,14 @@ def prepare_external():
         available_after_reservations_bytes=remaining)
 
 
+def inspect_native_worker_storage():
+    """Fixed read-only kernel witness: NO admission, no mutation, no dispatch."""
+    _root()
+    plan = _read_json(PLAN_PATH)
+    admission = _admission(plan)
+    return NativeOwner().verify_live_storage(plan, admission)
+
+
 def inspect_host_write_surfaces():
     """One fixed, read-only native diagnostic, safe BEFORE any pool allocation.
 
@@ -847,9 +883,11 @@ def inspect_host_write_surfaces():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover", "inspect-host-write-surfaces"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover", "inspect-host-write-surfaces", "inspect-native-worker-storage"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
-    if sys.argv[1] == "inspect-host-write-surfaces":
+    if sys.argv[1] == "inspect-native-worker-storage":
+        sys.stdout.write(_bytes(inspect_native_worker_storage()).decode("ascii"))
+    elif sys.argv[1] == "inspect-host-write-surfaces":
         sys.stdout.write(_bytes(inspect_host_write_surfaces()).decode("ascii"))
     elif sys.argv[1] == "prepare-external":
         prepare_external()
