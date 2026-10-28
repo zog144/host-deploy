@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 Node24
         with:
           repository: zog144/root-control
-          ref: cacacbee66c0401e04dfe702d6b90e87215280d0
+          ref: e81220d5120e413363c684e93a6b0043c77fb664
           path: pinned-root-control
           persist-credentials: false
       - name: Compare source role, host-owned startup environment and frozen consumer pin
@@ -30,7 +30,7 @@ jobs:
           root = Path("pinned-root-control")
           head = subprocess.check_output(
               ["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
-          assert head == "cacacbee66c0401e04dfe702d6b90e87215280d0"
+          assert head == "e81220d5120e413363c684e93a6b0043c77fb664"
           source = (root / "src/zog/root_control/daemon.py").read_text()
           tree = ast.parse(source)
           symbols = {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
