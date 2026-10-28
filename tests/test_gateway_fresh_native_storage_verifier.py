@@ -101,7 +101,9 @@ def _simulate_worker(monkeypatch, tmp_path, *, escaped=None, fds=None):
     original_isdir = Path.is_dir
     original_iterdir = Path.iterdir
     def fake_stat(p, *args, **kw):
-        if str(p).startswith("/proc/411/root"):
+        if str(p).startswith("/proc/411/root") or str(p) == str(rootbase):
+            # Model the same kernel inode mounted into the test worker and
+            # visible through the host registration path on the quota image.
             return SimpleNamespace(st_dev=os.makedev(7, 5),
                                    st_ino=original_stat(rootbase).st_ino,
                                    st_mode=0o40700)
