@@ -122,8 +122,15 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
     mounts = _mounts(pid)
     root = Path("/proc") / str(pid) / "root"
     root_st = root.stat()
-    if root_st.st_dev != build_device:
-        raise RuntimeError("PID1 worker RootDirectory escaped build image")
+    # RootDirectory must be the PID1-host-visible imported root, not merely
+    # another directory that happens to be on the same ext4 device.
+    root_target = Path(os.readlink(root))
+    registered = quota.MOUNT / "controller-build-resources"
+    if (root_st.st_dev != build_device
+            or not root_target.is_relative_to(registered)
+            or root_target.name != "root"
+            or ".." in root_target.parts):
+        raise RuntimeError("PID1 worker RootDirectory escaped exact imported root")
     majmin = f"{os.major(build_device)}:{os.minor(build_device)}"
     # Each separately writable compiler path must be a real kernel bind.
     # Stat through the worker's root, not through the controller's namespace.
@@ -149,8 +156,41 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
     memory = _one(unit_cgroup / "memory.max").strip()
     if swap != "0" or not memory.isdecimal() or int(memory) <= 0:
         raise RuntimeError("worker memory/swap limits not enforced")
+    # A writable inherited/open file descriptor is another write route even
+    # if all path-based guest bind mounts are correct. Deny any writable
+    # regular/dir descriptor on foreign backing; permit only kernel memory
+    # descriptors (no swap), pipes, sockets and exact harmless /dev/null.
+    fd_dir = Path("/proc") / str(pid) / "fd"
+    observed_fds = 0
+    for fd in fd_dir.iterdir():
+        if not fd.name.isdecimal():
+            raise RuntimeError("non-numeric worker fd")
+        info = _one(fd_dir.parent / "fdinfo" / fd.name, limit=4096)
+        flags = [row.split(":", 1)[1].strip()
+                 for row in info.splitlines() if row.startswith("flags:")]
+        if len(flags) != 1:
+            raise RuntimeError("worker fd flags unavailable")
+        try:
+            mode = int(flags[0], 8) & os.O_ACCMODE
+        except ValueError as exc:
+            raise RuntimeError("worker fd flags malformed") from exc
+        if mode == os.O_RDONLY:
+            continue
+        st = fd.stat()
+        if stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode):
+            link = os.readlink(fd)
+            if (st.st_dev != build_device
+                    and not link.startswith(("memfd:", "/memfd:"))):
+                raise RuntimeError("worker retained writable host file descriptor")
+        elif stat.S_ISCHR(st.st_mode):
+            if st.st_rdev != os.makedev(1, 3):
+                raise RuntimeError("worker retained writable host device")
+        elif not (stat.S_ISFIFO(st.st_mode) or stat.S_ISSOCK(st.st_mode)):
+            raise RuntimeError("worker has unaccounted writable descriptor")
+        observed_fds += 1
     return {"pid": pid, "cgroup": cg, "root_dev": majmin,
-            "mount_count": len(mounts), "swap_max": 0,
+            "imported_root": str(root_target), "mount_count": len(mounts),
+            "writable_fd_count": observed_fds, "swap_max": 0,
             "memory_max": int(memory)}
 
 
@@ -194,6 +234,11 @@ def inspect_live(*, plan, admission, controller_pid, boot_id, host_id):
     first = _processes()
     if controller_pid not in first:
         raise RuntimeError("frozen root-control sidecar left the fresh slice")
+    controller = _uid_gid(controller_pid)
+    if any(v != 0 for v in controller["Uid"]):
+        raise RuntimeError("fresh privileged controller MainPID is not root")
+    if _cgroup(controller_pid) != "/" + sidecar.SLICE_UNIT:
+        raise RuntimeError("fresh controller is outside the exact parent cgroup")
     workers = [
         _verify_worker(pid, build_uid=identity["build_uid"],
                        build_gid=identity["build_gid"], build_device=device)
