@@ -273,6 +273,9 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
         def validate_old_baseline(self, digest): assert digest == "sha256:"+"b"*64
         def observe_unit(self, unit): return {"active": True}
         def is_trusted_native_owner(self): return True
+        def verify_live_storage(self, plan, admission):
+            assert admission["request_id"] == original
+            return {"status": "live-evidence-only", "workers": [{"pid": 411}]}
     monkeypatch.setattr(owner, "NativeOwner", Native)
     monkeypatch.setattr(owner, "verify_schedule", lambda: True)
     monkeypatch.setattr(owner, "_show", lambda unit: {
@@ -451,11 +454,18 @@ def test_f5_cron_loss_does_not_short_circuit_budget_cancellation(monkeypatch):
     monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner, "_boot", lambda: "boot")
     monkeypatch.setattr(owner, "_read_json", lambda path: {
-        "identity": {"controller_uid": 24301}})
+        "identity": {"controller_uid": 24301},
+        "host_id": "i-fresh", "project_root": "/reviewed-project"})
+    monkeypatch.setattr(owner, "_admission", lambda plan: {
+        "request_id": "f"*32, "host_id": "i-fresh",
+    })
+    monkeypatch.setattr(owner.NativeOwner, "verify_live_storage",
+                        lambda self, plan, admission: {"status": "live-evidence-only"})
     monkeypatch.setattr(owner.project_state, "inspect",
                         lambda uid: {"mount_verified": True} if uid == 24301
                         else pytest.fail("wrong controller UID"))
     sample = owner.NativeOwner().sample_exact({
+        "request_id": "f"*32,
         "host_id": "i-fresh", "project_root": "/reviewed-project",
         "monitor_receipt_sha256": "sha256:"+"a"*64,
     })
