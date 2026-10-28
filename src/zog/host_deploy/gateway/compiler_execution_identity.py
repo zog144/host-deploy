@@ -12,7 +12,7 @@ SCHEMA = "host-deploy-compiler-execution-v2"
 FRESH_SCHEMA = "host-deploy-compiler-execution-v3"
 FRESH_PRODUCER_REVISION = "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
 FRESH_BOX_CONTROL_REVISION = "b7934882cfacd2fbfd60c7964713ed3dde7f9460"
-FRESH_ROOT_CONTROL_REVISION = "cacacbee66c0401e04dfe702d6b90e87215280d0"
+FRESH_ROOT_CONTROL_REVISION = "e81220d5120e413363c684e93a6b0043c77fb664"
 FRESH_BUILD_RECORD_REVISION = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
 FRESH_SCOPE = "host-deploy-fresh-cross-bootstrap-v1"
 FRESH_DISK_BYTES = 32 * 1024**3
@@ -128,7 +128,7 @@ from pathlib import Path
 # Exact root-control executable revision. The documentation-only receipt
 # head is different and cannot substitute for executable provenance.
 REVIEWED_ROOT_CONTROL_REVISION = "e4f25110c854c000bdde5ec564c8119370da9a52"
-FRESH_ROOT_CONTROL_REVISION = "cacacbee66c0401e04dfe702d6b90e87215280d0"
+FRESH_ROOT_CONTROL_REVISION = "e81220d5120e413363c684e93a6b0043c77fb664"
 
 def _trusted_identity(value, source, record_root, controller_root):
     if os.geteuid() != 0:
