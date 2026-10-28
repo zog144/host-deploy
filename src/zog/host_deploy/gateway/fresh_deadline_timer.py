@@ -40,10 +40,17 @@ def message(plan):
     from dbus_next import Message, Variant
     binary, source = _paths(plan)
     env = ["PYTHONPATH=" + source, "PYTHONDONTWRITEBYTECODE=1"]
+    # PID1's Timer.Unit is a READ-ONLY property; systemd resolves the
+    # same-basename <timer>.service implicitly. Never submit "Unit" to
+    # StartTransientUnit. In systemd 252 the writable monotonic constructor is
+    # TimersMonotonic: a(st), with "OnActiveSec" and a MICROSECOND value.
+    # OnActiveUSec is only a readback name, not a transient setter.
+    if UNIT.removesuffix(".timer") != STOP_UNIT.removesuffix(".service"):
+        raise RuntimeError("fixed timer and cancellation service diverged")
     timer = [
         ["Description", Variant("s", "Fixed fresh compiler overall deadline")],
-        ["Unit", Variant("s", STOP_UNIT)],
-        ["OnActiveUSec", Variant("t", TRIGGER_SECONDS * 1_000_000)],
+        ["TimersMonotonic", Variant(
+            "a(st)", [["OnActiveSec", TRIGGER_SECONDS * 1_000_000]])],
         ["AccuracyUSec", Variant("t", 1_000_000)],
     ]
     # Declare an auxiliary oneshot unit, but only START the timer.
