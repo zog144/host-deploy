@@ -273,9 +273,9 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
         def validate_old_baseline(self, digest): assert digest == "sha256:"+"b"*64
         def observe_unit(self, unit): return {"active": True}
         def is_trusted_native_owner(self): return True
-        def verify_live_storage(self, plan, admission):
+        def verify_empty_storage(self, plan, admission):
             assert admission["request_id"] == original
-            return {"status": "live-evidence-only", "workers": [{"pid": 411}]}
+            return {"status": "verified-empty-lane-not-start-authority"}
     monkeypatch.setattr(owner, "NativeOwner", Native)
     monkeypatch.setattr(owner, "verify_schedule", lambda: True)
     monkeypatch.setattr(owner, "_show", lambda unit: {
@@ -316,11 +316,16 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
     record = []
     monkeypatch.setattr(owner.budget, "write_once",
                         lambda path, value: record.append(value))
+    armed = []
+    monkeypatch.setattr(owner.canary_owner, "arm_empty",
+                        lambda host, native, plan, admission: armed.append(
+                            admission["request_id"]))
     result = owner.arm_approved()
     assert result["request_id"] == original
     assert result["dedicated_build_capacity_bytes"] == aggregate.BUILD_BYTES
     assert len(record) == 1 and record[0]["request_id"] == original
     assert record[0]["status"] == "active"
+    assert armed == [original]
 
 
 
@@ -464,6 +469,10 @@ def test_f5_cron_loss_does_not_short_circuit_budget_cancellation(monkeypatch):
     monkeypatch.setattr(owner.project_state, "inspect",
                         lambda uid: {"mount_verified": True} if uid == 24301
                         else pytest.fail("wrong controller UID"))
+    from contextlib import nullcontext
+    monkeypatch.setattr(owner.canary_owner, "locked", lambda host: nullcontext())
+    monkeypatch.setattr(owner.canary_owner, "watch_allowed",
+                        lambda **kw: {"status": "native-idle-only"})
     sample = owner.NativeOwner().sample_exact({
         "request_id": "f"*32,
         "host_id": "i-fresh", "project_root": "/reviewed-project",
