@@ -68,12 +68,12 @@ def _within(path, mount):
             and (path == mount or path.startswith(mount + "/")))
 
 
-def validate(work, external, *, host_owner_verified=False):
-    """Reject missing external hard enforcement or unaudited journal escape.
+def _validate_pools(work, external, *, host_owner_verified,
+                    expected_outstanding):
+    """Pure structural pool validation, NEVER native worker admission.
 
-    Production verifier must supply external from live kernel quota/mount
-    inspection; never from prepared GitHub/SSM parameters. Even a signed
-    declaration isn't enough if the actual mount and journal are elsewhere.
+    The outstanding list is checked EXACTLY as observed; do not fabricate
+    an empty list to get through a stricter validator.
     """
     if host_owner_verified is not True:
         raise PermissionError("aggregate kernel quota needs trusted native inspector")
@@ -102,7 +102,7 @@ def validate(work, external, *, host_owner_verified=False):
             or external["kernel_enforced"] is not True
             or external["mount_verified"] is not True
             or external["allocation_verified"] is not True
-            or external["unaccounted_writable_roots"] != []
+            or external["unaccounted_writable_roots"] != expected_outstanding
             or type(external["class_roots"]) is not dict
             or set(external["class_roots"]) != REQUIRED_CLASSES
             or not all(_within(p, EXTERNAL_MOUNT)
@@ -123,6 +123,16 @@ def validate(work, external, *, host_owner_verified=False):
 
 
 
+def validate(work, external, *, host_owner_verified=False):
+    """Legacy structural API. A dict with cleared writers is not native proof.
+
+    The actual arm/watch owner uses storage_verifier.inspect_live(), which
+    gets host/boot/Project, every live worker and real kernel data itself.
+    """
+    return _validate_pools(work, external, host_owner_verified=host_owner_verified,
+                           expected_outstanding=[])
+
+
 def validate_pre_activation(work, external, *, host_owner_verified=False):
     """Allow only storage/controller observation, NEVER compiler admission.
 
@@ -135,10 +145,11 @@ def validate_pre_activation(work, external, *, host_owner_verified=False):
     if (type(external) is not dict
             or external.get("unaccounted_writable_roots") != expected_blockers):
         raise RuntimeError("unreviewed or falsely certified pre-activation classes")
-    # Validate unchanged byte caps, mount/source and quota fields, but do NOT
-    # return or persist a fabricated all-writers-verified observation.
-    checked = dict(external, unaccounted_writable_roots=[])
-    shape = validate(work, checked, host_owner_verified=host_owner_verified)
+    # Validate actual pool bytes and exact still-outstanding writers.
+    # Do not modify the observed receipt or invent cleared writer classes.
+    shape = _validate_pools(work, external,
+                            host_owner_verified=host_owner_verified,
+                            expected_outstanding=expected_blockers)
     return {"schema": SCHEMA, "status": "preactivation-only",
             "budget_scope": BUDGET_SCOPE,
             "dedicated_reserved_max_bytes": shape["dedicated_reserved_max_bytes"],
