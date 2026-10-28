@@ -1,0 +1,46 @@
+name: Fresh deadline transient timer PID1 contract (disposable)
+on:
+  pull_request:
+    branches: [unstable, main]
+    paths:
+      - "src/zog/host_deploy/gateway/fresh_deadline_timer.py"
+      - "tests/native/test_fresh_deadline_transient_pid1.py"
+      - ".github/workflows/fresh-deadline-pid1-native.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-transient-timer:
+    # No retained EC2/SSM access and no compilation. The only PID1 mutation
+    # is an inert two-second timer on a disposable GitHub-owned runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'zog144/host-deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Prepare isolated Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned pure Python D-Bus transport
+        run: python -m pip install 'dbus-next==0.2.3'
+      - name: Verify disposable PID1 systemd and run inert transient timer
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          set -euo pipefail
+          test "${RUNNER_ENVIRONMENT:-}" = "github-hosted"
+          test "$(cat /proc/1/comm)" = "systemd"
+          sudo --preserve-env=RUNNER_ENVIRONMENT,GITHUB_ACTIONS,GITHUB_RUN_ID,RUNNER_TEMP,PYTHONPATH \
+            "$(command -v python)" -B tests/native/test_fresh_deadline_transient_pid1.py
+      - name: Verify no compiler or retained-host admission
+        shell: bash
+        run: |
+          echo "Disposable PID1 timer test only; no real hard-stop, no compiler, no SSM, no retained EC2."
+          echo "Six-hour deadline and 32GiB dedicated native Stage A remain NO-GO until independent Work acceptance."
