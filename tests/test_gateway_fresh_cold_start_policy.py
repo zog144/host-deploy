@@ -121,20 +121,16 @@ def test_root_control_attempted_worker_prevents_empty_kernel_witness(
               "start_attempted": True, "process_cleanup_complete": False}
     item.write_text(json.dumps(record))
     monkeypatch.setattr(verifier.quota, "MOUNT", root.parent)
-    original_stat = Path.stat
-    monkeypatch.setattr(Path, "stat", lambda self, *a, **k:
-                        SimpleNamespace(st_dev=os.makedev(8, 1))
-                        if self == root or self == jobs or self == jobs.parent
-                        or self == item else original_stat(self, *a, **k))
+    device = root.stat().st_dev
     with pytest.raises(RuntimeError, match="missing without cleanup"):
-        verifier._assert_no_unclean_starts(os.makedev(8, 1))
+        verifier._assert_no_unclean_starts(device)
     record["process_cleanup_complete"] = True
     item.write_text(json.dumps(record))
-    verifier._assert_no_unclean_starts(os.makedev(8, 1))
+    verifier._assert_no_unclean_starts(device)
     item.unlink()
     item.symlink_to(tmp_path / "foreign")
     with pytest.raises(RuntimeError, match="invalid registered"):
-        verifier._assert_no_unclean_starts(os.makedev(8, 1))
+        verifier._assert_no_unclean_starts(device)
 
 
 def test_empty_witness_remains_separate_from_live_witness():
@@ -144,5 +140,5 @@ def test_empty_witness_remains_separate_from_live_witness():
     assert 'mode == "empty" and workers' in s
     assert "_assert_no_unclean_starts(device)" in s
     assert "first != _processes()" in s
-    assert "DEDICATED_UNVERIFIED_WRITERS" not in inspect.getsource(
-        verifier.inspect_empty)  # never silently clear the inventory
+    assert "unaccounted_writable_roots=[]" not in inspect.getsource(
+        verifier._inspect_native)  # never silently clear the inventory
