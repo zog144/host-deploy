@@ -374,5 +374,27 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
     if phase in ("canary-live", "compiler-live"):
         if state.get("pending_job") is not None:
             raise RuntimeError("live worker still has pending start claim")
-        return native.verify_live_storage(plan, admission)
+        try:
+            return native.verify_live_storage(plan, admission)
+        except RuntimeError as exc:
+            if phase != "canary-live" or (
+                    "no live finite worker available" not in str(exc)):
+                raise
+        # A finite successful canary can exit before the next watchdog tick.
+        # This is NOT authorized idle: require the exact already-persisted
+        # terminal PID1 success, a fresh empty native census, and a STRICT
+        # <=10-second cleanup handoff window, or cancel the whole fresh slice.
+        terminal = fresh_owner._read_json(CANARY_TERMINAL)
+        live = fresh_owner._read_json(CANARY_LIVE)
+        delta = time.monotonic_ns() - terminal["terminal_monotonic_ns"]
+        if (terminal.get("live_sha256") != _digest(live)
+                or terminal.get("invocation_id") != live["invocation_id"]
+                or not 0 <= delta <=
+                    policy.PENDING_SECONDS * 1_000_000_000):
+            raise RuntimeError("native canary terminal cleanup window expired")
+        evidence = native.verify_pending_storage(plan, admission)
+        return {"schema": PHASE_SCHEMA,
+                "status": "terminal-cleanup-pending-not-idle",
+                "controller_pid": evidence["controller_pid"],
+                "compiler_admission": False}
     raise RuntimeError("unreviewed cold-start watchdog phase")
