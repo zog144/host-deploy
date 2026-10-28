@@ -1,0 +1,23 @@
+name: Disposable fixed deadline PID1 acceptance
+on:
+  push:
+    branches: [work/native-storage-20261027]
+permissions:
+  contents: read
+jobs:
+  native-deadline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Install pinned D-Bus transport in disposable environment
+        run: |
+          python3 -m venv /tmp/zog-native-dbus
+          /tmp/zog-native-dbus/bin/pip install dbus-next==0.2.3
+      - name: Ask actual PID1 to admit unchanged deadline, then remove timer
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            PYTHONDONTWRITEBYTECODE=1 /tmp/zog-native-dbus/bin/python -B tests/native/fresh_deadline_acceptance.py

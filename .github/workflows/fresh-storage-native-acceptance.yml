@@ -2,6 +2,9 @@ name: Disposable fresh storage and journal acceptance
 on:
   push:
     branches: [work/native-storage-20261027]
+    paths:
+      - tests/native/fresh_storage_acceptance.py
+      - .github/workflows/fresh-storage-native-acceptance.yml
 permissions:
   contents: read
 jobs:
