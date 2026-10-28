@@ -123,6 +123,14 @@ def test_no_unreviewed_pid1_deadline_override():
         "cacacbee66c0401e04dfe702d6b90e87215280d0")
 
 
+def test_timer_and_auxiliary_service_names_must_match(monkeypatch):
+    # No D-Bus call can select an alternate cancellation service. Its
+    # read-only Timer.Unit is derived by systemd from the unit basename.
+    monkeypatch.setattr(deadline, "STOP_UNIT", "unreviewed-target.service")
+    with pytest.raises(RuntimeError, match="diverged"):
+        deadline.message(plan())
+
+
 def test_deadline_source_does_not_accept_other_unit_or_untrusted_path():
     bad = plan()
     bad["unit"] = "root-control.service"
