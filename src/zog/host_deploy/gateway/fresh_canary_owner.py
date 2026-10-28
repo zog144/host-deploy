@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 import stat
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 from . import fresh_aggregate_disk as aggregate
 from . import fresh_budget_guard as budget
@@ -212,12 +212,12 @@ def grant(owner, native, *, kind):
                 "job_id": intent["job_id"], "no_pid1_mutation": True}
 
 
-def observe_live(owner, native):
+def observe_live(owner, native, *, already_locked=False):
     """Durably capture actual canary worker and fixed systemd invocation."""
     owner._root()
     plan = owner._read_json(owner.PLAN_PATH)
     a = owner._admission(plan)
-    with locked(owner):
+    with (nullcontext() if already_locked else locked(owner)):
         _timer(owner)
         _budget(owner, a, plan)
         state = owner._read_json(PHASE)
@@ -253,12 +253,12 @@ def observe_live(owner, native):
         return receipt
 
 
-def observe_terminal(owner):
+def observe_terminal(owner, *, already_locked=False):
     """Read PID1 exit evidence before root-control releases the unit."""
     owner._root()
     plan = owner._read_json(owner.PLAN_PATH)
     a = owner._admission(plan)
-    with locked(owner):
+    with (nullcontext() if already_locked else locked(owner)):
         _budget(owner, a, plan)
         live = owner._read_json(CANARY_LIVE)
         state = owner._read_json(PHASE)
@@ -284,12 +284,12 @@ def observe_terminal(owner):
         return record
 
 
-def accept_canary(owner, native):
+def accept_canary(owner, native, *, already_locked=False):
     """Accept only after separate root-control unit cleanup and empty census."""
     owner._root()
     plan = owner._read_json(owner.PLAN_PATH)
     a = owner._admission(plan)
-    with locked(owner):
+    with (nullcontext() if already_locked else locked(owner)):
         _timer(owner)
         _budget(owner, a, plan)
         live = owner._read_json(CANARY_LIVE)
@@ -364,14 +364,19 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
         elapsed = time.monotonic_ns() - claim["attempt_monotonic_ns"]
         if elapsed < 0 or elapsed > policy.PENDING_SECONDS * 1_000_000_000:
             raise RuntimeError("worker absent beyond protected start allowance")
-        # A process may have started before the first positive readback.
-        # If live, require complete witness; if absent, require the full
-        # pending-mode native kernel census and exact durable claim.
+        # A positive native readback is immediately captured under the
+        # shared lock; the same ten-second window applies to first witness.
         try:
-            return native.verify_live_storage(plan, admission)
+            observed_live = native.verify_live_storage(plan, admission)
         except RuntimeError as exc:
             if "no live finite worker available" not in str(exc):
                 raise
+        else:
+            if kind == "canary":
+                observe_live(fresh_owner, native, already_locked=True)
+            else:
+                observe_compiler_live(fresh_owner, native, already_locked=True)
+            return observed_live
         evidence = native.verify_pending_storage(plan, admission)
         decision = policy.classify(
             phase=phase, **{k: state[k] for k in (
@@ -393,6 +398,15 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
             if "no live finite worker available" not in str(exc):
                 raise
         if phase == "compiler-live":
+            if not COMPILER_TERMINAL.exists():
+                observe_compiler_terminal(
+                    fresh_owner, native, already_locked=True)
+            try:
+                return accept_compiler_cleanup(
+                    fresh_owner, native, already_locked=True)
+            except RuntimeError as exc:
+                if "attempted fresh worker missing without cleanup" not in str(exc):
+                    raise
             terminal = fresh_owner._read_json(COMPILER_TERMINAL)
             live = fresh_owner._read_json(COMPILER_LIVE)
             delta = time.monotonic_ns() - terminal["terminal_monotonic_ns"]
@@ -408,6 +422,13 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
         # This is NOT authorized idle: require the exact already-persisted
         # terminal PID1 success, a fresh empty native census, and a STRICT
         # <=10-second cleanup handoff window, or cancel the whole fresh slice.
+        if not CANARY_TERMINAL.exists():
+            observe_terminal(fresh_owner, already_locked=True)
+        try:
+            return accept_canary(fresh_owner, native, already_locked=True)
+        except RuntimeError as exc:
+            if "attempted fresh worker missing without cleanup" not in str(exc):
+                raise
         terminal = fresh_owner._read_json(CANARY_TERMINAL)
         live = fresh_owner._read_json(CANARY_LIVE)
         delta = time.monotonic_ns() - terminal["terminal_monotonic_ns"]
@@ -424,12 +445,12 @@ def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
     raise RuntimeError("unreviewed cold-start watchdog phase")
 
 
-def observe_compiler_live(owner, native):
+def observe_compiler_live(owner, native, *, already_locked=False):
     """One exact compilation witness, not reusable authority."""
     owner._root()
     plan = owner._read_json(owner.PLAN_PATH)
     a = owner._admission(plan)
-    with locked(owner):
+    with (nullcontext() if already_locked else locked(owner)):
         _timer(owner)
         _budget(owner, a, plan)
         state = owner._read_json(PHASE)
@@ -462,12 +483,12 @@ def observe_compiler_live(owner, native):
         return receipt
 
 
-def observe_compiler_terminal(owner, native):
+def observe_compiler_terminal(owner, native, *, already_locked=False):
     """Capture exact PID1 result while the finite unit still exists."""
     owner._root()
     plan = owner._read_json(owner.PLAN_PATH)
     a = owner._admission(plan)
-    with locked(owner):
+    with (nullcontext() if already_locked else locked(owner)):
         _budget(owner, a, plan)
         state = owner._read_json(PHASE)
         live = owner._read_json(COMPILER_LIVE)
@@ -492,12 +513,12 @@ def observe_compiler_terminal(owner, native):
         return receipt
 
 
-def accept_compiler_cleanup(owner, native):
+def accept_compiler_cleanup(owner, native, *, already_locked=False):
     """Allow empty lane after authenticated finite compilation cleanup."""
     owner._root()
     plan = owner._read_json(owner.PLAN_PATH)
     a = owner._admission(plan)
-    with locked(owner):
+    with (nullcontext() if already_locked else locked(owner)):
         _budget(owner, a, plan)
         _timer(owner)
         state = owner._read_json(PHASE)
