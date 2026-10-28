@@ -28,6 +28,7 @@ from . import fresh_journal_backing as journal_backing
 from . import fresh_project_state as project_state
 from . import fresh_host_write_audit as host_write_audit
 from . import fresh_native_storage_verifier as storage_verifier
+from . import fresh_canary_owner as canary_owner
 
 STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
@@ -339,6 +340,65 @@ class NativeOwner:
             controller_cgroup=unit.get("ControlGroup"),
             boot_id=_boot(), host_id=admission["host_id"])
 
+    def worker_show(self, job_id):
+        """Read only one fixed recorded finite worker's actual PID1 unit."""
+        if type(job_id) is not str or not budget._HEX.fullmatch(job_id):
+            raise RuntimeError("unreviewed worker job ID")
+        unit = "zog-" + sidecar.PROJECT + "-build" + job_id + ".service"
+        raw = _command(["/usr/bin/systemctl", "show", unit,
+            "--property=LoadState,ActiveState,MainPID,ControlGroup,"
+            "InvocationID,ExecMainCode,ExecMainStatus"])
+        return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
+
+    def worker_cgroup_populated(self, group):
+        if (type(group) is not str
+                or not group.startswith("/" + SLICE_UNIT + "/")
+                or ".." in group.split("/")):
+            raise RuntimeError("foreign worker cgroup observation")
+        path = Path("/sys/fs/cgroup") / group.lstrip("/") / "cgroup.events"
+        if path.is_symlink():
+            raise RuntimeError("worker cgroup evidence redirected")
+        rows = dict(line.split() for line in path.read_text().splitlines())
+        if rows.get("populated") not in ("0", "1"):
+            raise RuntimeError("uncertain worker cgroup")
+        return rows["populated"] == "1"
+
+    def verify_empty_storage(self, plan, admission):
+        """Kernel-backed exact empty lane, never future-worker authority."""
+        _root()
+        if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+            raise RuntimeError("empty verifier reviewed plan changed")
+        self.verify_source_and_nss(plan)
+        if _admission(plan) != admission:
+            raise RuntimeError("empty admission identity changed")
+        side = self.observe_unit(sidecar.UNIT)
+        unit = _show(sidecar.UNIT)
+        pid = unit.get("MainPID", "")
+        if side["active"] is not True or not pid.isdecimal() or int(pid) < 2:
+            raise RuntimeError("trusted empty-lane controller missing")
+        return storage_verifier.inspect_empty(
+            plan=plan, admission=admission, controller_pid=int(pid),
+            controller_cgroup=unit.get("ControlGroup"),
+            boot_id=_boot(), host_id=admission["host_id"])
+
+    def verify_pending_storage(self, plan, admission):
+        """Exact claimed launch's kernel empty census, not clean idle."""
+        _root()
+        if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+            raise RuntimeError("pending verifier reviewed plan changed")
+        self.verify_source_and_nss(plan)
+        if _admission(plan) != admission:
+            raise RuntimeError("pending admission identity changed")
+        side = self.observe_unit(sidecar.UNIT)
+        unit = _show(sidecar.UNIT)
+        pid = unit.get("MainPID", "")
+        if side["active"] is not True or not pid.isdecimal() or int(pid) < 2:
+            raise RuntimeError("trusted pending controller missing")
+        return storage_verifier.inspect_pending(
+            plan=plan, admission=admission, controller_pid=int(pid),
+            controller_cgroup=unit.get("ControlGroup"),
+            boot_id=_boot(), host_id=admission["host_id"])
+
     def sample_exact(self, x):
         _root()
         plan = _read_json(PLAN_PATH)
@@ -351,9 +411,12 @@ class NativeOwner:
         # cancellation path, not throw before budget.watch_once can persist
         # stop intent. Never report a failed witness as an active sidecar.
         try:
-            self.verify_live_storage(plan, admission)
+            canary_owner.watch_allowed(fresh_owner=sys.modules[__name__],
+                                       native=self, plan=plan,
+                                       admission=admission, budget_record=x)
             workers_bounded = True
-        except (OSError, RuntimeError, PermissionError, ValueError):
+        except (OSError, RuntimeError, PermissionError, ValueError,
+                KeyError, TypeError):
             workers_bounded = False
         result = quota.inspect()
         return {
@@ -474,7 +537,8 @@ def watch():
     for request in requests:
         if not budget._HEX.fullmatch(request):
             raise RuntimeError("unreviewed budget filename")
-        budget.watch_once(BUDGET_DIR, request, native_owner=owner)
+        with canary_owner.locked(sys.modules[__name__]):
+            budget.watch_once(BUDGET_DIR, request, native_owner=owner)
 
 
 def watch_loop():
@@ -536,8 +600,9 @@ def hard_stop():
         if (record["cancellation_id"] != expected
                 or record["boot_id"] != marker["boot_id"]):
             raise RuntimeError("deadline budget identity changed")
-        budget.watch_once(BUDGET_DIR, record["request_id"],
-                          native_owner=KernelDeadlineOwner())
+        with canary_owner.locked(sys.modules[__name__]):
+            budget.watch_once(BUDGET_DIR, record["request_id"],
+                              native_owner=KernelDeadlineOwner())
     except OSError:
         # Disk-full/failed-fsync exception only. The already-durable timer
         # intent is enough to enforce the fixed parent cgroup boundary;
@@ -806,7 +871,7 @@ def arm_approved():
     # Root-owned native verifier rechecks the exact host, boot, source bytes,
     # Project binds, journal and EVERY currently live worker/descendant.
     # This is not a caller-provided list of cleared writer classes.
-    owner.verify_live_storage(plan, a)
+    owner.verify_empty_storage(plan, a)
     # Install an independent PID1-monotonic overall deadline BEFORE
     # recording the new budget start. Its deadline is strictly earlier
     # than the allowed 21,600-second span even if both watchdogs die.
@@ -843,6 +908,8 @@ def arm_approved():
         used_bytes=current["used_bytes"], sidecar_plan_sha256=plan["sha256"],
         monitor_receipt_sha256=plan["installed"]["watchdog_receipt_sha256"])
     budget.write_once(BUDGET_DIR, x)
+    # Starting any worker remains denied until a separate reviewed grant.
+    canary_owner.arm_empty(sys.modules[__name__], owner, plan, a)
     return {"request_id": x["request_id"], "status": x["status"],
             "budget_scope": aggregate.BUDGET_SCOPE,
             "deadline_seconds": x["deadline_seconds"],
@@ -893,9 +960,23 @@ def inspect_host_write_surfaces():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm", "watch", "watch-loop", "hard-stop", "recover", "inspect-host-write-surfaces", "inspect-native-worker-storage"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm",
+        "watch", "watch-loop", "hard-stop", "recover",
+        "grant-canary", "grant-compiler", "observe-canary-live",
+        "observe-canary-terminal", "accept-canary",
+        "inspect-host-write-surfaces", "inspect-native-worker-storage"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
-    if sys.argv[1] == "inspect-native-worker-storage":
+    if sys.argv[1] == "grant-canary":
+        canary_owner.grant(sys.modules[__name__], NativeOwner(), kind="canary")
+    elif sys.argv[1] == "grant-compiler":
+        canary_owner.grant(sys.modules[__name__], NativeOwner(), kind="compiler")
+    elif sys.argv[1] == "observe-canary-live":
+        canary_owner.observe_live(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "observe-canary-terminal":
+        canary_owner.observe_terminal(sys.modules[__name__])
+    elif sys.argv[1] == "accept-canary":
+        canary_owner.accept_canary(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "inspect-native-worker-storage":
         sys.stdout.write(_bytes(inspect_native_worker_storage()).decode("ascii"))
     elif sys.argv[1] == "inspect-host-write-surfaces":
         sys.stdout.write(_bytes(inspect_host_write_surfaces()).decode("ascii"))
