@@ -157,7 +157,8 @@ def test_no_caller_evidence_can_clear_native_admission():
     arm = inspect.getsource(owner.arm_approved)
     watch = inspect.getsource(owner.NativeOwner.sample_exact)
     assert "storage_verifier.inspect_live(" in own
-    assert "canary_owner.watch_allowed(" in watch\n    assert "native.verify_live_storage(" in inspect.getsource(owner.canary_owner.watch_allowed)
+    assert "canary_owner.watch_allowed(" in watch
+    assert "native.verify_live_storage(" in inspect.getsource(owner.canary_owner.watch_allowed)
     assert "owner.verify_empty_storage(plan, a)" in arm
     assert 'unaccounted_writable_roots=[]' not in own + arm + watch
     assert "inspect-native-worker-storage" in inspect.getsource(owner.main)
