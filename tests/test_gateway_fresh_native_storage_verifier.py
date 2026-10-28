@@ -217,3 +217,51 @@ def test_live_inspection_binds_host_boot_request_project_and_worker(
         verify.inspect_live(plan=plan, admission=a, controller_pid=400,
                             controller_cgroup=controller_group,
                             host_id="i-exact", boot_id="boot-111")
+
+
+def test_worker_cannot_retain_writable_host_regular_fd(tmp_path, monkeypatch):
+    _simulate_worker(monkeypatch, tmp_path)
+    original_iterdir = Path.iterdir
+    original_stat = Path.stat
+    original_readlink = verify.os.readlink
+    original_one = verify._one
+
+    def foreign_fds(path):
+        if str(path) == "/proc/411/fd":
+            return iter([path / "7"])
+        return original_iterdir(path)
+
+    def foreign_stat(path, *a, **k):
+        if str(path) == "/proc/411/fd/7":
+            return SimpleNamespace(st_dev=os.makedev(8, 1),
+                                   st_mode=0o100600)
+        return original_stat(path, *a, **k)
+
+    def foreign_readlink(path, *a, **k):
+        if str(path) == "/proc/411/fd/7":
+            return "/var/log/old-runner/compiler-escape.log"
+        return original_readlink(path, *a, **k)
+
+    def foreign_one(path, **k):
+        if str(path) == "/proc/411/fdinfo/7":
+            return "flags: 0100002"
+        return original_one(path, **k)
+
+    monkeypatch.setattr(Path, "iterdir", foreign_fds)
+    monkeypatch.setattr(Path, "stat", foreign_stat)
+    monkeypatch.setattr(verify.os, "readlink", foreign_readlink)
+    monkeypatch.setattr(verify, "_one", foreign_one)
+    with pytest.raises(RuntimeError, match="writable host file descriptor"):
+        verify._verify_worker(
+            411, build_uid=24302, build_gid=24302,
+            build_device=os.makedev(7, 5))
+
+
+def test_worker_unchanged_cgroup_census_is_required(monkeypatch):
+    # Source-negative: the verifier cannot issue an admission based on one
+    # snapshot of an active PID set that changed during the inspection.
+    body = inspect.getsource(verify.inspect_live)
+    assert "first != _processes()" in body
+    assert "controller_pid not in first" in body
+    assert "not workers" in body
+    assert "unknown" not in verify.SCHEMA
