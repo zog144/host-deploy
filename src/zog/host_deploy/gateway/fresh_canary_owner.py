@@ -255,7 +255,7 @@ def observe_terminal(owner):
                 or CANARY_TERMINAL.exists()
                 or live.get("boot_id") != owner._boot()):
             raise RuntimeError("canary exit cannot be attested")
-        observed = owner._worker_show(live["unit"], live["job_id"])
+        observed = owner.NativeOwner().worker_show(live["job_id"])
         if (observed.get("ActiveState") not in ("inactive", "failed")
                 or observed.get("InvocationID") != live["invocation_id"]
                 or observed.get("ExecMainCode") != "1"
