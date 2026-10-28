@@ -330,11 +330,13 @@ class NativeOwner:
         side = self.observe_unit(sidecar.UNIT)
         if side["active"] is not True:
             raise RuntimeError("fresh source-attested controller is not active")
-        pid = _show(sidecar.UNIT).get("MainPID", "")
+        unit = _show(sidecar.UNIT)
+        pid = unit.get("MainPID", "")
         if not pid.isdecimal() or int(pid) < 2:
             raise RuntimeError("fresh controller MainPID is missing")
         return storage_verifier.inspect_live(
             plan=plan, admission=admission, controller_pid=int(pid),
+            controller_cgroup=unit.get("ControlGroup"),
             boot_id=_boot(), host_id=admission["host_id"])
 
     def sample_exact(self, x):
