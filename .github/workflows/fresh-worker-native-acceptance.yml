@@ -30,5 +30,5 @@ jobs:
           python3 -m venv /tmp/zog-worker-env
           /tmp/zog-worker-env/bin/pip install dbus-next==0.2.3
           sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
-            PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/companion-root/src:$GITHUB_WORKSPACE/companion-box/src" \
+            PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/companion-root/src:$GITHUB_WORKSPACE/companion-box/box-control/src" \
             PYTHONDONTWRITEBYTECODE=1 /tmp/zog-worker-env/bin/python -B tests/native/fresh_worker_acceptance.py
