@@ -270,7 +270,7 @@ def test_worker_cannot_retain_writable_host_regular_fd(tmp_path, monkeypatch):
 def test_worker_unchanged_cgroup_census_is_required(monkeypatch):
     # Source-negative: the verifier cannot issue an admission based on one
     # snapshot of an active PID set that changed during the inspection.
-    body = inspect.getsource(verify.inspect_live)
+    body = inspect.getsource(verify._inspect_native)
     assert "first != _processes()" in body
     assert "controller_pid not in first" in body
     assert "not workers" in body
