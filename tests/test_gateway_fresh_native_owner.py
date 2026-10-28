@@ -259,6 +259,8 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
                      "watchdog_receipt_sha256": "sha256:"+"c"*64},
     }
     original = "f"*32
+    monkeypatch.setattr(owner.canary_owner, "require_gate_source",
+                        lambda plan: None)
     monkeypatch.setattr(owner, "_budget_directory_prepared",
                         lambda *, require_empty: True)
     monkeypatch.setattr(owner, "_root", lambda: None)
