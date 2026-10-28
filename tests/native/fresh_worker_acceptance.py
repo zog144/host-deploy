@@ -41,6 +41,7 @@ def ident(path):
 def setup():
     assert os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'
     assert os.geteuid() == 0 and Path('/proc/1/comm').read_text().strip() == 'systemd'
+    from zog.root_control.build import BuildBackend  # full companion import before allocating
     assert not quota.IMAGE.parent.exists() and not PROJECT.exists()
     emit('systemd', command('systemctl', '--version').splitlines()[0])
     assert os.statvfs('/var/lib').f_bavail * os.statvfs('/var/lib').f_frsize >= 36 * 1024**3
