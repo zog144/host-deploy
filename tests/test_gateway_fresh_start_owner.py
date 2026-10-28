@@ -50,6 +50,7 @@ def setup(monkeypatch, *, phase="armed-idle", pending=None, accepted=None):
                   "phase": phase, "pending_job": pending,
                   "last_worker_job_id": None},
     }
+    records[c.STATE/"reviewed-plan.json"] = PLAN
     if accepted is not None:
         records[c.CANARY_ACCEPTED] = accepted
     host = SimpleNamespace(
