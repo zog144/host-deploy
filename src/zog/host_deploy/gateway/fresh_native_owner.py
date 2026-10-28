@@ -345,7 +345,14 @@ class NativeOwner:
                 or x["project_root"] != plan["project_root"]
                 or x["host_id"] != admission["host_id"]):
             raise RuntimeError("watchdog request/host/Project identity drift")
-        self.verify_live_storage(plan, admission)
+        # A failed live worker witness must enter the durable UNCERTAIN
+        # cancellation path, not throw before budget.watch_once can persist
+        # stop intent. Never report a failed witness as an active sidecar.
+        try:
+            self.verify_live_storage(plan, admission)
+            workers_bounded = True
+        except (OSError, RuntimeError, PermissionError, ValueError):
+            workers_bounded = False
         result = quota.inspect()
         return {
             "host_id": x["host_id"], "project_root": x["project_root"],
@@ -360,7 +367,8 @@ class NativeOwner:
                 and _show(independent_watchdog.UNIT).get("ActiveState") == "active"
                 and _show(independent_watchdog.UNIT).get("MainPID") not in (
                     None, "", "0")),
-            "sidecar_active": _show(sidecar.UNIT).get("ActiveState") == "active",
+            "sidecar_active": (workers_bounded and
+                _show(sidecar.UNIT).get("ActiveState") == "active"),
         }
 
     def cancel_exact_project(self, project, request, *, reason, cancellation_id):
