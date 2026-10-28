@@ -14,7 +14,7 @@ NOW = 1790000000
 
 
 def uuidn(n):
-    return str(uuid.UUID(int=n))
+    return str(uuid.UUID("00000000-0000-4000-8000-" + format(n, "012x")))
 
 
 def sample():
