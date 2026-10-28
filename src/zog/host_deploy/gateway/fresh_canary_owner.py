@@ -169,7 +169,7 @@ def grant(owner, native, *, kind):
                 or any(state.get(k) != v for k,v in
                        _identity(owner, plan, admission).items())
                 or state.get("pending_job") is not None
-                or GRANT.exists() or GRANT.is_symlink()):
+                or (kind == "canary" and (GRANT.exists() or GRANT.is_symlink()))):
             raise RuntimeError("start grant already attempted or lane not idle")
         native.verify_empty_storage(plan, admission)
         canary_receipt = None
@@ -181,6 +181,12 @@ def grant(owner, native, *, kind):
                 raise RuntimeError("compiler lacks verified same-boot canary")
             canary_receipt = _digest(prior)
         intent = _intent(owner, path, kind=kind, plan=plan, admission=admission)
+        if kind == "compiler":
+            prior_grant = owner._read_json(GRANT)
+            prior_claim = owner._read_json(STATE / "fresh-canary-claim.json")
+            if (prior_grant.get("kind") != "canary"
+                    or prior_claim.get("job_id") != prior_grant.get("job_id")):
+                raise RuntimeError("compiler cannot replace unconsumed canary grant")
         owner._store(GRANT, {
             "schema": GRANT_SCHEMA, "kind": kind,
             **_identity(owner, plan, admission),
@@ -188,7 +194,7 @@ def grant(owner, native, *, kind):
             "request_sha256": _digest(intent["request"]),
             "budget_scope": aggregate.BUDGET_SCOPE,
             "canary_receipt_sha256": canary_receipt,
-        }, exclusive=True)
+        }, exclusive=(kind == "canary"))
         return {"status": "one-job-grant-only", "kind": kind,
                 "job_id": intent["job_id"], "no_pid1_mutation": True}
 
@@ -214,7 +220,7 @@ def observe_live(owner, native):
         job = intent["job_id"]
         unit = ("zog-" + plan["project_root"].split("/")[-1]
                 + "-build" + job + ".service")
-        observed = owner._worker_show(unit, job)
+        observed = native.worker_show(job)
         if (observed.get("ActiveState") != "active"
                 or not observed.get("InvocationID")
                 or not observed.get("MainPID", "").isdigit()
@@ -253,7 +259,7 @@ def observe_terminal(owner):
                 or observed.get("ExecMainCode") != "1"
                 or observed.get("ExecMainStatus") != "0"
                 or observed.get("ControlGroup") not in ("", "n/a")
-                and owner._worker_cgroup_populated(observed["ControlGroup"])):
+                and owner.NativeOwner().worker_cgroup_populated(observed["ControlGroup"])):
             raise RuntimeError("finite canary did not exit cleanly")
         record = {**_identity(owner, plan, a),
                   "schema": "host-deploy-fresh-canary-terminal-v1",
@@ -291,3 +297,82 @@ def accept_canary(owner, native):
         owner._store(PHASE, {**state, "phase": "canary-clean-idle",
                              "pending_job": None}, exclusive=False)
         return receipt
+
+
+def watch_allowed(*, fresh_owner, native, plan, admission, budget_record):
+    """Called under the shared start lock by the protected budget watchdog.
+
+    Idle is permitted only after a true empty kernel census and the durable
+    correct phase. Claimed, missing workers have a ten-second maximum.
+    The running phase still demands the complete live worker mount/FD proof.
+    No caller-provided 'idle' or 'canary_verified' attribute is accepted.
+    """
+    from . import fresh_cold_start_policy as policy
+    _identity(fresh_owner, plan, admission)
+    if (budget_record.get("status") != "active"
+            or budget_record.get("request_id") != admission["request_id"]):
+        raise RuntimeError("watchdog budget no longer active")
+    _timer(fresh_owner)
+    state = fresh_owner._read_json(PHASE)
+    if (state.get("schema") != PHASE_SCHEMA
+            or any(state.get(k) != v for k,v in
+                   _identity(fresh_owner, plan, admission).items())):
+        raise RuntimeError("watchdog phase identity drift")
+    phase = state.get("phase")
+    if phase in ("armed-idle", "canary-clean-idle", "compiler-clean-idle"):
+        evidence = native.verify_empty_storage(plan, admission)
+        if evidence.get("status") != "verified-empty-lane-not-start-authority":
+            raise RuntimeError("idle lacks native empty evidence")
+        if state.get("pending_job") is not None:
+            raise RuntimeError("idle still has a claimed worker")
+        canary_ok = False
+        if phase != "armed-idle":
+            accepted = fresh_owner._read_json(CANARY_ACCEPTED)
+            canary_ok = (accepted.get("status") == "native-canary-accepted"
+                         and all(accepted.get(k) == v for k,v in
+                                 _identity(fresh_owner, plan, admission).items()))
+        decision = policy.classify(
+            phase=phase, **{k: state[k] for k in (
+                "host_id", "boot_id", "project_root", "request_id")},
+            bound=state, worker_pids=[],
+            controller_pid=evidence["controller_pid"],
+            now_monotonic_ns=time.monotonic_ns(),
+            budget_record=budget_record, deadline_observed=True,
+            previous_canary_verified=canary_ok,
+            all_jobs_clean=True)
+        if decision["status"] != "native-idle-only":
+            raise RuntimeError("idle phase not accepted")
+        return decision
+    if phase in ("canary-start-attempted", "compiler-start-attempted"):
+        kind = phase.split("-", 1)[0]
+        claim = fresh_owner._read_json(STATE / ("fresh-" + kind + "-claim.json"))
+        if state.get("pending_job") != claim:
+            raise RuntimeError("pending worker lacks exact durable one-shot claim")
+        elapsed = time.monotonic_ns() - claim["attempt_monotonic_ns"]
+        if elapsed < 0 or elapsed > policy.PENDING_SECONDS * 1_000_000_000:
+            raise RuntimeError("worker absent beyond protected start allowance")
+        # A process may have started before the first positive readback.
+        # If live, require complete witness; if absent, require the full
+        # pending-mode native kernel census and exact durable claim.
+        try:
+            return native.verify_live_storage(plan, admission)
+        except RuntimeError as exc:
+            if "no live finite worker available" not in str(exc):
+                raise
+        evidence = native.verify_pending_storage(plan, admission)
+        decision = policy.classify(
+            phase=phase, **{k: state[k] for k in (
+                "host_id", "boot_id", "project_root", "request_id")},
+            bound=state, worker_pids=[],
+            controller_pid=evidence["controller_pid"],
+            pending_job=claim, now_monotonic_ns=time.monotonic_ns(),
+            budget_record=budget_record, deadline_observed=True,
+            previous_canary_verified=(kind == "compiler" and
+                fresh_owner._read_json(CANARY_ACCEPTED).get("status") ==
+                "native-canary-accepted"))
+        return decision
+    if phase in ("canary-live", "compiler-live"):
+        if state.get("pending_job") is not None:
+            raise RuntimeError("live worker still has pending start claim")
+        return native.verify_live_storage(plan, admission)
+    raise RuntimeError("unreviewed cold-start watchdog phase")
