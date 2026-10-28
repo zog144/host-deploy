@@ -848,6 +848,10 @@ def arm_approved():
     _root()
     plan = _read_json(PLAN_PATH)
     a = _admission(plan)
+    # Source admission is bound to the reviewed gate-producing root-control
+    # successor. Old installed bytes cannot arm an idle lane, since those
+    # builds could still start workers without a protected claim.
+    canary_owner.require_gate_source(plan)
     owner = NativeOwner()
     owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
     if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
@@ -964,6 +968,8 @@ def main():
         "watch", "watch-loop", "hard-stop", "recover",
         "grant-canary", "grant-compiler", "observe-canary-live",
         "observe-canary-terminal", "accept-canary",
+        "observe-compiler-live", "observe-compiler-terminal",
+        "accept-compiler-clean",
         "inspect-host-write-surfaces", "inspect-native-worker-storage"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "grant-canary":
@@ -976,6 +982,12 @@ def main():
         canary_owner.observe_terminal(sys.modules[__name__])
     elif sys.argv[1] == "accept-canary":
         canary_owner.accept_canary(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "observe-compiler-live":
+        canary_owner.observe_compiler_live(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "observe-compiler-terminal":
+        canary_owner.observe_compiler_terminal(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "accept-compiler-clean":
+        canary_owner.accept_compiler_cleanup(sys.modules[__name__], NativeOwner())
     elif sys.argv[1] == "inspect-native-worker-storage":
         sys.stdout.write(_bytes(inspect_native_worker_storage()).decode("ascii"))
     elif sys.argv[1] == "inspect-host-write-surfaces":
