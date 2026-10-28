@@ -1,0 +1,34 @@
+name: Disposable restricted worker native acceptance
+on:
+  push:
+    branches: [work/native-worker-20261028]
+permissions:
+  contents: read
+jobs:
+  native-worker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/root-control
+          ref: ccc3772d9c9925209a5e2b6e9f13ca99fd83339d
+          path: companion-root
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/box-control
+          ref: b7934882cfacd2fbfd60c7964713ed3dde7f9460
+          path: companion-box
+          persist-credentials: false
+      - name: Native finite component test
+        run: |
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          python3 -m venv /tmp/zog-worker-env
+          /tmp/zog-worker-env/bin/pip install dbus-next==0.2.3
+          sudo env RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE/companion-root/src:$GITHUB_WORKSPACE/companion-box/src" \
+            PYTHONDONTWRITEBYTECODE=1 /tmp/zog-worker-env/bin/python -B tests/native/fresh_worker_acceptance.py
