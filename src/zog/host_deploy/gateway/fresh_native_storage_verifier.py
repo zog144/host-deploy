@@ -7,6 +7,7 @@ Project. If no live worker is available, admission is NOT established.
 It does not grant a request or write a success receipt.
 """
 import os
+import json
 from pathlib import Path
 import stat
 
@@ -238,8 +239,9 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
             "memory_max": int(memory)}
 
 
-def inspect_live(*, plan, admission, controller_pid, controller_cgroup, boot_id, host_id):
-    """Fail-closed live, independently sampled proof; no prepared JSON bypass.
+def _inspect_native(*, plan, admission, controller_pid, controller_cgroup,
+                    boot_id, host_id, mode):
+    """Fail-closed kernel snapshot, with explicitly separate live/empty modes.
 
     Must be called by the root-owned fixed native owner after its independent
     installed-source, reviewed-plan, admission and old-baseline checks.
@@ -247,6 +249,8 @@ def inspect_live(*, plan, admission, controller_pid, controller_cgroup, boot_id,
     watchdog/worker-start ownership must independently enforce the same
     restrictions and repeat the readback at runtime.
     """
+    if mode not in ("live", "empty"):
+        raise RuntimeError("native witness mode is not reviewed")
     if os.geteuid() != 0:
         raise PermissionError("kernel verifier requires native root")
     if (type(plan) is not dict or type(admission) is not dict
@@ -290,11 +294,17 @@ def inspect_live(*, plan, admission, controller_pid, controller_cgroup, boot_id,
                        build_gid=identity["build_gid"], build_device=device)
         for pid in first if pid != controller_pid
     ]
-    if not workers:
+    if mode == "live" and not workers:
         raise RuntimeError("no live finite worker available for native witness")
+    if mode == "empty" and workers:
+        raise RuntimeError("empty cold-start lane contains a worker")
+    if mode == "empty":
+        _assert_no_unclean_starts(device)
     if first != _processes():
         raise RuntimeError("native worker changed during containment inspection")
-    return {"schema": SCHEMA, "status": "live-evidence-only",
+    return {"schema": SCHEMA, "status": (
+                "live-evidence-only" if mode == "live"
+                else "verified-empty-lane-not-start-authority"),
             "host_id": host_id, "boot_id": boot_id,
             "plan_sha256": plan["sha256"],
             "project_root": plan["project_root"],
@@ -304,3 +314,67 @@ def inspect_live(*, plan, admission, controller_pid, controller_cgroup, boot_id,
             "controller_pid": controller_pid, "workers": workers,
             "dedicated_reserved_bytes": aggregate.TOTAL_BYTES,
             "no_future_worker_authority": True}
+
+
+def _assert_no_unclean_starts(build_device):
+    """Root-control job records are a VETO, never proof of absence by themselves.
+
+    Actual emptiness is attested separately by two full kernel cgroup censuses.
+    Enumerate only fixed directly nested registration job directories, not the
+    potentially large imported compiler rootfs. An attempted unfinished start
+    cannot silently turn into a legitimate idle interval.
+    """
+    registered = quota.MOUNT / "controller-build-resources"
+    if registered.is_symlink() or registered.stat().st_dev != build_device:
+        raise RuntimeError("root-control registration backing escaped build image")
+    resources = sorted(registered.iterdir())
+    if len(resources) > 256:
+        raise RuntimeError("too many registered fresh resources")
+    for resource in resources:
+        if (resource.is_symlink() or not resource.is_dir()
+                or resource.stat().st_dev != build_device):
+            raise RuntimeError("unreviewed registered fresh resource")
+        jobs = resource / "jobs"
+        if jobs.is_symlink():
+            raise RuntimeError("symlinked fresh worker job directory")
+        if not jobs.exists():
+            continue
+        if not jobs.is_dir() or jobs.stat().st_dev != build_device:
+            raise RuntimeError("fresh worker job directory escaped quota")
+        entries = sorted(jobs.iterdir())
+        if len(entries) > 256:
+            raise RuntimeError("too many fresh worker job records")
+        for entry in entries:
+            if (entry.is_symlink() or not entry.is_file()
+                    or entry.stat().st_dev != build_device
+                    or entry.suffix != ".json"):
+                raise RuntimeError("invalid registered fresh worker job")
+            info = json.loads(_one(entry, limit=16384))
+            if (type(info) is not dict
+                    or info.get("parent_slice") != sidecar.SLICE_UNIT
+                    or info.get("log_namespace") != sidecar.LOG_NAMESPACE):
+                raise RuntimeError("fresh worker job binding differs")
+            if (info.get("start_attempted") is True
+                    and info.get("process_cleanup_complete") is not True):
+                raise RuntimeError("attempted fresh worker missing without cleanup")
+
+
+def inspect_live(*, plan, admission, controller_pid, controller_cgroup,
+                 boot_id, host_id):
+    return _inspect_native(
+        plan=plan, admission=admission, controller_pid=controller_pid,
+        controller_cgroup=controller_cgroup, boot_id=boot_id, host_id=host_id,
+        mode="live")
+
+
+def inspect_empty(*, plan, admission, controller_pid, controller_cgroup,
+                  boot_id, host_id):
+    """Observe a genuine empty lane BEFORE the first authorized worker.
+
+    Evidence-only. Does NOT allow root-control to start anything, prove
+    a canary, or clear DEDICATED_UNVERIFIED_WRITERS.
+    """
+    return _inspect_native(
+        plan=plan, admission=admission, controller_pid=controller_pid,
+        controller_cgroup=controller_cgroup, boot_id=boot_id, host_id=host_id,
+        mode="empty")
