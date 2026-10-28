@@ -249,7 +249,7 @@ def _inspect_native(*, plan, admission, controller_pid, controller_cgroup,
     watchdog/worker-start ownership must independently enforce the same
     restrictions and repeat the readback at runtime.
     """
-    if mode not in ("live", "empty"):
+    if mode not in ("live", "empty", "pending"):
         raise RuntimeError("native witness mode is not reviewed")
     if os.geteuid() != 0:
         raise PermissionError("kernel verifier requires native root")
@@ -296,15 +296,16 @@ def _inspect_native(*, plan, admission, controller_pid, controller_cgroup,
     ]
     if mode == "live" and not workers:
         raise RuntimeError("no live finite worker available for native witness")
-    if mode == "empty" and workers:
-        raise RuntimeError("empty cold-start lane contains a worker")
+    if mode in ("empty", "pending") and workers:
+        raise RuntimeError("empty/pending cold-start lane contains a worker")
     if mode == "empty":
         _assert_no_unclean_starts(device)
     if first != _processes():
         raise RuntimeError("native worker changed during containment inspection")
     return {"schema": SCHEMA, "status": (
                 "live-evidence-only" if mode == "live"
-                else "verified-empty-lane-not-start-authority"),
+                else ("verified-empty-lane-not-start-authority" if mode == "empty"
+                      else "verified-missing-pending-not-start-authority")),
             "host_id": host_id, "boot_id": boot_id,
             "plan_sha256": plan["sha256"],
             "project_root": plan["project_root"],
@@ -378,3 +379,17 @@ def inspect_empty(*, plan, admission, controller_pid, controller_cgroup,
         plan=plan, admission=admission, controller_pid=controller_pid,
         controller_cgroup=controller_cgroup, boot_id=boot_id, host_id=host_id,
         mode="empty")
+
+
+def inspect_pending(*, plan, admission, controller_pid, controller_cgroup,
+                    boot_id, host_id):
+    """Read-only no-worker PID1/cgroup/quota evidence DURING a protected claim.
+
+    Unlike inspect_empty this does not demand that no attempted job exists.
+    The privileged caller MUST first match the exact one-shot claim and
+    <=10s monotonic pending deadline; this never grants a worker start.
+    """
+    return _inspect_native(
+        plan=plan, admission=admission, controller_pid=controller_pid,
+        controller_cgroup=controller_cgroup, boot_id=boot_id, host_id=host_id,
+        mode="pending")
