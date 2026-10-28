@@ -30,6 +30,17 @@ CANARY_TERMINAL = STATE / "canary-terminal.json"
 CANARY_ACCEPTED = STATE / "canary-accepted.json"
 COMPILER_LIVE = STATE / "compiler-live-witness.json"
 COMPILER_TERMINAL = STATE / "compiler-terminal.json"
+# Source-only successor reviewed in root-control draft PR #14. This pin
+# MUST be matched by the actual protected installed-byte attestation before
+# the empty-lane arm can proceed. Source CI is not installed-byte proof.
+REQUIRED_GATE_REVISION = "e81220d5120e413363c684e93a6b0043c77fb664"
+
+
+def require_gate_source(plan):
+    if plan.get("installed", {}).get("root_control_revision") != REQUIRED_GATE_REVISION:
+        raise RuntimeError("fresh cold-start requires installed reviewed root-control start gate")
+
+
 GRANT_SCHEMA = "host-deploy-fresh-start-grant-v1"
 PHASE_SCHEMA = "host-deploy-fresh-start-phase-v1"
 INTENT_SCHEMA = "host-deploy-fresh-reviewed-worker-intent-v1"
