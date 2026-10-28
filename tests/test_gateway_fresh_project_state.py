@@ -141,7 +141,7 @@ def test_budget_owner_inspects_bind_before_watching_or_arming():
     arm = python_inspect.getsource(owner.arm_approved)
     recovery = python_inspect.getsource(owner.recover)
     assert "self.verify_live_storage(plan, admission)" in sample
-    verifier = python_inspect.getsource(owner.storage_verifier.inspect_live)
+    verifier = python_inspect.getsource(owner.storage_verifier._inspect_native)
     assert "project_state.inspect(" in verifier
     # Correct reviewed order: bind before seed import, not during the later
     # controller install; installer must only inspect the existing mount.
