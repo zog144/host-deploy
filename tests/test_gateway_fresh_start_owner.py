@@ -118,8 +118,6 @@ def test_prearm_phase_requires_budget_timer_and_empty_native_witness(
         monkeypatch):
     host, records = setup(monkeypatch)
     records.clear()
-    monkeypatch.setattr(c.PHASE, "exists", lambda: False)
-    monkeypatch.setattr(c.PHASE, "is_symlink", lambda: False)
     c.arm_empty(host, Native(), PLAN, ADMISSION)
     assert records[c.PHASE]["phase"] == "armed-idle"
     assert records[c.PHASE]["pending_job"] is None
@@ -127,8 +125,6 @@ def test_prearm_phase_requires_budget_timer_and_empty_native_witness(
 
 def test_grant_does_not_take_job_command_from_rpc_or_start_pid1(monkeypatch):
     host, records = setup(monkeypatch)
-    monkeypatch.setattr(c.GRANT, "exists", lambda: False)
-    monkeypatch.setattr(c.GRANT, "is_symlink", lambda: False)
     intended = {**BIND, "schema": c.INTENT_SCHEMA, "kind": "canary",
                 "job_id": "c"*32, "request": {"command":["/usr/bin/sleep","30"]}}
     monkeypatch.setattr(c, "_intent", lambda *args, **kw: intended)
