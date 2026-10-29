@@ -1,4 +1,4 @@
-"""No SSH, token or root mutation: exact cross-host owner provenance tests."""
+"""No token or root mutation: exact HTTPS issuer owner provenance tests."""
 import copy
 import hashlib
 import json
@@ -70,15 +70,17 @@ def sample():
                     account_id="a"*32,owner_user_id=42)
     owner_bytes=json.dumps(owner,sort_keys=True).encode()
     pin_bytes=b"trusted installed signer pin"
-    client=dict(schema="zog-issuer-cross-host-client-v1",
+    client=dict(schema="zog-issuer-https-credential-client-v1",
                 project="/verified/project", authorization_id=_hash(authorization),
                 host_id=uuidn(1), installation_id=uuidn(2), state_volume_id=uuidn(4),
                 host_fingerprint="d"*64, registry_id="station-registry",
                 assignment_id=uuidn(12), assignment_revision=4,
-                receipt_sha256="f"*64, ssh_host="station.example.org",
-                ssh_port=2222, ssh_user="issuer_bridge",
-                ssh_identity="/etc/zog/issuer/client",ssh_known_hosts="/etc/zog/issuer/known_hosts",
-                ssh_known_hosts_sha256="a"*64,
+                receipt_sha256="f"*64,
+                https_origin="https://station.example.org",
+                tls_authority_pin_sha256="a"*64,
+                purpose="issuer-cloudflare-dns01",
+                consumer_uid=28001, grant_id="d"*32,
+                storage_id="c"*32, credential_revision=5,
                 owner_authority_sha256=hashlib.sha256(owner_bytes).hexdigest(),
                 station_signer_pin_sha256=hashlib.sha256(pin_bytes).hexdigest())
     return dict(owner=owner,binding=binding,ledger=ledger,delivery=delivery,
@@ -94,6 +96,7 @@ def test_positive_exact_issuer_admission_is_nonsecret_and_not_transfer():
     assert result["installed_bytes_verified"] is False
     assert result["authorization_id"]==kwargs["client"]["authorization_id"]
     assert "token" not in str(result)
+    assert result["transport"]=="authenticated-https-443"
 
 
 @pytest.mark.parametrize("field, key, changed",[
@@ -118,6 +121,13 @@ def test_positive_exact_issuer_admission_is_nonsecret_and_not_transfer():
     ("client","registry_id","other-registry"),
     ("client","state_volume_id",uuidn(99)),
     ("client","station_signer_pin_sha256","0"*64),
+    ("client","https_origin","http://station.example.org"),
+    ("client","https_origin","https://user@station.example.org"),
+    ("client","tls_authority_pin_sha256","0"),
+    ("client","purpose","admin-password"),
+    ("client","consumer_uid",0),
+    ("client","grant_id","0"*32),
+    ("client","credential_revision",6),
 ])
 def test_independent_owner_policy_revision_and_station_drift_denied(field,key,changed):
     kwargs=sample()
