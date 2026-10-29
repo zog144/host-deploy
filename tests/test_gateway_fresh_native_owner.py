@@ -60,6 +60,9 @@ def test_fixed_slice_matches_start_transient_and_scoped_kernel_target():
 def test_cancel_only_frozen_fresh_cgroup_and_original_cancellation_id(tmp_path, monkeypatch):
     monkeypatch.setattr(owner, "_root", lambda: None)
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
+    # Native sealing is independently tested with a temporary cgroup tree.
+    monkeypatch.setattr(owner.storage_verifier, "seal_hugetlb_before_arm",
+                        lambda pid: None if pid == 123 else pytest.fail("wrong controller"))
     monkeypatch.setattr(owner.project_state, "inspect",
                         lambda uid: {"mount_verified": True} if uid == 24301
                         else pytest.fail("wrong reviewed controller UID"))
