@@ -349,10 +349,19 @@ def test_nested_registration_records_are_obligatory(tmp_path, monkeypatch):
     jobs = path / "jobs"
     jobs.mkdir(parents=True)
     (path / "root").mkdir()
+    (path / "registration.json").write_text(json.dumps({
+        "schema": 1, "resource_id": resource, "state": "ready",
+        "intent": {"parent_slice": verify.sidecar.SLICE_UNIT,
+                   "log_namespace": verify.sidecar.LOG_NAMESPACE,
+                   "execution_user_id": 24302,
+                   "execution_group_id": 24302},
+    }))
     monkeypatch.setattr(verify.quota, "MOUNT", image)
     monkeypatch.setattr(verify.project_state, "PROJECT_ROOT", project)
     payload = {
-        "job_id": jobid, "request": {"build_root_id": resource},
+        "job_id": jobid, "request": {"build_root_id": resource,
+                                 "execution_user_id": 24302,
+                                 "execution_group_id": 24302},
         "parent_slice": verify.sidecar.SLICE_UNIT,
         "log_namespace": verify.sidecar.LOG_NAMESPACE,
         "unit_name": f"zog-{verify.sidecar.PROJECT}-build{jobid}.service",
