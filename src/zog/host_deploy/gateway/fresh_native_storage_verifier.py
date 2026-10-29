@@ -8,6 +8,8 @@ It does not grant a request or write a success receipt.
 """
 import os
 import json
+import hashlib
+import re
 from pathlib import Path
 import stat
 
@@ -182,21 +184,12 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
     mounts, all_mounts = _mounts(pid)
     root = Path("/proc") / str(pid) / "root"
     root_st = root.stat()
-    # The kernel readlink names a candidate, not evidence that PID1 is
-    # executing from the actual inode of that directory. Match both device
-    # and inode against the immutable imported host-visible root.
-    root_target = Path(os.readlink(root))
-    registered = quota.MOUNT / "controller-build-resources"
-    if (not root_target.is_relative_to(registered)
-            or root_target.name != "root"
-            or len(root_target.relative_to(registered).parts) != 3
-            or ".." in root_target.parts):
-        raise RuntimeError("PID1 worker RootDirectory escaped exact imported root")
-    if (root_target.is_symlink()
-            or not stat.S_ISDIR(root_st.st_mode)):
-        raise RuntimeError("PID1 worker root inode is not a directory")
-    candidate = root_target.stat()
-    if (not stat.S_ISDIR(candidate.st_mode)
+    # Bind kernel process root to a reviewed durable registration/job record,
+    # NOT the readlink spelling of /proc/PID/root or its namespace path.
+    expected_root = _expected_imported_root(cg, build_device)
+    candidate = expected_root.stat()
+    if (not stat.S_ISDIR(root_st.st_mode)
+            or not stat.S_ISDIR(candidate.st_mode)
             or (root_st.st_dev, root_st.st_ino) !=
                (candidate.st_dev, candidate.st_ino)
             or root_st.st_dev != build_device):
@@ -263,7 +256,7 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
             raise RuntimeError("worker has unaccounted writable descriptor")
         observed_fds += 1
     return {"pid": pid, "cgroup": cg, "root_dev": majmin,
-            "imported_root": str(root_target), "mount_count": len(all_mounts),
+            "imported_root": str(expected_root), "mount_count": len(all_mounts),
             "writable_fd_count": observed_fds, "swap_max": 0,
             "memory_max": int(memory)}
 
@@ -346,47 +339,102 @@ def _inspect_native(*, plan, admission, controller_pid, controller_cgroup,
             "no_future_worker_authority": True}
 
 
-def _assert_no_unclean_starts(build_device):
-    """Root-control job records are a VETO, never proof of absence by themselves.
+def _registered_job_records(build_device):
+    """Bounded quota-only registration / Project / resource / jobs traversal.
 
-    Actual emptiness is attested separately by two full kernel cgroup censuses.
-    Enumerate only fixed directly nested registration job directories, not the
-    potentially large imported compiler rootfs. An attempted unfinished start
-    cannot silently turn into a legitimate idle interval.
+    Root-control stores resources under sha256(canonical Project), then
+    32-hex resource ID; jobs live *inside* each resource. Unknown/symlinked
+    paths or corrupt records veto idle and active worker admission.
     """
     registered = quota.MOUNT / "controller-build-resources"
-    if registered.is_symlink() or registered.stat().st_dev != build_device:
-        raise RuntimeError("root-control registration backing escaped build image")
-    resources = sorted(registered.iterdir())
-    if len(resources) > 256:
-        raise RuntimeError("too many registered fresh resources")
-    for resource in resources:
-        if (resource.is_symlink() or not resource.is_dir()
-                or resource.stat().st_dev != build_device):
-            raise RuntimeError("unreviewed registered fresh resource")
-        jobs = resource / "jobs"
-        if jobs.is_symlink():
-            raise RuntimeError("symlinked fresh worker job directory")
-        if not jobs.exists():
-            continue
-        if not jobs.is_dir() or jobs.stat().st_dev != build_device:
-            raise RuntimeError("fresh worker job directory escaped quota")
-        entries = sorted(jobs.iterdir())
-        if len(entries) > 256:
-            raise RuntimeError("too many fresh worker job records")
-        for entry in entries:
-            if (entry.is_symlink() or not entry.is_file()
-                    or entry.stat().st_dev != build_device
-                    or entry.suffix != ".json"):
-                raise RuntimeError("invalid registered fresh worker job")
-            info = json.loads(_one(entry, limit=16384))
-            if (type(info) is not dict
-                    or info.get("parent_slice") != sidecar.SLICE_UNIT
-                    or info.get("log_namespace") != sidecar.LOG_NAMESPACE):
-                raise RuntimeError("fresh worker job binding differs")
-            if (info.get("start_attempted") is True
-                    and info.get("process_cleanup_complete") is not True):
-                raise RuntimeError("attempted fresh worker missing without cleanup")
+    def directory(path):
+        st = path.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or path.is_symlink()
+                or st.st_dev != build_device):
+            raise RuntimeError("registered worker directory escaped quota")
+    directory(registered)
+    areas = sorted(registered.iterdir())
+    if len(areas) > 16:
+        raise RuntimeError("too many registered Project areas")
+    expected_area = hashlib.sha256(str(project_state.PROJECT_ROOT).encode()).hexdigest()
+    count = 0
+    for area in areas:
+        directory(area)
+        if (not re.fullmatch(r"[0-9a-f]{64}", area.name)
+                or area.name != expected_area):
+            raise RuntimeError("foreign registered Project area")
+        resources = sorted(area.iterdir())
+        if len(resources) > 256:
+            raise RuntimeError("too many registered resources")
+        for resource in resources:
+            directory(resource)
+            if not re.fullmatch(r"[0-9a-f]{32}", resource.name):
+                raise RuntimeError("unexpected resource in registration area")
+            jobs = resource / "jobs"
+            if jobs.is_symlink():
+                raise RuntimeError("unsafe job record directory")
+            if not jobs.exists():
+                continue
+            directory(jobs)
+            entries = sorted(jobs.iterdir())
+            if len(entries) > 256:
+                raise RuntimeError("too many registered jobs")
+            for entry in entries:
+                count += 1
+                if count > 512:
+                    raise RuntimeError("too many fresh job records")
+                st = entry.lstat()
+                if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+                        or st.st_dev != build_device
+                        or not re.fullmatch(r"[0-9a-f]{32}\\.json", entry.name)):
+                    raise RuntimeError("invalid registered worker record")
+                info = json.loads(_one(entry, limit=16384))
+                if (type(info) is not dict
+                        or info.get("job_id") != entry.stem
+                        or info.get("request", {}).get("build_root_id") != resource.name
+                        or info.get("parent_slice") != sidecar.SLICE_UNIT
+                        or info.get("log_namespace") != sidecar.LOG_NAMESPACE
+                        or info.get("unit_name") != (
+                            f"zog-{sidecar.PROJECT}-build{entry.stem}.service")
+                        or info.get("slice_name") != (
+                            sidecar.SLICE_UNIT.removesuffix(".slice") +
+                            f"-build{entry.stem}.slice")):
+                    raise RuntimeError("registered job identity differs")
+                yield resource, info
+
+
+def _expected_imported_root(cgroup, build_device):
+    """Resolve exact authorized job record and PID1-imported root inode.
+
+    /proc/PID/root readlink is a display hint (and may contain '(deleted)'),
+    never an authorization or host-visible pathname.
+    """
+    candidates = []
+    for resource, info in _registered_job_records(build_device):
+        unit = info["unit_name"]
+        slice_unit = info["slice_name"]
+        suffix = "/" + slice_unit + "/" + unit
+        if (cgroup == "/" + sidecar.SLICE_UNIT + suffix
+                or cgroup.startswith("/" + sidecar.SLICE_UNIT + suffix + "/")):
+            if (info.get("start_attempted") is not True
+                    or info.get("process_cleanup_complete") is True):
+                raise RuntimeError("worker job start/cleanup record is inconsistent")
+            root = resource / "root"
+            st = root.lstat()
+            if (not stat.S_ISDIR(st.st_mode) or root.is_symlink()
+                    or st.st_dev != build_device):
+                raise RuntimeError("trusted worker root escaped quota import")
+            candidates.append(root)
+    if len(candidates) != 1:
+        raise RuntimeError("worker root has no unique durable PID1 import")
+    return candidates[0]
+
+
+def _assert_no_unclean_starts(build_device):
+    for _resource, info in _registered_job_records(build_device):
+        if (info.get("start_attempted") is True
+                and info.get("process_cleanup_complete") is not True):
+            raise RuntimeError("attempted fresh worker missing without cleanup")
 
 
 def inspect_live(*, plan, admission, controller_pid, controller_cgroup,
