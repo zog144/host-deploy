@@ -15,7 +15,6 @@ import json
 import os
 import re
 import time
-from uuid import UUID
 
 from .certificate_cross_host_admission import validate as validate_owner
 
@@ -201,14 +200,16 @@ def deliver_selected(*, snapshots, request_id, installed_issuer,
             _deny()
         check_receipt(request, receipt, now=int(time.time()))
         fresh = reread()
-        if prepare(**fresh, installed_issuer=installed_issuer,
-                   request_id=request_id, now=int(time.time())) != {
-                       **request, "created_at": int(time.time())}:
-            # Time values deliberately differ; compare all stable authority
-            # fields rather than treating a new clock as identical evidence.
-            candidate = prepare(**fresh, installed_issuer=installed_issuer,
-                                request_id=request_id, now=request["created_at"])
-            if candidate != request:
+        current = int(time.time())
+        if current >= request["expires_at"] or fresh != snapshots:
+            _deny()
+        # Revalidate exact, independently re-read signed owner/ledger/grant
+        # identities after transfer, with the CURRENT wall clock.
+        candidate = prepare(**fresh, installed_issuer=installed_issuer,
+                            request_id=request_id, now=current)
+        for key in request:
+            if key not in ("created_at", "expires_at") and (
+                    request[key] != candidate[key]):
                 _deny()
         installed = install_from_fd(
             snapshots["authorization"]["project"], fd,
