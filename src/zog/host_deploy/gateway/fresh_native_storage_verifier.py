@@ -192,7 +192,7 @@ def seal_hugetlb_before_arm(controller_pid):
     for p in paths:
         if p.is_symlink():
             raise RuntimeError("symlinked HugeTLB limit")
-        fd = os.open(p, os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        fd = os.open(p, os.O_WRONLY | os.O_TRUNC | os.O_CLOEXEC | os.O_NOFOLLOW)
         try:
             if os.write(fd, b"0") != 1:
                 raise RuntimeError("HugeTLB zero limit write incomplete")
