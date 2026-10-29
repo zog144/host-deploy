@@ -120,9 +120,16 @@ def test_root_control_attempted_worker_prevents_empty_kernel_witness(
     area = root / hashlib.sha256(str(project).encode()).hexdigest()
     jobs = area / resource_id / "jobs"
     jobs.mkdir(parents=True)
+    (jobs.parent / "registration.json").write_text(json.dumps({
+        "schema": 1, "resource_id": resource_id, "state": "ready",
+        "intent": {"parent_slice": verifier.sidecar.SLICE_UNIT,
+                   "log_namespace": verifier.sidecar.LOG_NAMESPACE,
+                   "execution_user_id": 24302, "execution_group_id": 24302},
+    }))
     item = jobs / (job_id + ".json")
     record = {"job_id": job_id,
-              "request": {"build_root_id": resource_id},
+              "request": {"build_root_id": resource_id,
+                          "execution_user_id": 24302, "execution_group_id": 24302},
               "parent_slice": verifier.sidecar.SLICE_UNIT,
               "log_namespace": verifier.sidecar.LOG_NAMESPACE,
               "unit_name": f"zog-{verifier.sidecar.PROJECT}-build{job_id}.service",
