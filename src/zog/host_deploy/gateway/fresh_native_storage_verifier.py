@@ -95,21 +95,48 @@ def _mounts(pid):
             raise RuntimeError("too many worker mounts")
     if "/" not in by_point:
         raise RuntimeError("worker root mount is absent")
+    # The namespace contains descendants of hidden ancestor mounts.
+    # Resolve visibility from the root using kernel parent IDs, not only
+    # repeated pathname layers or line order.
+    for row in entries.values():
+        parent = entries.get(row["parent"])
+        if row["parent"] == row["id"] or (parent and
+                parent["point"] != row["point"] and
+                not (row["point"].startswith(parent["point"].rstrip("/") + "/")
+                     or parent["point"] == "/")):
+            raise RuntimeError("corrupt worker mount parent graph")
     mounts = {}
-    for point, layers in by_point.items():
-        ids = {x["id"] for x in layers}
-        parents = {x["parent"] for x in layers if x["parent"] in ids}
-        tops = [x for x in layers if x["id"] not in parents]
+    for point in sorted(by_point, key=lambda x: (x.count("/"), len(x), x)):
+        layers = by_point[point]
+        if point == "/":
+            eligible = {x["id"] for x in layers}
+        else:
+            ancestors = [x for x in mounts if point.startswith(x.rstrip("/") + "/")]
+            if not ancestors:
+                continue
+            anchor = mounts[max(ancestors, key=len)]["id"]
+            eligible = set()
+            for _ in range(len(layers) + 1):
+                before = len(eligible)
+                eligible.update(x["id"] for x in layers
+                                if x["parent"] == anchor or x["parent"] in eligible)
+                if len(eligible) == before:
+                    break
+            if not eligible:
+                continue  # child under a masked ancestor
+        parents = {entries[i]["parent"] for i in eligible
+                   if entries[i]["parent"] in eligible}
+        tops = [entries[i] for i in eligible if i not in parents]
         if len(tops) != 1:
             raise RuntimeError("ambiguous worker mount stack: " + point)
         visited = set()
         cursor = tops[0]
         while cursor["id"] not in visited:
             visited.add(cursor["id"])
-            if cursor["parent"] not in ids:
+            if cursor["parent"] not in eligible:
                 break
             cursor = entries[cursor["parent"]]
-        if visited != ids:
+        if visited != eligible:
             raise RuntimeError("disconnected worker mount stack: " + point)
         mounts[point] = tops[0]
     return mounts, tuple(entries.values())
@@ -184,7 +211,9 @@ def _verify_worker(pid, *, build_uid, build_gid, build_device):
         fs = (root / target.lstrip("/")).stat()
         if not stat.S_ISDIR(fs.st_mode) or fs.st_dev != build_device:
             raise RuntimeError("worker writable path redirected: " + target)
-    for m in all_mounts:
+    # Only reachable mounts offer a pathname write route. Overmounted
+    # ancestors are covered by the independent writable-FD witness below.
+    for m in mounts.values():
         if not _writable(m):
             continue
         target = m["point"]
