@@ -94,6 +94,10 @@ def _simulate_worker(monkeypatch, tmp_path, *, escaped=None, fds=None):
                 "fstype": "ext4"}
         return mounts, tuple(mounts.values())
     monkeypatch.setattr(verify, "_mounts", mocked_mounts)
+    # The privileged job/registration identity is verified by its own
+    # focused filesystem tests; this synthetic worker supplies its result.
+    monkeypatch.setattr(verify, "_expected_imported_root",
+                        lambda group, device: rootbase)
     # Simulate the real /proc/<pid>/root symlink and st_dev through a
     # controlled independent kernel model, not a controller-supplied receipt.
     from pathlib import Path
@@ -198,6 +202,7 @@ def test_live_inspection_binds_host_boot_request_project_and_worker(
                             str(verify.quota.MOUNT),
                             aggregate.EXTERNAL_MOUNT) else
                         original_stat(p, *args, **kwargs))
+    monkeypatch.setattr(verify, "_hugetlb_sealed", lambda: None)
     monkeypatch.setattr(verify, "_processes", lambda: [400, 411])
     monkeypatch.setattr(verify, "_uid_gid", lambda pid:
                         {"Uid": (0,)*4} if pid == 400 else
@@ -296,33 +301,88 @@ def test_kernel_mount_stacks_are_order_independent_and_bounded(monkeypatch):
         verify._mounts(411)
 
 
-def test_hidden_foreign_mounts_and_hugepages_are_not_free_writes(tmp_path, monkeypatch):
+def test_reachable_foreign_and_hugepage_mounts_are_denied(tmp_path, monkeypatch):
     _simulate_worker(monkeypatch, tmp_path)
     original = verify._mounts
-    def layered(pid):
-        mounts, all_entries = original(pid)
-        hidden = {"point": "/tmp", "device": "8:1", "flags": frozenset({"rw"}),
-                  "super_flags": frozenset({"rw"}), "fstype": "ext4"}
-        return mounts, all_entries + (hidden,)
-    monkeypatch.setattr(verify, "_mounts", layered)
-    with pytest.raises(RuntimeError, match="foreign"):
-        verify._verify_worker(411, build_uid=24302, build_gid=24302,
-                              build_device=os.makedev(7, 5))
-
-    monkeypatch.setattr(verify, "_mounts", original)
-    for path in ("/dev/hugepages", "/dev/hugepages/hugepages-2MB"):
-        def huge(pid):
+    for target, fstype, message in (("/foreign", "ext4", "foreign"),
+                                    ("/dev/hugepages", "hugetlbfs", "hugepage"),
+                                    ("/dev/hugepages/size", "hugetlbfs", "hugepage")):
+        def injected(pid):
             mounts, rows = original(pid)
-            entry = {"point": path, "device": "0:32",
-                     "flags": frozenset({"rw"}), "super_flags": frozenset({"rw"}),
-                     "fstype": "hugetlbfs"}
-            return mounts, rows + (entry,)
-        monkeypatch.setattr(verify, "_mounts", huge)
-        with pytest.raises(RuntimeError, match="hugepage"):
+            entry = {"point": target, "device": "8:1", "flags": frozenset({"rw"}),
+                     "super_flags": frozenset({"rw"}), "fstype": fstype}
+            return {**mounts, target: entry}, rows + (entry,)
+        monkeypatch.setattr(verify, "_mounts", injected)
+        with pytest.raises(RuntimeError, match=message):
             verify._verify_worker(411, build_uid=24302, build_gid=24302,
                                   build_device=os.makedev(7, 5))
         monkeypatch.setattr(verify, "_mounts", original)
 
+
+def test_ancestor_overmount_masks_unreachable_hugetlb_child(monkeypatch):
+    rows = "\n".join((
+        "10 1 7:5 / / ro - ext4 image ro",
+        "20 10 0:3 / /dev rw - devtmpfs host rw",
+        "21 20 0:40 / /dev/hugepages rw - hugetlbfs old rw",
+        "22 20 0:11 / /dev/pts rw - devpts pts rw",
+        "30 20 0:12 / /dev rw - tmpfs new rw",
+        "31 30 0:13 / /dev/shm rw - tmpfs shm rw",
+    ))
+    monkeypatch.setattr(verify, "_one", lambda *_a, **_kw: rows)
+    visible, all_entries = verify._mounts(411)
+    assert visible["/dev"]["id"] == 30
+    assert "/dev/hugepages" not in visible
+    assert "/dev/pts" not in visible
+    assert visible["/dev/shm"]["id"] == 31
+    assert any(x["fstype"] == "hugetlbfs" for x in all_entries)
+
+
+def test_nested_registration_records_are_obligatory(tmp_path, monkeypatch):
+    import hashlib
+    image = tmp_path / "work"
+    project = tmp_path / "project"
+    resource = "a" * 32
+    jobid = "b" * 32
+    base = image / "controller-build-resources"
+    path = base / hashlib.sha256(str(project).encode()).hexdigest() / resource
+    jobs = path / "jobs"
+    jobs.mkdir(parents=True)
+    (path / "root").mkdir()
+    monkeypatch.setattr(verify.quota, "MOUNT", image)
+    monkeypatch.setattr(verify.project_state, "PROJECT_ROOT", project)
+    payload = {
+        "job_id": jobid, "request": {"build_root_id": resource},
+        "parent_slice": verify.sidecar.SLICE_UNIT,
+        "log_namespace": verify.sidecar.LOG_NAMESPACE,
+        "unit_name": f"zog-{verify.sidecar.PROJECT}-build{jobid}.service",
+        "slice_name": (verify.sidecar.SLICE_UNIT.removesuffix(".slice") +
+                       f"-build{jobid}.slice"),
+        "start_attempted": False, "process_cleanup_complete": False
+    }
+    record = jobs / (jobid + ".json")
+    record.write_text(json.dumps(payload))
+    dev = image.stat().st_dev
+    assert list(verify._registered_job_records(dev))[0][1] == payload
+    verify._assert_no_unclean_starts(dev)
+    payload["start_attempted"] = True
+    record.write_text(json.dumps(payload))
+    with pytest.raises(RuntimeError, match="without cleanup"):
+        verify._assert_no_unclean_starts(dev)
+    assert verify._expected_imported_root(
+        "/" + verify.sidecar.SLICE_UNIT + "/" + payload["slice_name"] +
+        "/" + payload["unit_name"], dev) == path / "root"
+    payload["process_cleanup_complete"] = True
+    record.write_text(json.dumps(payload))
+    verify._assert_no_unclean_starts(dev)
+    with pytest.raises(RuntimeError, match="start/cleanup"):
+        verify._expected_imported_root(
+            "/" + verify.sidecar.SLICE_UNIT + "/" + payload["slice_name"] +
+            "/" + payload["unit_name"], dev)
+    record.unlink()
+    jobs.rmdir()
+    jobs.symlink_to(tmp_path / "foreign")
+    with pytest.raises(RuntimeError, match="unsafe job"):
+        verify._assert_no_unclean_starts(dev)
 
 def test_mismatched_worker_root_inode_cannot_pass_same_device(tmp_path, monkeypatch):
     _simulate_worker(monkeypatch, tmp_path)
