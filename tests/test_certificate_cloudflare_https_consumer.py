@@ -54,6 +54,7 @@ def test_selected_issuer_credential_request_is_nonsecret_and_exact():
     assert req["dns_zone"] == "example.org"
     assert req["credential_revision"] == 5
     assert req["issuer_uid"] == 28001
+    assert req["nginx_delivery_policy_sha256"] == _hash(inputs()[0]["delivery"])
     assert "ssh" not in str(req).lower()
     assert "token" not in str(req).lower()
     assert not any("password" in key for key in req)
@@ -128,7 +129,7 @@ def test_no_network_on_failed_preflight(monkeypatch):
         deliver_selected(snapshots=case, request_id="a"*32,
                          installed_issuer=installed, channel=NoNetwork(),
                          journal=NoJournal(), install_from_fd=lambda *a,**kw: None,
-                         reread=lambda: case, now=NOW)
+                         reread=lambda: case, reread_issuer=lambda: installed, now=NOW)
 
 
 def test_one_selected_request_uses_opaque_fd_and_installer_without_echo(monkeypatch):
@@ -164,7 +165,8 @@ def test_one_selected_request_uses_opaque_fd_and_installer_without_echo(monkeypa
     result = deliver_selected(
         snapshots=case, request_id="a"*32, installed_issuer=installed,
         channel=Transport(), journal=Journal(), install_from_fd=install,
-        reread=lambda: copy.deepcopy(case), now=NOW)
+        reread=lambda: copy.deepcopy(case),
+        reread_issuer=lambda: copy.deepcopy(installed), now=NOW)
     assert result["status"] == "protected-install-reported"
     assert result["native_recheck_required"] is True
     assert events == ["durably-claimed", "authenticated-https-adapter",
@@ -172,3 +174,29 @@ def test_one_selected_request_uses_opaque_fd_and_installer_without_echo(monkeypa
     with pytest.raises(OSError):
         os.fstat(pipe_read)
     assert "token" not in str(result)
+
+
+def test_native_issuer_grant_drift_after_https_refuses_install(monkeypatch):
+    case, installed = inputs()
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    events = []
+    class Journal:
+        def claim_once(self, req):
+            events.append("claim")
+    class Transport:
+        def request_fd(self, origin, pin, req):
+            fd, w = os.pipe()
+            os.close(w)
+            events.append("network")
+            return reply(req), fd
+    def forbidden(*args, **kwargs):
+        pytest.fail("changed issuer grant must never install received bytes")
+    with pytest.raises(CloudflareDeliveryBlocked):
+        deliver_selected(
+            snapshots=case, request_id="a"*32, installed_issuer=installed,
+            channel=Transport(), journal=Journal(), install_from_fd=forbidden,
+            reread=lambda: copy.deepcopy(case),
+            reread_issuer=lambda: {**installed, "grant_id": "f"*32},
+            now=NOW)
+    assert events == ["claim", "network"]
