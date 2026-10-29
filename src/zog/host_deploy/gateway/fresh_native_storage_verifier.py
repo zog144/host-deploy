@@ -173,6 +173,34 @@ def _cgroup(pid):
     return value
 
 
+def seal_hugetlb_before_arm(controller_pid):
+    """Root-owned, explicit fresh-lane-only pre-arm HugeTLB denial.
+
+    Called only after the protected owner proves the exact controller and
+    before it arms the deadline/canary. No legacy/shared cgroup is touched.
+    """
+    if os.geteuid() != 0 or type(controller_pid) is not int or controller_pid < 2:
+        raise RuntimeError("fresh HugeTLB sealing requires trusted root owner")
+    if CGROUP.is_symlink() or not CGROUP.is_dir() or _processes() != [controller_pid]:
+        raise RuntimeError("fresh slice is not exclusively controlled")
+    if _cgroup(controller_pid) != "/" + sidecar.SLICE_UNIT + "/" + sidecar.UNIT:
+        raise RuntimeError("fresh controller cgroup not bound before HugeTLB seal")
+    paths = sorted(CGROUP.glob("hugetlb.*.max"))
+    max_files = [p for p in paths if not p.name.endswith(".rsvd.max")]
+    if not max_files or len(paths) > 64:
+        raise RuntimeError("kernel HugeTLB controller unavailable")
+    for p in paths:
+        if p.is_symlink():
+            raise RuntimeError("symlinked HugeTLB limit")
+        fd = os.open(p, os.O_WRONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            if os.write(fd, b"0") != 1:
+                raise RuntimeError("HugeTLB zero limit write incomplete")
+        finally:
+            os.close(fd)
+    _hugetlb_sealed()
+
+
 def _hugetlb_sealed():
     """HugeTLB allocations (including MAP_HUGETLB/memfd) need kernel limits.
 
