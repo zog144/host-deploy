@@ -117,6 +117,7 @@ def prepare(*, owner, binding, ledger, delivery, authorization, projection,
             "authorization_id": admission["authorization_id"],
             "owner_authority_sha256": client["owner_authority_sha256"],
             "policy_sha256": owner["policy_sha256"],
+            "nginx_delivery_policy_sha256": admission["delivery_policy_sha256"],
             "issuer_grant_id": issuer["grant_id"],
             "issuer_storage_id": issuer["storage_id"],
             "issuer_uid": issuer["uid"],
@@ -170,7 +171,8 @@ def check_receipt(request, reply, *, now):
 
 
 def deliver_selected(*, snapshots, request_id, installed_issuer,
-                     channel, journal, install_from_fd, reread, now=None):
+                     channel, journal, install_from_fd, reread,
+                     reread_issuer, now=None):
     """One root-selected native operation; secret flows ONLY via anonymous FD.
 
     Interfaces are native protected capabilities, not values from Django,
@@ -181,7 +183,8 @@ def deliver_selected(*, snapshots, request_id, installed_issuer,
       journal.claim_once(request) -> fsynced pending/uncertain record;
       install_from_fd(project, fd, expected_authorization_id) -> root-control
         protected installer retaining issuer UID, 0600 and persistent STATE;
-      reread() -> independently reacquired current signed/owner snapshots.
+      reread() -> independently reacquired current signed/owner snapshots;
+      reread_issuer() -> newly attested actual issuer grant/storage/UID/view.
     No automatic retries on transport, uncertain install or revision change.
     The actual production transport/installer must be installed/attested
     independently; ordinary source tests inject NO-SECRET doubles.
@@ -200,8 +203,10 @@ def deliver_selected(*, snapshots, request_id, installed_issuer,
             _deny()
         check_receipt(request, receipt, now=int(time.time()))
         fresh = reread()
+        fresh_issuer = reread_issuer()
         current = int(time.time())
-        if current >= request["expires_at"] or fresh != snapshots:
+        if (current >= request["expires_at"] or fresh != snapshots
+                or fresh_issuer != installed_issuer):
             _deny()
         # Revalidate exact, independently re-read signed owner/ledger/grant
         # identities after transfer, with the CURRENT wall clock.
