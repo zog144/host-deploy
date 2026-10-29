@@ -415,6 +415,20 @@ def _registered_job_records(build_device):
             directory(resource)
             if not re.fullmatch(r"[0-9a-f]{32}", resource.name):
                 raise RuntimeError("unexpected resource in registration area")
+            manifest = resource / "registration.json"
+            info_st = manifest.lstat()
+            if (not stat.S_ISREG(info_st.st_mode) or info_st.st_nlink != 1
+                    or info_st.st_dev != build_device):
+                raise RuntimeError("registration record is not durable quota evidence")
+            registration = json.loads(_one(manifest, limit=16384))
+            if (type(registration) is not dict
+                    or registration.get("schema") != 1
+                    or registration.get("resource_id") != resource.name
+                    or registration.get("state") not in ("ready", "releasing", "released")
+                    or type(registration.get("intent")) is not dict
+                    or registration["intent"].get("parent_slice") != sidecar.SLICE_UNIT
+                    or registration["intent"].get("log_namespace") != sidecar.LOG_NAMESPACE):
+                raise RuntimeError("registered resource authority is uncertain")
             jobs = resource / "jobs"
             if jobs.is_symlink():
                 raise RuntimeError("unsafe job record directory")
@@ -436,6 +450,8 @@ def _registered_job_records(build_device):
                     raise RuntimeError("invalid registered worker record")
                 info = json.loads(_one(entry, limit=16384))
                 if (type(info) is not dict
+                        or type(info.get("start_attempted")) is not bool
+                        or type(info.get("process_cleanup_complete")) is not bool
                         or info.get("job_id") != entry.stem
                         or info.get("request", {}).get("build_root_id") != resource.name
                         or info.get("parent_slice") != sidecar.SLICE_UNIT
@@ -446,6 +462,13 @@ def _registered_job_records(build_device):
                             sidecar.SLICE_UNIT.removesuffix(".slice") +
                             f"-build{entry.stem}.slice")):
                     raise RuntimeError("registered job identity differs")
+                if (info["request"].get("execution_user_id") !=
+                        registration["intent"].get("execution_user_id")
+                        or info["request"].get("execution_group_id") !=
+                        registration["intent"].get("execution_group_id")):
+                    raise RuntimeError("job principal differs from registration")
+                if registration["state"] != "ready" and info["start_attempted"]:
+                    raise RuntimeError("released resource has attempted worker")
                 yield resource, info
 
 
