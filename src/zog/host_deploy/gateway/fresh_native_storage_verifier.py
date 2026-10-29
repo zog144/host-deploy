@@ -173,6 +173,22 @@ def _cgroup(pid):
     return value
 
 
+def _hugetlb_sealed():
+    """HugeTLB allocations (including MAP_HUGETLB/memfd) need kernel limits.
+
+    memory.max and filesystem quotas do not charge HugeTLB. Require the
+    dedicated parent slice to have zero limits for every configured size,
+    with no absent/unbounded controller silently accepted.
+    """
+    paths = sorted(CGROUP.glob("hugetlb.*.max"))
+    usage = [p for p in paths if not p.name.endswith(".rsvd.max")]
+    if not usage or len(paths) > 64:
+        raise RuntimeError("fresh HugeTLB cgroup containment unavailable")
+    for path in paths:
+        if path.is_symlink() or _one(path, limit=64).strip() != "0":
+            raise RuntimeError("fresh HugeTLB pool is not kernel bounded")
+
+
 def _verify_worker(pid, *, build_uid, build_gid, build_device):
     cg = _cgroup(pid)
     ids = _uid_gid(pid)
@@ -303,6 +319,7 @@ def _inspect_native(*, plan, admission, controller_pid, controller_cgroup,
     if (device == Path(aggregate.EXTERNAL_MOUNT).stat().st_dev
             or volume.get("kernel_enforced") is not True):
         raise RuntimeError("fresh build/log images not independently bounded")
+    _hugetlb_sealed()  # Parent bound must precede any canary/worker.
     first = _processes()
     if controller_pid not in first:
         raise RuntimeError("frozen root-control sidecar left the fresh slice")
@@ -386,7 +403,8 @@ def _registered_job_records(build_device):
                 st = entry.lstat()
                 if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
                         or st.st_dev != build_device
-                        or not re.fullmatch(r"[0-9a-f]{32}\\.json", entry.name)):
+                        or entry.suffix != ".json"
+                        or re.fullmatch(r"[0-9a-f]{32}", entry.stem) is None):
                     raise RuntimeError("invalid registered worker record")
                 info = json.loads(_one(entry, limit=16384))
                 if (type(info) is not dict
