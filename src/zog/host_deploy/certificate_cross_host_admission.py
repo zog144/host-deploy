@@ -56,7 +56,7 @@ def _https_origin(value):
                 or u.path or u.query or u.fragment or not u.hostname
                 or u.hostname != u.hostname.lower()
                 or "." not in u.hostname or value != "https://" + u.netloc
-                or not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)+", u.hostname)):
+                or not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)+", u.hostname)):
             return False
     except ValueError:
         return False
