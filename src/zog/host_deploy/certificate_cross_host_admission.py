@@ -1,6 +1,6 @@
-"""Pure, nonsecret, host-owner gate for a separately provisioned issuer bridge.
+"""Pure, nonsecret, host-owner gate for approved unified HTTPS delivery.
 
-Cannot retrieve credentials or authorize SSH/Certbot. The root installer must
+Cannot retrieve credentials or authorize HTTPS transport/Certbot. The root installer must
 read each input through the protected root file-descriptor and installed-byte
 gates, under the same owner lock, both before and after transfer.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 
 from .certificate_hostname_authority import validate as validate_owner
@@ -17,7 +18,7 @@ SCHEMA = "zog-host-deploy-cross-host-issuer-admission-v1"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 ROOT = "zog-issuer-cloudflare-credential-v1"
-CLIENT = "zog-issuer-cross-host-client-v1"
+CLIENT = "zog-issuer-https-credential-client-v1"
 PROJECTION = "zog-station-issuer-reader-authorization-v1"
 LEDGER = "zog-host-install-certificate-owner-ledger-v1"
 BINDING = "zog-host-deploy-managed-certificate-consumer-binding-v1"
@@ -43,6 +44,23 @@ def _hash(value):
 def _exact(value, fields):
     if type(value) is not dict or set(value) != set(fields):
         _deny()
+
+
+def _https_origin(value):
+    # Fixed HTTPS authority only: no userinfo, path, query, fragment,
+    # nondefault ports, IP literals or alternate transport.
+    try:
+        u = urlsplit(value)
+        if (u.scheme != "https" or u.username is not None
+                or u.password is not None or u.port not in (None, 443)
+                or u.path or u.query or u.fragment or not u.hostname
+                or u.hostname != u.hostname.lower()
+                or "." not in u.hostname or value != "https://" + u.netloc
+                or not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)+", u.hostname)):
+            return False
+    except ValueError:
+        return False
+    return True
 
 
 def validate(owner, binding, ledger, delivery, authorization, projection, client,
@@ -141,8 +159,9 @@ def validate(owner, binding, ledger, delivery, authorization, projection, client
         _exact(client, (
             "schema project authorization_id host_id installation_id state_volume_id "
             "host_fingerprint registry_id assignment_id assignment_revision "
-            "receipt_sha256 ssh_host ssh_port ssh_user ssh_identity ssh_known_hosts "
-            "ssh_known_hosts_sha256 owner_authority_sha256 station_signer_pin_sha256").split())
+            "receipt_sha256 https_origin tls_authority_pin_sha256 "
+            "purpose consumer_uid grant_id storage_id credential_revision "
+            "owner_authority_sha256 station_signer_pin_sha256").split())
         if (client["schema"] != CLIENT
                 or client["project"] != authorization["project"]
                 or client["authorization_id"] != _hash(authorization)
@@ -153,6 +172,15 @@ def validate(owner, binding, ledger, delivery, authorization, projection, client
                 or client["installation_id"] != owner["installation_id"]
                 or client["state_volume_id"] != binding["state_volume_id"]
                 or client["registry_id"] != binding["registry_id"]
+                or client["credential_revision"] != authorization["credential_revision"]
+                or client["grant_id"] != issuer["grant_id"]
+                or client["storage_id"] != issuer["storage_id"]
+                or client["consumer_uid"] != issuer["uid"]
+                or client["purpose"] != "issuer-cloudflare-dns01"
+                or type(client["tls_authority_pin_sha256"]) is not str
+                or HEX.fullmatch(client["tls_authority_pin_sha256"]) is None
+                or type(client["https_origin"]) is not str
+                or not _https_origin(client["https_origin"])
                 or type(client["host_fingerprint"]) is not str
                 or HEX.fullmatch(client["host_fingerprint"]) is None
                 or type(owner_bytes) is not bytes or not owner_bytes
@@ -168,6 +196,8 @@ def validate(owner, binding, ledger, delivery, authorization, projection, client
             "credential_revision": authorization["credential_revision"],
             "authorization_id": _hash(authorization),
             "delivery_policy_sha256": _hash(delivery),
+            "transport": "authenticated-https-443",
+            "purpose": "issuer-cloudflare-dns01",
             "installed_bytes_verified": False,
             "credential_transferred": False,
         }
