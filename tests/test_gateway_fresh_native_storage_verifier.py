@@ -1,3 +1,4 @@
+import json
 """Fail-closed native PID1 / cgroup / worker storage security contract."""
 import os
 from pathlib import Path
@@ -28,7 +29,7 @@ def _mountinfo(*, foreign=False, missing=None):
     if missing:
         del points[missing]
     return "\n".join(
-        f"{20+i} 1 {dev} / {point} {flags},relatime - {fstype} source rw"
+        f"{20+i} {1 if point == '/' else 20} {dev} / {point} {flags},relatime - {fstype} source rw"
         for i,(point,(dev,flags,fstype)) in enumerate(points.items())) + "\n"
 
 
