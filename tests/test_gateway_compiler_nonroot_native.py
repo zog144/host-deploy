@@ -149,7 +149,7 @@ def test_real_kernel_uid_drop_home_groups_and_socket_binding(tmp_path, monkeypat
             os.chmod(fresh_path, 0o660)
             fresh = {
                 **data, "schema": "host-deploy-compiler-execution-v3",
-                "root_control_revision": "4a6ef2252c06a92cbab2550c4fec24a48438a4ba",
+                "root_control_revision": "5185a2ae6e7177feccda8cb34d99d7c5f0b5d040",
                 "source_revision": "53ad8c2166e6b73dffbc722c2e47ccf3593612ec",
                 "box_control_revision": "b7934882cfacd2fbfd60c7964713ed3dde7f9460",
                 "socket_path": str(fresh_path),
