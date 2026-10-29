@@ -870,6 +870,11 @@ def arm_approved():
     project_state.inspect(plan["identity"]["controller_uid"])
     if current["capacity_bytes"] > aggregate.BUILD_BYTES:
         raise RuntimeError("kernel disk quota not active")
+    # Seal the dedicated parent slice's HugeTLB controller before any
+    # worker or canary can be granted. memory.max does NOT charge HugeTLB;
+    # seal fails closed if cgroup limits, controller or empty PID census drift.
+    controller_pid = int(_show(sidecar.UNIT)["MainPID"])
+    storage_verifier.seal_hugetlb_before_arm(controller_pid)
     # Every root-owned journal, metadata artifact and new process log must
     # have independently verified kernel backing in the OTHER bounded pool.
     # Root-owned native verifier rechecks the exact host, boot, source bytes,
