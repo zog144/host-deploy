@@ -112,12 +112,22 @@ def test_live_phase_demands_worker_and_only_returns_non_authorizing_policy():
 
 def test_root_control_attempted_worker_prevents_empty_kernel_witness(
         tmp_path, monkeypatch):
+    import hashlib
     root = tmp_path / "work" / "controller-build-resources"
-    jobs = root / ("b" * 32) / "jobs"
+    project = tmp_path / "reviewed-project"
+    monkeypatch.setattr(verifier.project_state, "PROJECT_ROOT", project)
+    resource_id, job_id = "b" * 32, "c" * 32
+    area = root / hashlib.sha256(str(project).encode()).hexdigest()
+    jobs = area / resource_id / "jobs"
     jobs.mkdir(parents=True)
-    item = jobs / ("c" * 32 + ".json")
-    record = {"parent_slice": verifier.sidecar.SLICE_UNIT,
+    item = jobs / (job_id + ".json")
+    record = {"job_id": job_id,
+              "request": {"build_root_id": resource_id},
+              "parent_slice": verifier.sidecar.SLICE_UNIT,
               "log_namespace": verifier.sidecar.LOG_NAMESPACE,
+              "unit_name": f"zog-{verifier.sidecar.PROJECT}-build{job_id}.service",
+              "slice_name": (verifier.sidecar.SLICE_UNIT.removesuffix(".slice") +
+                             f"-build{job_id}.slice"),
               "start_attempted": True, "process_cleanup_complete": False}
     item.write_text(json.dumps(record))
     monkeypatch.setattr(verifier.quota, "MOUNT", root.parent)
