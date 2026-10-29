@@ -399,3 +399,33 @@ def test_mismatched_worker_root_inode_cannot_pass_same_device(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="inode"):
         verify._verify_worker(411, build_uid=24302, build_gid=24302,
                               build_device=os.makedev(7, 5))
+
+
+def test_hugetlb_zero_limits_are_kernel_enforced_before_arm(tmp_path, monkeypatch):
+    parent = tmp_path / "exact-fresh-parent"
+    parent.mkdir()
+    maxfile = parent / "hugetlb.2MB.max"
+    reserved = parent / "hugetlb.2MB.rsvd.max"
+    maxfile.write_text("max")
+    reserved.write_text("max")
+    monkeypatch.setattr(verify, "CGROUP", parent)
+    monkeypatch.setattr(verify.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(verify, "_processes", lambda: [333])
+    monkeypatch.setattr(verify, "_cgroup", lambda pid:
+                        "/" + verify.sidecar.SLICE_UNIT + "/" + verify.sidecar.UNIT)
+    with pytest.raises(RuntimeError, match="not kernel bounded"):
+        verify._hugetlb_sealed()
+    verify.seal_hugetlb_before_arm(333)
+    assert maxfile.read_text() == "0"
+    assert reserved.read_text() == "0"
+    verify._hugetlb_sealed()
+    maxfile.write_text("max")
+    with pytest.raises(RuntimeError, match="not kernel bounded"):
+        verify._hugetlb_sealed()
+    monkeypatch.setattr(verify, "_processes", lambda: [333, 444])
+    with pytest.raises(RuntimeError, match="exclusively"):
+        verify.seal_hugetlb_before_arm(333)
+    maxfile.unlink()
+    reserved.unlink()
+    with pytest.raises(RuntimeError, match="unavailable"):
+        verify._hugetlb_sealed()
