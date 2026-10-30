@@ -132,71 +132,24 @@ def test_no_network_on_failed_preflight(monkeypatch):
                          reread=lambda: case, reread_issuer=lambda: installed, now=NOW)
 
 
-def test_one_selected_request_uses_opaque_fd_and_installer_without_echo(monkeypatch):
+def test_retired_draft_wire_cannot_claim_request_or_communicate(monkeypatch):
     case, installed = inputs()
-    req = make_request()
     events = []
-    # This is a synthetically generated test-only token. Nothing is placed
-    # in a source-level request, audit, receipt, command argument or log.
-    pipe_read, pipe_write = os.pipe()
-    os.write(pipe_write, b"x"*24)
-    os.close(pipe_write)
     class Journal:
         def claim_once(self, request):
-            assert request == req
-            events.append("durably-claimed")
-    class Transport:
-        def request_fd(self, origin, pin, request):
-            assert events == ["durably-claimed"]
-            assert origin == "https://station.example.org"
-            assert pin == "a"*64
-            events.append("authenticated-https-adapter")
-            return reply(request), pipe_read
-    def install(project, fd, *, expected_authorization_id):
-        assert project == "/verified/project"
-        assert fd == pipe_read
-        assert expected_authorization_id == req["authorization_id"]
-        assert events[-1] == "authenticated-https-adapter"
-        events.append("protected-root-installer")
-        return {"status": "installed", "credential_revision": 5,
-                "assignment_revision": 4}
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(time, "time", lambda: NOW)
-    result = deliver_selected(
-        snapshots=case, request_id="a"*32, installed_issuer=installed,
-        channel=Transport(), journal=Journal(), install_from_fd=install,
-        reread=lambda: copy.deepcopy(case),
-        reread_issuer=lambda: copy.deepcopy(installed), now=NOW)
-    assert result["status"] == "protected-install-reported"
-    assert result["native_recheck_required"] is True
-    assert events == ["durably-claimed", "authenticated-https-adapter",
-                      "protected-root-installer"]
-    with pytest.raises(OSError):
-        os.fstat(pipe_read)
-    assert "token" not in str(result)
-
-
-def test_native_issuer_grant_drift_after_https_refuses_install(monkeypatch):
-    case, installed = inputs()
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(time, "time", lambda: NOW)
-    events = []
-    class Journal:
-        def claim_once(self, req):
             events.append("claim")
     class Transport:
-        def request_fd(self, origin, pin, req):
-            fd, w = os.pipe()
-            os.close(w)
+        def request_fd(self, origin, pin, request):
             events.append("network")
-            return reply(req), fd
-    def forbidden(*args, **kwargs):
-        pytest.fail("changed issuer grant must never install received bytes")
+            raise AssertionError("legacy transport must be disabled")
+    def installer(*args, **kwargs):
+        events.append("installer")
+        raise AssertionError("legacy installer must be disabled")
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
     with pytest.raises(CloudflareDeliveryBlocked):
         deliver_selected(
             snapshots=case, request_id="a"*32, installed_issuer=installed,
-            channel=Transport(), journal=Journal(), install_from_fd=forbidden,
+            channel=Transport(), journal=Journal(), install_from_fd=installer,
             reread=lambda: copy.deepcopy(case),
-            reread_issuer=lambda: {**installed, "grant_id": "f"*32},
-            now=NOW)
-    assert events == ["claim", "network"]
+            reread_issuer=lambda: copy.deepcopy(installed), now=NOW)
+    assert events == []
