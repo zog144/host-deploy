@@ -161,3 +161,35 @@ def test_mismatched_creator_identity_and_mode_fail_closed(tmp_path, monkeypatch)
         with pytest.raises(RuntimeError, match="identity changed"):
             quota._complete_new_ext4_reservation(
                 image, 2, (st.st_dev, st.st_ino), tmp_path / "mount")
+
+
+def test_later_32mib_hole_still_blocks_pool_readback(tmp_path, monkeypatch):
+    """Native incident-shaped negative: later loss is NOT automatically fixed."""
+    punch = shutil.which("fallocate")
+    if not punch:
+        pytest.skip("util-linux fallocate unavailable")
+    image = tmp_path / "already-installed.img"
+    size = 64 * 1024 * 1024
+    fd = os.open(image, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+    try:
+        os.posix_fallocate(fd, 0, size)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    assert image.stat().st_blocks * 512 >= size
+    try:
+        subprocess.run([punch, "--punch-hole", "--offset", "1048576",
+                        "--length", str(32 * 1024 * 1024), str(image)],
+                       check=True, capture_output=True, text=True, timeout=15)
+    except subprocess.CalledProcessError:
+        pytest.skip("runner host filesystem does not support punch-hole")
+    assert image.stat().st_size == size
+    assert image.stat().st_blocks * 512 < size
+    monkeypatch.setattr(quota, "IMAGE", image)
+    monkeypatch.setattr(quota, "BUILD_BYTES", size)
+    monkeypatch.setattr(quota, "_private",
+                        lambda path, *, file=False: Path(path))
+    with pytest.raises(RuntimeError, match="sparse or not fully reserved"):
+        quota.inspect()
+    # No call to _complete_new_ext4_reservation during any pool inspection.
+    assert image.stat().st_blocks * 512 < size
