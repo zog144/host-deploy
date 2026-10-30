@@ -858,6 +858,7 @@ def activate_hugetlb_approved():
         raise RuntimeError("HugeTLB plan/source binding changed")
     native = NativeOwner()
     native.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    _budget_directory_prepared(require_empty=True)
     if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
         raise RuntimeError("HugeTLB activation requires protected installed sidecar")
     version = _command(["/usr/bin/systemctl", "--version"]).splitlines()[0].split()
