@@ -106,7 +106,7 @@ def test_absent_history_denies_missing_or_mismatched_operator_approval(
 def test_absent_history_never_infers_approval_from_not_found(monkeypatch):
     protected, actual, seen, _ = _fixture(monkeypatch)
     del protected[owner.ABSENT_HISTORY_APPROVAL]
-    with pytest.raises(KeyError):
+    with pytest.raises(PermissionError, match="independent disposable"):
         owner._legacy()
     assert not any(event == "show" for event, _ in seen)
 
