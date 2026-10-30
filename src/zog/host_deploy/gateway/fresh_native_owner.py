@@ -235,8 +235,13 @@ def _legacy():
     # The extra approval is a *separate* file, never supplied by a build
     # request or manufactured by _legacy(). Native owner must install it
     # only after independently proving the machine is disposable.
-    plan = _read_json(PLAN_PATH)
-    approval = _read_json(ABSENT_HISTORY_APPROVAL)
+    try:
+        plan = _read_json(PLAN_PATH)
+        approval = _read_json(ABSENT_HISTORY_APPROVAL)
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        raise PermissionError(
+            "independent disposable absent-history approval missing or unreadable"
+        ) from exc
     expected_hash = _sha(_bytes(historic))
     expected = {
         "schema": ABSENT_HISTORY_APPROVAL_SCHEMA,
