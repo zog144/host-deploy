@@ -274,6 +274,8 @@ def provision_external(*, available_after_reservations_bytes):
         raise PermissionError("external accounting mount not empty and trusted")
     fd = os.open(image, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
+        first_st = os.fstat(fd)
+        original_inode = (first_st.st_dev, first_st.st_ino)
         os.posix_fallocate(fd, 0, EXTERNAL_BYTES)
         os.fsync(fd)
     finally:
@@ -283,17 +285,23 @@ def provision_external(*, available_after_reservations_bytes):
         os.fsync(parent_fd)
     finally:
         os.close(parent_fd)
-    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", "-E", "nodiscard",
+    # Eager inode/journal initialization avoids asynchronous ext4 zeroout
+    # punching holes into the XFS-backed loop image AFTER the mount. A
+    # systemd journal directory can now be created without lazy init racing
+    # the strict backing reservation checks.
+    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", "-E",
+          "nodiscard,lazy_itable_init=0,lazy_journal_init=0",
           str(image)], output=False)
-    st = image.stat()
-    if (st.st_size != EXTERNAL_BYTES
-            or st.st_blocks * 512 < EXTERNAL_BYTES):
-        raise RuntimeError("external mkfs discarded reserved host capacity")
+    # Finish only THIS O_EXCL-created image before the first loop attachment.
+    # A later sparse image stays NO-GO; never repair on prepare_work/reboot.
+    from .fresh_quota_volume import _complete_new_ext4_reservation
+    _complete_new_ext4_reservation(
+        image, EXTERNAL_BYTES, original_inode, mount)
     loop = _run(["/usr/sbin/losetup", "--find", "--show", "--nooverlap",
                  str(image)])
     if not _BACKEND.fullmatch(loop):
         raise RuntimeError("external accounting got unexpected loop backing")
-    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
+    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev,nodiscard",
           loop, str(mount)], output=False)
     for suffix in ("owner-state", "owner-state/budget", "artifacts",
                    "artifacts/build-resources",
@@ -303,6 +311,10 @@ def provision_external(*, available_after_reservations_bytes):
         new.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chown(new, 0, 0)
         os.chmod(new, 0o700)
+    # fsync initial ext4 directory operations before inspecting host blocks.
+    # This does not inflate or mask a sparse image after mounting.
+    from .fresh_quota_volume import _flush_new_ext4_metadata
+    _flush_new_ext4_metadata(mount)
     return inspect_external_pool_native()
 
 
