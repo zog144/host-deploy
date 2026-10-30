@@ -120,7 +120,7 @@ def test_no_unreviewed_pid1_deadline_override():
     assert message.member == "StartTransientUnit"
     assert 0 < deadline.TRIGGER_SECONDS < budget.DEADLINE_SECONDS
     assert identity.FRESH_ROOT_CONTROL_REVISION == (
-        "5185a2ae6e7177feccda8cb34d99d7c5f0b5d040")
+        "99e8c28d558df2458fb38b3d7ba1cb32e3616dcd")
 
 
 def test_timer_and_auxiliary_service_names_must_match(monkeypatch):
