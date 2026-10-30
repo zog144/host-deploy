@@ -7,9 +7,9 @@ producer/consumer is the independently reviewed root-control v1 receiver.
 
 This module deliberately defines NO message schemas or HTTP transport.
 """
-from .certificate_cloudflare_canonical import (
-    PROTOCOL_SOURCE, PURPOSE, CONSUMER,
-)
+PROTOCOL_SOURCE = "4a176373ff4cb47a66a8ab1b5fd3d6ff01ff2a3b"
+PURPOSE = "issuer-cloudflare-dns01"
+CONSUMER = "certify-manage"
 
 
 class CloudflareDeliveryBlocked(RuntimeError):
