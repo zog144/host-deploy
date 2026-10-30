@@ -172,8 +172,9 @@ def recheck(receipt, *, host_id, boot_id, plan_sha256):
             }.items())
             or any(receipt.get(k) != current[k] for k in (
                 "root_device", "root_inode", "slice_device", "slice_inode"))
+            or current["root_enabled"] != receipt.get("root_enabled")
             or "hugetlb" not in current["root_enabled"]
             or "hugetlb" not in current["slice_available"]
-            or not set(receipt.get("limit_names", ())) <= set(current["limit_names"])):
+            or current["limit_names"] != receipt.get("limit_names")):
         raise RuntimeError("HugeTLB controller or activation receipt drifted")
     return current
