@@ -41,6 +41,10 @@ def _tokens(path):
     return frozenset(tokens)
 
 
+def _mountinfo():
+    return Path("/proc/self/mountinfo").read_text()
+
+
 def _directories():
     root = CGROUP_ROOT.lstat()
     slice_st = SLICE.lstat()
@@ -56,7 +60,7 @@ def _directories():
         raise RuntimeError("fresh HugeTLB slice ancestry differs")
     # Mountinfo must identify the *actual* cgroup2 mount; stat_dev alone
     # cannot distinguish a substituted directory on an unrelated filesystem.
-    raw = Path("/proc/self/mountinfo").read_text()
+    raw = _mountinfo()
     matches = [line for line in raw.splitlines()
                if len(line.split(" - ", 1)) == 2
                and line.split(" - ", 1)[0].split()[4] == str(CGROUP_ROOT)]
