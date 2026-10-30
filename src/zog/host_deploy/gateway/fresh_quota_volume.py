@@ -49,6 +49,48 @@ def _private(path, *, file=False):
     return path
 
 
+
+def _complete_new_ext4_reservation(image, expected_bytes, original_inode, mount):
+    """ONE-TIME pre-loop/pre-mount completion of newly formatted ext4.
+
+    Zeroing ext4 metadata may deallocate XFS loop-file blocks even when
+    mke2fs uses nodiscard. posix_fallocate allocates holes WITHOUT changing
+    the existing filesystem data. Only the original O_EXCL creation inode
+    may be completed; never call this on recovery or an active loop mount.
+    """
+    if (os.geteuid() != 0 or type(expected_bytes) is not int
+            or expected_bytes <= 0 or type(original_inode) is not tuple
+            or len(original_inode) != 2):
+        raise PermissionError("new ext4 reservation needs native protected creator")
+    image = Path(image)
+    mount = Path(mount)
+    if os.path.ismount(mount):
+        raise RuntimeError("cannot complete reservation after ext4 is mounted")
+    _private(image, file=True)
+    fd = os.open(image, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+                or st.st_uid != 0 or stat.S_IMODE(st.st_mode) != 0o600
+                or (st.st_dev, st.st_ino) != original_inode
+                or st.st_size != expected_bytes):
+            raise RuntimeError("formatted ext4 image identity changed")
+        os.posix_fallocate(fd, 0, expected_bytes)
+        os.fsync(fd)
+        after = os.fstat(fd)
+        if ((after.st_dev, after.st_ino) != original_inode
+                or after.st_size != expected_bytes
+                or after.st_blocks * 512 < expected_bytes):
+            raise RuntimeError("new ext4 image remains incompletely reserved")
+    finally:
+        os.close(fd)
+
+
+def _flush_new_ext4_metadata(mount):
+    """Force initial directory/bitmap writes before first allocation proof."""
+    _run(["/usr/bin/sync", "--file-system", str(mount)], output=False)
+
+
 def _source():
     if not os.path.ismount(MOUNT):
         raise RuntimeError("fresh quota filesystem not mounted")
@@ -115,6 +157,8 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
     fd = os.open(IMAGE, os.O_CREAT | os.O_EXCL | os.O_WRONLY |
                  os.O_NOFOLLOW, 0o600)
     try:
+        st = os.fstat(fd)
+        original_inode = (st.st_dev, st.st_ino)
         os.posix_fallocate(fd, 0, BUILD_BYTES)
         os.fsync(fd)
     finally:
@@ -126,22 +170,21 @@ def provision(*, available_after_reservations_bytes, mounted_writable_roots):
         os.close(directory_fd)
     # Never run mkfs on a caller-selected device: it accepts ONLY the newly
     # reserved frozen image file. Failure keeps it for manual disposition.
-    # mke2fs's default discard issues a hole punch on regular-file-backed
-    # devices. -E nodiscard must retain the fully reserved allocation.
-    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", "-E", "nodiscard",
+    # Eager inode/journal initialization prevents ext4 background zeroout
+    # from punching XFS backing holes after mount. Explicitly disable discard.
+    _run(["/usr/sbin/mkfs.ext4", "-F", "-m", "0", "-E",
+          "nodiscard,lazy_itable_init=0,lazy_journal_init=0",
           str(IMAGE)], output=False)
-    # Do not mount an incompletely reserved image: a sparse successor could
-    # consume unbudgeted blocks during the compiler's write-heavy phases.
-    formatted = IMAGE.stat()
-    if (formatted.st_size != BUILD_BYTES
-            or formatted.st_blocks * 512 < BUILD_BYTES):
-        raise RuntimeError("ext4 formatting discarded the reserved image blocks")
+    # Complete O_EXCL creation once, with same inode while UNMOUNTED.
+    _complete_new_ext4_reservation(
+        IMAGE, BUILD_BYTES, original_inode, MOUNT)
     loop = _run(["/usr/sbin/losetup", "--find", "--show", "--nooverlap",
                  str(IMAGE)])
     if not _BACKEND.fullmatch(loop):
         raise RuntimeError("unexpected fresh quota loop device")
-    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
+    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev,nodiscard",
           loop, str(MOUNT)], output=False)
+    _flush_new_ext4_metadata(MOUNT)
     return inspect()
 
 
@@ -156,6 +199,6 @@ def reattach_after_boot():
                  str(IMAGE)])
     if not _BACKEND.fullmatch(loop):
         raise RuntimeError("unexpected loop-device allocation")
-    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev",
+    _run(["/usr/bin/mount", "-t", "ext4", "-o", "nosuid,nodev,nodiscard",
           loop, str(MOUNT)], output=False)
     return inspect()
