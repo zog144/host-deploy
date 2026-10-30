@@ -35,6 +35,10 @@ STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 PLAN_PATH = STATE / "reviewed-plan.json"
 INSTALL_PATH = STATE / "sidecar-install.json"
 BASELINE_PATH = STATE / "legacy-baseline.json"
+ABSENT_HISTORY_APPROVAL = STATE / "disposable-absent-history-approval.json"
+ABSENT_HISTORY_SCHEMA = "host-deploy-fresh-disposable-absent-history-v1"
+ABSENT_HISTORY_APPROVAL_SCHEMA = "host-deploy-fresh-disposable-absent-history-approval-v1"
+ABSENT_HISTORY_SCOPE = "one-fresh-systemd252-disposable-native-acceptance"
 BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
 WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
@@ -171,24 +175,98 @@ def _protected_tree(path):
 
 
 def _legacy():
-    """Compare live shared PID1 and the frozen original bad-setting unit."""
+    """Freeze either historical bad-setting OR explicitly approved disposable absence.
+
+    The absent-history path is never inferred from LoadState=not-found.
+    It requires an independent root-owned approval linked to the exact host,
+    current boot, original source plan and immutable baseline digest.
+    """
     historic = _read_json(BASELINE_PATH)
-    if (type(historic) is not dict or set(historic) != {
-            "shared_unit", "root_control_show", "historical_unit",
-            "historical_show", "historical_bad_setting_sha256"}
+    retained_fields = {
+        "shared_unit", "root_control_show", "historical_unit",
+        "historical_show", "historical_bad_setting_sha256",
+    }
+    if type(historic) is not dict:
+        raise RuntimeError("protected historical baseline malformed")
+    if set(historic) == retained_fields:
+        # Original retained-host policy unchanged. No downgrade to an absent
+        # baseline when a historical bad-setting unit changes/disappears.
+        if (historic["shared_unit"] not in (
+                "root-control.service", "zog-root-control.service",
+                "zog-certbot-seed-root.service")
+                or not isinstance(historic["historical_show"], dict)
+                or historic["historical_show"].get("LoadState") != "bad-setting"
+                or _sha(_bytes(historic["historical_show"])) !=
+                    historic["historical_bad_setting_sha256"]):
+            raise RuntimeError("historical bad-setting baseline is incomplete")
+        if _show(historic["shared_unit"]) != historic["root_control_show"]:
+            raise RuntimeError("shared controller PID/InvocationID/fragment changed")
+        if _show(historic["historical_unit"]) != historic["historical_show"]:
+            raise RuntimeError("historical bad-setting PID1 evidence changed")
+        return _sha(_bytes(historic))
+
+    absent_fields = {
+        "schema", "mode", "host_id", "boot_id",
+        "shared_unit", "root_control_show",
+        "historical_unit", "historical_show", "historical_not_found_sha256",
+    }
+    if (set(historic) != absent_fields
+            or historic["schema"] != ABSENT_HISTORY_SCHEMA
+            or historic["mode"] != "absent-history"
             or historic["shared_unit"] not in (
                 "root-control.service", "zog-root-control.service",
                 "zog-certbot-seed-root.service")
-            or not isinstance(historic["historical_show"], dict)
-            or historic["historical_show"].get("LoadState") != "bad-setting"
+            or type(historic["root_control_show"]) is not dict
+            or type(historic["historical_unit"]) is not str
+            or re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}\.service",
+                            historic["historical_unit"]) is None
+            or historic["historical_unit"] == historic["shared_unit"]
+            or type(historic["historical_show"]) is not dict
+            or historic["historical_show"].get("LoadState") != "not-found"
+            or historic["historical_show"].get("ActiveState") != "inactive"
+            or str(historic["historical_show"].get("MainPID")) != "0"
+            or historic["historical_show"].get("InvocationID") != ""
+            or historic["historical_show"].get("ControlGroup") != ""
+            or historic["historical_show"].get("FragmentPath") != ""
             or _sha(_bytes(historic["historical_show"])) !=
-                historic["historical_bad_setting_sha256"]):
-        raise RuntimeError("historical bad-setting baseline is incomplete")
+               historic["historical_not_found_sha256"]):
+        raise RuntimeError("disposable absent-history baseline is incomplete")
+
+    # The extra approval is a *separate* file, never supplied by a build
+    # request or manufactured by _legacy(). Native owner must install it
+    # only after independently proving the machine is disposable.
+    plan = _read_json(PLAN_PATH)
+    approval = _read_json(ABSENT_HISTORY_APPROVAL)
+    expected_hash = _sha(_bytes(historic))
+    expected = {
+        "schema": ABSENT_HISTORY_APPROVAL_SCHEMA,
+        "status": "operator-approved",
+        "scope": ABSENT_HISTORY_SCOPE,
+        "allow_absent_history": True,
+        "host_id": historic["host_id"],
+        "boot_id": historic["boot_id"],
+        "plan_sha256": plan.get("sha256"),
+        "legacy_baseline_sha256": expected_hash,
+        "shared_unit": historic["shared_unit"],
+        "historical_unit": historic["historical_unit"],
+    }
+    if (type(approval) is not dict or approval != expected
+            or plan.get("installed", {}).get("legacy_baseline_sha256") != expected_hash
+            or plan.get("installed", {}).get("host_id") != historic["host_id"]
+            or plan.get("installed", {}).get("boot_id") != historic["boot_id"]
+            or plan.get("host_id") != historic["host_id"]
+            or historic["boot_id"] != _boot()
+            or not isinstance(historic["host_id"], str)
+            or not historic["host_id"]):
+        raise PermissionError("independent disposable absent-history approval missing or drifted")
+
+    # Check both units on the real PID1 through the same exact adapter as
+    # the original retained-history mode. No caller-supplied 'absent' flag.
     if _show(historic["shared_unit"]) != historic["root_control_show"]:
-        raise RuntimeError("shared controller PID/InvocationID/fragment changed")
+        raise RuntimeError("disposable shared controller PID1 evidence changed")
     if _show(historic["historical_unit"]) != historic["historical_show"]:
-        raise RuntimeError("historical bad-setting PID1 evidence changed")
-    return _sha(_bytes(historic))
+        raise RuntimeError("disposable absent historical unit is now present or changed")
+    return expected_hash
 
 
 def _slice_identity():
