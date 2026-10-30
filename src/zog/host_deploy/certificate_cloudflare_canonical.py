@@ -149,7 +149,9 @@ def verify_owner_binding(*, owner, binding, ledger, delivery, authorization,
                 "issuer_grant_id": issuer["grant_id"],
                 "issuer_storage_id": issuer["storage_id"],
                 "issuer_uid": issuer["uid"],
-                "issuer_gid": issuer["gid"]}
+                "issuer_gid": issuer["gid"],
+                "assignment_revision": authorization["assignment_revision"],
+                "credential_revision": authorization["credential_revision"]}
     except Exception:
         _deny()
 
@@ -226,7 +228,8 @@ def verify_native_installation(*, reviewed, request, delivery_metadata,
                 or issuer_install.get("schema") !=
                     "zog-issuer-cloudflare-installation-v1"
                 or issuer_install.get("status") != "installed"
-                or issuer_install.get("assignment_revision") is None
+                or issuer_install.get("assignment_revision") !=
+                    reviewed["assignment_revision"]
                 or issuer_install.get("credential_revision") !=
                     request["credential_revision"]):
             _deny()
