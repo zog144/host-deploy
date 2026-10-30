@@ -306,6 +306,12 @@ def test_concrete_arm_freezes_one_request_after_live_quota_and_slice(tmp_path, m
     monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
     monkeypatch.setattr(owner.aggregate, "validate", lambda *a, **k: True)
     monkeypatch.setattr(owner, "_slice_identity", lambda: {"ActiveState": "active"})
+    x["installed"]["host_id"] = "i-fresh"
+    monkeypatch.setattr(owner.hugetlb, "recheck",
+                        lambda receipt, *, host_id, boot_id, plan_sha256:
+                        True if (host_id, boot_id, plan_sha256) ==
+                        ("i-fresh", "fresh-boot", x["sha256"])
+                        else pytest.fail("HugeTLB reboot/identity drift"))
     monkeypatch.setattr(owner.storage_verifier, "seal_hugetlb_before_arm",
                         lambda pid: None if pid == 123 else pytest.fail("wrong controller"))
     monkeypatch.setattr(owner.project_state, "inspect",
