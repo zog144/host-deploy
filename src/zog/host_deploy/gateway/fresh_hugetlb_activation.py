@@ -58,15 +58,26 @@ def _directories():
     # cgroup2 root. No system.slice, user.slice or delegated subtree writes.
     if SLICE.parent != CGROUP_ROOT or "-" in sidecar.SLICE_UNIT:
         raise RuntimeError("fresh HugeTLB slice ancestry differs")
-    # Mountinfo must identify the *actual* cgroup2 mount; stat_dev alone
-    # cannot distinguish a substituted directory on an unrelated filesystem.
-    raw = _mountinfo()
-    matches = [line for line in raw.splitlines()
-               if len(line.split(" - ", 1)) == 2
-               and line.split(" - ", 1)[0].split()[4] == str(CGROUP_ROOT)]
-    if (len(matches) != 1
-            or matches[0].split(" - ", 1)[1].split()[0] != "cgroup2"):
-        raise RuntimeError("HugeTLB is not on the kernel cgroup2 mount")
+    # The receiver must see PID1's global cgroup2 hierarchy, not a
+    # container/cgroup namespace's remapped root or a tmpfs substitute.
+    # Mount root must be '/' and the cgroup namespace must match PID1.
+    try:
+        ours = Path("/proc/self/ns/cgroup").stat()
+        pid1 = Path("/proc/1/ns/cgroup").stat()
+        if (ours.st_dev, ours.st_ino) != (pid1.st_dev, pid1.st_ino):
+            raise RuntimeError("HugeTLB owner is outside PID1 cgroup namespace")
+        matches = []
+        for line in _mountinfo().splitlines():
+            fields = line.split(" - ", 1)
+            if len(fields) == 2:
+                before, after = fields
+                location, fs = before.split(), after.split()
+                if len(location) > 5 and location[4] == str(CGROUP_ROOT):
+                    matches.append((location[3], fs[0] if fs else None))
+        if matches != [("/", "cgroup2")]:
+            raise RuntimeError("HugeTLB is not on the PID1 root cgroup2 mount")
+    except (OSError, IndexError, ValueError) as exc:
+        raise RuntimeError("HugeTLB PID1 mount identity unavailable") from exc
     return root, slice_st
 
 
