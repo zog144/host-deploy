@@ -1013,7 +1013,7 @@ def inspect_host_write_surfaces():
 def main():
     # Fixed root-owned cron entrypoint; no user supplied Project/request or
     # executable. No remote dispatch, no generic root shell.
-    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "arm",
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "activate-hugetlb", "arm",
         "watch", "watch-loop", "hard-stop", "recover",
         "grant-canary", "grant-compiler", "observe-canary-live",
         "observe-canary-terminal", "accept-canary",
@@ -1051,6 +1051,8 @@ def main():
         recover()
     elif sys.argv[1] == "install":
         install_approved()
+    elif sys.argv[1] == "activate-hugetlb":
+        activate_hugetlb_approved()
     elif sys.argv[1] == "arm":
         arm_approved()
     elif sys.argv[1] == "watch-loop":
