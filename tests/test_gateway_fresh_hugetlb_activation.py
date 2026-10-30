@@ -21,6 +21,16 @@ def fixture(tmp_path, monkeypatch, *, enabled=True):
     monkeypatch.setattr(huge, "SLICE", child)
     monkeypatch.setattr(huge, "_mountinfo", lambda:
                         f"30 1 0:40 / {root} rw - cgroup2 cgroup rw")
+    # GitHub's unprivileged fixture owns only disposable test paths.
+    from types import SimpleNamespace
+    real_lstat = Path.lstat
+    def protected_lstat(path, *args, **kwargs):
+        st = real_lstat(path, *args, **kwargs)
+        if path in (root, child):
+            return SimpleNamespace(st_mode=st.st_mode, st_uid=0, st_gid=0,
+                                   st_dev=st.st_dev, st_ino=st.st_ino)
+        return st
+    monkeypatch.setattr(Path, "lstat", protected_lstat)
     snap = huge.snapshot()
     approval = {
         "schema": huge.APPROVAL_SCHEMA, "status": "operator-approved",
