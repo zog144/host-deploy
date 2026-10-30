@@ -170,72 +170,11 @@ def check_receipt(request, reply, *, now):
         _deny()
 
 
-def deliver_selected(*, snapshots, request_id, installed_issuer,
-                     channel, journal, install_from_fd, reread,
-                     reread_issuer, now=None):
-    """One root-selected native operation; secret flows ONLY via anonymous FD.
+def deliver_selected(*args, **kwargs):
+    """Retired incompatible custom-wire endpoint; NEVER call transport.
 
-    Interfaces are native protected capabilities, not values from Django,
-    SSM, an issuer retry, or a Certbot operation:
-      channel.request_fd(origin, tls_pin, request) -> (receipt, private_fd)
-        MUST authenticate HTTPS peer AND signed request/response bindings,
-        enforce frame limits, and never expose token in response metadata;
-      journal.claim_once(request) -> fsynced pending/uncertain record;
-      install_from_fd(project, fd, expected_authorization_id) -> root-control
-        protected installer retaining issuer UID, 0600 and persistent STATE;
-      reread() -> independently reacquired current signed/owner snapshots;
-      reread_issuer() -> newly attested actual issuer grant/storage/UID/view.
-    No automatic retries on transport, uncertain install or revision change.
-    The actual production transport/installer must be installed/attested
-    independently; ordinary source tests inject NO-SECRET doubles.
+    The protected receiver now exclusively owns host-identify canonical v1,
+    including signature verification, ledger, secret-FD and receipt signing.
+    There is intentionally no translation from legacy wire messages.
     """
-    fd = None
-    try:
-        if os.geteuid() != 0 or now is None or type(now) is not int:
-            _deny()
-        request = prepare(**snapshots, installed_issuer=installed_issuer,
-                          request_id=request_id, now=now)
-        journal.claim_once(request)  # MUST durably reserve before network
-        receipt, fd = channel.request_fd(
-            request["transport_origin"], request["tls_authority_pin_sha256"],
-            request)
-        if type(fd) is not int or fd < 0:
-            _deny()
-        check_receipt(request, receipt, now=int(time.time()))
-        fresh = reread()
-        fresh_issuer = reread_issuer()
-        current = int(time.time())
-        if (current >= request["expires_at"] or fresh != snapshots
-                or fresh_issuer != installed_issuer):
-            _deny()
-        # Revalidate exact, independently re-read signed owner/ledger/grant
-        # identities after transfer, with the CURRENT wall clock.
-        candidate = prepare(**fresh, installed_issuer=installed_issuer,
-                            request_id=request_id, now=current)
-        for key in request:
-            if key not in ("created_at", "expires_at") and (
-                    request[key] != candidate[key]):
-                _deny()
-        installed = install_from_fd(
-            snapshots["authorization"]["project"], fd,
-            expected_authorization_id=request["authorization_id"])
-        if (type(installed) is not dict
-                or installed.get("status") != "installed"
-                or installed.get("credential_revision") !=
-                    request["credential_revision"]
-                or installed.get("assignment_revision") !=
-                    request["assignment_revision"]):
-            _deny()
-        return {"status": "protected-install-reported",
-                "schema": REPLY_SCHEMA,
-                "request_id": request["request_id"],
-                "credential_revision": request["credential_revision"],
-                "issuer_uid": request["issuer_uid"],
-                "native_recheck_required": True}
-    except Exception:
-        # Only a fixed denial leaves this boundary; journal pending evidence
-        # remains for explicit reconciliation, never automatic fetch retry.
-        _deny()
-    finally:
-        if type(fd) is int and fd >= 0:
-            os.close(fd)
+    _deny()
