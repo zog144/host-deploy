@@ -74,6 +74,12 @@ def test_source_snapshot_rejects_wrong_ancestry_and_substituted_cgroup(tmp_path,
     with pytest.raises(RuntimeError, match="cgroup2"):
         huge.snapshot()
     monkeypatch.setattr(huge, "_mountinfo", lambda:
+                        f"30 1 0:40 / {root} rw - cgroup2 cgroup rw")
+    child.chmod(0o777)
+    with pytest.raises(RuntimeError, match="unprotected HugeTLB"):
+        huge.snapshot()
+    child.chmod(0o755)
+    monkeypatch.setattr(huge, "_mountinfo", lambda:
                         f"30 1 0:40 /subtree {root} rw - cgroup2 cgroup rw")
     with pytest.raises(RuntimeError, match="PID1 root cgroup2"):
         huge.snapshot()
@@ -113,6 +119,18 @@ def test_native_selected_activation_and_reboot_drift(tmp_path, monkeypatch):
         huge.recheck(receipt, host_id="i-disposable", boot_id="boot-two",
                      plan_sha256="sha256:"+"a"*64)
     (root / "cgroup.subtree_control").write_text("cpu")
+    with pytest.raises(RuntimeError, match="drifted"):
+        huge.recheck(receipt, host_id="i-disposable", boot_id="boot-one",
+                     plan_sha256="sha256:"+"a"*64)
+    (root / "cgroup.subtree_control").write_text("cpu hugetlb")
+    old_child = root / "unloaded-old-slice"
+    child.rename(old_child)
+    child.mkdir()
+    (child / "cgroup.controllers").write_text("hugetlb memory")
+    (child / "hugetlb.2MB.max").write_text("max")
+    (child / "hugetlb.2MB.rsvd.max").write_text("max")
+    # Even matching restored limit filenames may not authenticate a
+    # replacement PID1 slice. It is a different kernel cgroup inode.
     with pytest.raises(RuntimeError, match="drifted"):
         huge.recheck(receipt, host_id="i-disposable", boot_id="boot-one",
                      plan_sha256="sha256:"+"a"*64)
