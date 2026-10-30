@@ -202,3 +202,35 @@ def test_installation_receipt_requires_root_native_result_and_delivered_state():
             reviewed=reviewed, request=req, delivery_metadata=public,
             receipt=receipt, protocol_ledger=delivered,
             issuer_install={**issuer,"assignment_revision":999},now=NOW+2)
+
+
+def test_exact_station_public_vector_signature_and_byte_identity():
+    """Same unchanged station-access PR #10 fixture, same host-identify source."""
+    from pathlib import Path
+    vector = Path("dependencies/station-access/tests/host_registry/fixtures/credential-delivery-v1-vector.json")
+    v = json.loads(vector.read_text())
+    host = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(v["host_seed_hex"]))
+    authority = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(v["authority_seed_hex"]))
+    assert cd.digest(v["authorization"]) == v["authorization_sha256"]
+    assert cd.digest(v["request"]) == v["request_sha256"]
+    assert cd.digest(v["delivery"]) == v["delivery_sha256"]
+    assert (cd.sign_authorization(v["authorization"], authority)["signature"]
+            == v["authorization_signature_base64"])
+    assert (cd.sign_delivery(v["delivery"], authority)["signature"]
+            == v["delivery_signature_base64"])
+    a = cd.verify_authorization(
+        cd.sign_authorization(v["authorization"], authority),
+        authority.public_key(), expected_issuer=v["origin"],
+        expected_binding=cd.binding(v["authorization"]), now=v["time"])
+    assert a["consumer"] == CONSUMER and a["purpose"] == PURPOSE
+    prepared = cd.prepare_request(
+        v["origin"]+v["request_path"], v["request"], a, host,
+        now=v["time"], nonce="A"*24)
+    decoded, nonce, _ = cd.verify_request_http(
+        prepared.url, "POST", dict(prepared.headers),
+        prepared.body, host.public_key(), a, now=v["time"])
+    assert decoded == v["request"]
+    assert prepared.body == cd.canonical(v["request"])
+    assert nonce == "A"*24
+    # The host-deploy owner-policy adapter processes only public metadata,
+    # never the signed delivery envelope's secret or its reusable hash.
