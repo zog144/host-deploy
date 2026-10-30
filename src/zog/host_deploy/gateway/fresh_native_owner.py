@@ -28,6 +28,7 @@ from . import fresh_journal_backing as journal_backing
 from . import fresh_project_state as project_state
 from . import fresh_host_write_audit as host_write_audit
 from . import fresh_native_storage_verifier as storage_verifier
+from . import fresh_hugetlb_activation as hugetlb
 from . import fresh_canary_owner as canary_owner
 
 STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
@@ -38,6 +39,8 @@ BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
 WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
 DEADLINE_ATTEMPT = STATE / "hard-deadline-attempt.json"
+HUGETLB_APPROVAL = STATE / "hugetlb-ancestor-approval.json"
+HUGETLB_RECEIPT = STATE / "hugetlb-activation.json"
 CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
 SLICE_UNIT = sidecar.SLICE_UNIT
 CRON_SERVICE = "crond.service"
@@ -843,6 +846,44 @@ def install_approved():
     return receipt
 
 
+def activate_hugetlb_approved():
+    """Separately operator-approved host-owned shared-root activation.
+
+    Never called by arm, watchdog, reboot recovery, SSM or the build broker.
+    This changes PID1-owned cgroup2 root state and needs explicit host scope.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("HugeTLB plan/source binding changed")
+    native = NativeOwner()
+    native.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
+        raise RuntimeError("HugeTLB activation requires protected installed sidecar")
+    version = _command(["/usr/bin/systemctl", "--version"]).splitlines()[0].split()
+    if len(version) < 2 or version[:2] != ["systemd", "252"]:
+        raise RuntimeError("HugeTLB ancestor approval applies to systemd 252 only")
+    _slice_identity()
+    controller = _show(sidecar.UNIT)
+    pid = int(controller["MainPID"])
+    if (controller.get("ActiveState") != "active"
+            or storage_verifier._processes() != [pid]
+            or storage_verifier._cgroup(pid) !=
+               "/" + sidecar.SLICE_UNIT + "/" + sidecar.UNIT):
+        raise RuntimeError("HugeTLB activation requires exclusive fresh controller")
+    if HUGETLB_RECEIPT.exists() or HUGETLB_RECEIPT.is_symlink():
+        raise RuntimeError("HugeTLB root activation receipt already exists")
+    approval = _read_json(HUGETLB_APPROVAL)
+    receipt = hugetlb.activate_with_approval(
+        approval, host_id=plan["installed"]["host_id"],
+        boot_id=_boot(), plan_sha256=plan["sha256"])
+    # This durable receipt does not authorize compiler or canary admission.
+    _store(HUGETLB_RECEIPT, receipt, exclusive=True)
+    native.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    return {"status": "hugetlb-prerequisite-needs-native-review",
+            "boot_id": _boot(), "plan_sha256": plan["sha256"]}
+
+
 def arm_approved():
     """Durably arm one admitted new request AFTER kernel + cgroup acceptance."""
     _root()
@@ -874,6 +915,9 @@ def arm_approved():
     # worker or canary can be granted. memory.max does NOT charge HugeTLB;
     # seal fails closed if cgroup limits, controller or empty PID census drift.
     controller_pid = int(_show(sidecar.UNIT)["MainPID"])
+    hugetlb.recheck(_read_json(HUGETLB_RECEIPT),
+                    host_id=plan["installed"]["host_id"],
+                    boot_id=_boot(), plan_sha256=plan["sha256"])
     storage_verifier.seal_hugetlb_before_arm(controller_pid)
     # Every root-owned journal, metadata artifact and new process log must
     # have independently verified kernel backing in the OTHER bounded pool.
