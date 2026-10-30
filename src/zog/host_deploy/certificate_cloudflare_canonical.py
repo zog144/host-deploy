@@ -117,8 +117,7 @@ def verify_owner_binding(*, owner, binding, ledger, delivery, authorization,
         _exact(pin, {"schema","registry_id","authority_public_key",
                      "authority_key_id"})
         if (pin["schema"] != "zog-credential-authority-pin-v1"
-                or pin["registry_id"] != owner["hostnames"] and
-                   pin["registry_id"] != binding["registry_id"]):
+                or pin["registry_id"] != binding["registry_id"]):
             _deny()
         key = signatures.public_key(pin["authority_public_key"])
         if signatures.fingerprint(key) != pin["authority_key_id"]:
