@@ -74,7 +74,22 @@ def test_source_snapshot_rejects_wrong_ancestry_and_substituted_cgroup(tmp_path,
     with pytest.raises(RuntimeError, match="cgroup2"):
         huge.snapshot()
     monkeypatch.setattr(huge, "_mountinfo", lambda:
+                        f"30 1 0:40 /subtree {root} rw - cgroup2 cgroup rw")
+    with pytest.raises(RuntimeError, match="PID1 root cgroup2"):
+        huge.snapshot()
+    monkeypatch.setattr(huge, "_mountinfo", lambda:
                         f"30 1 0:40 / {root} rw - cgroup2 cgroup rw")
+    from types import SimpleNamespace
+    original_stat = Path.stat
+    def wrong_namespace(path, *args, **kwargs):
+        if str(path).startswith("/proc/") and str(path).endswith("/ns/cgroup"):
+            return SimpleNamespace(st_ino=12 if "/self/" in str(path) else 13,
+                                   st_dev=4)
+        return original_stat(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "stat", wrong_namespace)
+    with pytest.raises(RuntimeError, match="outside PID1 cgroup namespace"):
+        huge.snapshot()
+    monkeypatch.setattr(Path, "stat", original_stat)
     child.rename(root / "moved")
     child.symlink_to(root / "moved", target_is_directory=True)
     with pytest.raises(RuntimeError, match="unprotected"):
