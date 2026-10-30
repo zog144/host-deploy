@@ -223,14 +223,20 @@ def test_exact_station_public_vector_signature_and_byte_identity():
         authority.public_key(), expected_issuer=v["origin"],
         expected_binding=cd.binding(v["authorization"]), now=v["time"])
     assert a["consumer"] == CONSUMER and a["purpose"] == PURPOSE
+    from time import time
+    current = int(time())
+    fresh_authorization = {**a, "approved_at": current-10,
+                           "expires_at": current+3600}
+    fresh_request = {**v["request"], "created_at": current,
+                     "expires_at": current+60}
     prepared = cd.prepare_request(
-        v["origin"]+v["request_path"], v["request"], a, host,
-        now=v["time"], nonce="A"*24)
+        v["origin"]+v["request_path"], fresh_request,
+        fresh_authorization, host, nonce="A"*24)
     decoded, nonce, _ = cd.verify_request_http(
         prepared.url, "POST", dict(prepared.headers),
-        prepared.body, host.public_key(), a, now=v["time"])
-    assert decoded == v["request"]
-    assert prepared.body == cd.canonical(v["request"])
+        prepared.body, host.public_key(), fresh_authorization, now=current)
+    assert decoded == fresh_request
+    assert prepared.body == cd.canonical(fresh_request)
     assert nonce == "A"*24
     # The host-deploy owner-policy adapter processes only public metadata,
     # never the signed delivery envelope's secret or its reusable hash.
