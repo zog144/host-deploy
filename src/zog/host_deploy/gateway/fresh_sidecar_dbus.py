@@ -96,30 +96,23 @@ def _message(unit, typed_properties):
     )
 
 
-async def _start(unit, typed_properties, *, connect=None):
-    # The active native runtime must provide dbus-next 0.2.3, already a
-    # selected controller dependency. Import lazily for public source CI.
-    from dbus_next import BusType, MessageType
+async def _start(unit, typed_properties, *, connect=None, on_ack=None):
+    from dbus_next import BusType
     from dbus_next.aio import MessageBus
-    if connect is None:
-        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-    else:
-        bus = await connect()
+    from . import fresh_pid1_job
+    bus = await (MessageBus(bus_type=BusType.SYSTEM).connect()
+                 if connect is None else connect())
     try:
-        reply = await bus.call(_message(unit, typed_properties))
-        if reply.message_type == MessageType.ERROR:
-            raise RuntimeError("PID1 rejected protected transient controller service")
-        if reply.signature != "o" or len(reply.body) != 1:
-            raise RuntimeError("PID1 returned uncertain new sidecar job")
-        return {"job_path": reply.body[0], "method": "StartTransientUnit",
-                "unit": UNIT, "reload": False}
+        return await fresh_pid1_job.start_and_wait(
+            bus, _message(unit, typed_properties), unit, on_ack=on_ack)
     finally:
         bus.disconnect()
 
 
-def start_exact_sidecar(unit, mode, properties, *, connect=None):
+def start_exact_sidecar(unit, mode, properties, *, connect=None,
+                        on_ack=None):
     """Synchronous host-owner-only wrapper. No SSM/root-shell entrypoint."""
     if os.geteuid() != 0:
         raise PermissionError("only privileged installer may contact PID1")
     typed = _checked_properties(unit, mode, properties)
-    return asyncio.run(_start(unit, typed, connect=connect))
+    return asyncio.run(_start(unit, typed, connect=connect, on_ack=on_ack))
