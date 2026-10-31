@@ -35,11 +35,16 @@ def _bytes(path, size=65536):
     return b"".join(chunks)
 
 
-def _verified_listener(path, pid, uid, gid):
-    """Kernel LISTEN socket inode, owner's FD and SO_PEERCRED; not path ino."""
+def _verified_listener(path, pid, *, socket_uid, socket_gid,
+                       expected_peer_uid, expected_peer_gid):
+    """Verify socket pathname ACL separately from actual peer credentials.
+
+    The socket access group may differ from the controller process group.
+    inspect() fixes both expected peer credentials to root.
+    """
     st = os.stat(path, follow_symlinks=False)
-    if (not stat.S_ISSOCK(st.st_mode) or st.st_uid != uid
-            or st.st_gid != gid or stat.S_IMODE(st.st_mode) != 0o660):
+    if (not stat.S_ISSOCK(st.st_mode) or st.st_uid != socket_uid
+            or st.st_gid != socket_gid or stat.S_IMODE(st.st_mode) != 0o660):
         _bad()
     # The pathname's st_ino is NOT the kernel socket fd inode.
     inodes = []
@@ -65,7 +70,7 @@ def _verified_listener(path, pid, uid, gid):
         sock.connect(path)
         creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
         peer_pid, peer_uid, peer_gid = struct.unpack("3i", creds)
-        if (peer_pid, peer_uid, peer_gid) != (pid, uid, gid):
+        if (peer_pid, peer_uid, peer_gid) != (pid, expected_peer_uid, expected_peer_gid):
             _bad()
 
 
@@ -131,8 +136,10 @@ def inspect(requirement):
             or attributes.get("Pid", "").strip() != str(pid)):
         _bad()
     if kind == "sidecar":
-        _verified_listener(requirement["socket"], pid, 0,
-                           requirement["socket_gid"])
+        _verified_listener(
+            requirement["socket"], pid,
+            socket_uid=0, socket_gid=requirement["socket_gid"],
+            expected_peer_uid=0, expected_peer_gid=0)
         origin, destination = requirement["registration"]
         source_stat = os.stat(origin, follow_symlinks=False)
         child_stat = (root / "root" / destination.lstrip("/")).stat()
