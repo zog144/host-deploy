@@ -195,3 +195,31 @@ def sign_host_export(payload, installed_signing_key):
         installed_signing_key).sign(_canonical(payload))
     return _canonical({"payload": payload, "signature":
                        base64.b64encode(signature).decode("ascii")})
+
+
+
+def load_selected_step(directory, pin_path, task, policy_sha256):
+    """Command-center source path: only signed, fresh compiler-Host exports.
+
+    Transport is the existing authorized Host-to-command-center channel;
+    receiving filesystem bytes is not authority. Neither root-only compiler
+    policy nor a private Host signing key is read by the gateway.
+    """
+    if task not in TASKS or not isinstance(policy_sha256, str):
+        _deny("unsupported task or missing pinned policy")
+    pin = _read_public_pin(pin_path)
+    if pin.get("chain_policy_sha256") != policy_sha256:
+        _deny("original owner policy was revoked or changed")
+    root = Path(directory)
+    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+        _deny("missing gateway export cache")
+    from .task_catalogue import TaskCatalogueError
+    target = root / (task + ".json")
+    if target.is_symlink():
+        _deny("export entry is a symlink")
+    try:
+        with target.open("rb") as source:
+            raw = source.read(MAX_BYTES + 1)
+    except OSError:
+        _deny("authenticated Host export missing")
+    return verify(raw, pin, task=task)
