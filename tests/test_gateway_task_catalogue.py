@@ -92,6 +92,9 @@ def item(name):
         "arguments": {
             "mode": "image",
             "selection": "e" * 64,
+            **({"graphical_predecessor": "d" * 64}
+               if name in ("graphics-xcb-core-image-v1",
+                           "graphics-x11-core-image-v1") else {}),
             "targets": list(spec["targets"]),
         },
     }
@@ -210,3 +213,20 @@ def test_catalogue_refuses_symlink(tmp_path):
     link.symlink_to(src)
     with pytest.raises(TaskCatalogueError, match="regular file"):
         load(link)
+
+
+@pytest.mark.parametrize("name", [
+    "graphics-xcb-core-image-v1", "graphics-x11-core-image-v1",
+])
+def test_graphical_predecessor_required_distinct_and_immutable(name):
+    value = catalogue(name)
+    arguments = value["tasks"][name]["arguments"]
+    del arguments["graphical_predecessor"]
+    with pytest.raises(TaskCatalogueError):
+        validate(value)
+    arguments["graphical_predecessor"] = arguments["selection"]
+    with pytest.raises(TaskCatalogueError):
+        validate(value)
+    arguments["graphical_predecessor"] = "../floating"
+    with pytest.raises(TaskCatalogueError):
+        validate(value)
