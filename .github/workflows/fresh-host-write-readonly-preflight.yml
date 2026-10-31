@@ -1,0 +1,44 @@
+name: Fresh shared-host read-only PID1 preflight (ephemeral)
+on:
+  pull_request:
+    branches: [unstable, main]
+    paths:
+      - "src/zog/host_deploy/gateway/fresh_host_write_audit.py"
+      - "src/zog/host_deploy/gateway/fresh_native_owner.py"
+      - ".github/workflows/fresh-host-write-readonly-preflight.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ephemeral-native-host-write-observation:
+    # No retained EC2, SSM, GitHub dispatch, disk image, mount, cgroup kill,
+    # service install, or compiler. The hosted Actions VM is disposable.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'zog144/host-deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source with no persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Read actual disposable PID1 identity before witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'runner=%s kernel=%s pid1=%s\\n' "${RUNNER_ENVIRONMENT:-unknown}" "$(uname -r)" "$(cat /proc/1/comm)"
+          test "${RUNNER_ENVIRONMENT:-}" = "github-hosted"
+          test "$(cat /proc/1/comm)" = systemd
+      - name: Run exact read-only fixed host-write witness as root
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" PYTHONDONTWRITEBYTECODE=1 \
+            python3 -B -m zog.host_deploy.gateway.fresh_native_owner \
+            inspect-host-write-surfaces | python3 -m json.tool
+      - name: Deliberately leave native admission blocked
+        shell: bash
+        run: |
+          echo "EVIDENCE ONLY: hosted runner write surfaces are not retained EC2 mount proof."
+          echo "Dedicated 30+2GiB native quota, ENOSPC, six-hour timer, and worker PID proof remain NO-GO."

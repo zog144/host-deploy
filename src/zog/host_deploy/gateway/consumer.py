@@ -33,6 +33,12 @@ from .image_build_dispatch import prepare_image_build_dispatch
 from .image_build_execution import observe_submitted, submit_prepared
 from .task_catalogue import load as load_task_catalogue
 from .generic_pipeline import advance as advance_generic, status as generic_status
+from .toolchain_task import load as load_toolchain_task
+from .toolchain_supervisor import (
+    advance as advance_toolchain, status as toolchain_status,
+    authorize_resume as authorize_toolchain_resume,
+    authorize_recovery as authorize_toolchain_recovery,
+)
 from .generic_reporting import progress as generic_progress
 from .protocol import RequestProtocolError, loads_request
 from .queues import (
@@ -112,7 +118,9 @@ def _receive_count(message):
 class GatewayConsumer:
     def __init__(self, state_directory, primary_target, dead_letter_target, *,
                  client, approved_generic_catalogue=None,
-                 approved_catalogue_identity=None, approved_catalogue_path=None):
+                 approved_catalogue_identity=None, approved_catalogue_path=None,
+                 approved_toolchain_task=None, approved_toolchain_identity=None,
+                 approved_toolchain_path=None):
         self.state_directory = Path(state_directory)
         self.client = client
         self.configuration = verify_queue_configuration(
@@ -124,6 +132,12 @@ class GatewayConsumer:
         self.approved_generic_catalogue = approved_generic_catalogue
         self.approved_catalogue_identity = approved_catalogue_identity
         self.approved_catalogue_path = approved_catalogue_path
+        if ((approved_toolchain_task is None)
+                != (approved_toolchain_identity is None)):
+            raise ValueError("reviewed toolchain task requires exact digest")
+        self.approved_toolchain_task = approved_toolchain_task
+        self.approved_toolchain_identity = approved_toolchain_identity
+        self.approved_toolchain_path = approved_toolchain_path
 
     def _advance_one_reviewed(self):
         """At most one stage across durable admitted requests per iteration.
@@ -187,6 +201,58 @@ class GatewayConsumer:
                 return None
             advance_generic(self.state_directory, request_id)
             return {"request_id": request_id, "action": "advanced"}
+        return None
+
+    def _advance_one_toolchain(self):
+        """Explicitly approved typed toolchain work, at most one step per poll."""
+        if self.approved_toolchain_task is None:
+            return None
+        task, digest = load_toolchain_task(
+            self.approved_toolchain_path, require_root_owned=True
+        )
+        if (digest != self.approved_toolchain_identity
+                or task != self.approved_toolchain_task):
+            raise RuntimeError("protected typed toolchain task changed")
+        request_root = self.state_directory / "requests"
+        if not request_root.exists():
+            return None
+        for entry in sorted(request_root.iterdir()):
+            if entry.is_symlink() or not entry.is_dir():
+                raise RuntimeError("unsafe gateway request directory")
+            request_id = entry.name
+            state = load_request(self.state_directory, request_id)
+            if (state["request"]["operation"] != "toolchain.submit"
+                    or state["states"]["admission"] != "admitted"):
+                continue
+            dispatch = load_dispatch(self.state_directory, request_id)
+            if dispatch is None:
+                if not _reserve_reviewed_advance(
+                        self.state_directory, request_id,
+                        self.approved_toolchain_identity):
+                    return None
+                prepare_image_build_dispatch(
+                    self.state_directory, request_id,
+                    task_catalogue=self.approved_toolchain_task,
+                    task_catalogue_identity=self.approved_toolchain_identity,
+                )
+                return {"request_id": request_id, "action": "toolchain-prepared"}
+            if dispatch["phase"] != "prepared":
+                continue
+            frozen = dispatch["binding"]
+            if (frozen.get("task_catalogue_identity")
+                    != self.approved_toolchain_identity
+                    or frozen.get("task") != self.approved_toolchain_task["task"]):
+                raise RuntimeError("typed toolchain task authorization changed")
+            current = toolchain_status(self.state_directory, request_id)
+            if current["status"] in (
+                    "completed", "failed", "uncertain", "awaiting_recovery"):
+                continue
+            if not _reserve_reviewed_advance(
+                    self.state_directory, request_id,
+                    self.approved_toolchain_identity):
+                return None
+            advance_toolchain(self.state_directory, request_id)
+            return {"request_id": request_id, "action": "toolchain-advanced"}
         return None
 
     @property
@@ -299,10 +365,12 @@ class GatewayConsumer:
         if not messages:
             reconcile_all(self.state_directory)
             self._advance_one_reviewed()
+            self._advance_one_toolchain()
             return None
         result = self.handle_message(messages[0])
         reconcile_all(self.state_directory)
         self._advance_one_reviewed()
+        self._advance_one_toolchain()
         return result
 
     def run(self):
@@ -362,6 +430,13 @@ def main(argv=None):
         help="Exact separately reviewed catalogue SHA-256; prevents silent repin on restart",
     )
 
+    run.add_argument("--advance-reviewed-toolchain", action="store_true",
+                     help="Explicit owner opt-in to pinned typed toolchain supervisor")
+    run.add_argument("--approved-toolchain-task",
+                     help="Root-owned, readonly typed toolchain task definition")
+    run.add_argument("--approved-toolchain-task-sha256",
+                     help="Exact reviewed typed toolchain task SHA-256")
+
     status = commands.add_parser("queue-status")
     status.add_argument(
         "--queue-target",
@@ -401,6 +476,9 @@ def main(argv=None):
         default=os.environ.get("ZOG_GATEWAY_TASK_CATALOGUE"),
     )
 
+    dispatch_prepare.add_argument("--toolchain-task",
+        help="Exact protected local toolchain task definition")
+
     dispatch_reconcile = commands.add_parser("dispatch-reconcile")
     dispatch_reconcile.add_argument("request_id")
 
@@ -416,6 +494,16 @@ def main(argv=None):
     generic_read.add_argument("request_id")
     progress_cmd = commands.add_parser("generic-progress")
     progress_cmd.add_argument("request_id")
+
+    typed = commands.add_parser("toolchain-advance")
+    typed.add_argument("request_id")
+    typed = commands.add_parser("toolchain-status")
+    typed.add_argument("request_id")
+    typed = commands.add_parser("toolchain-authorize-resume")
+    typed.add_argument("request_id")
+    typed.add_argument("phase")
+    typed = commands.add_parser("toolchain-authorize-recovery")
+    typed.add_argument("request_id")
 
     commands.add_parser("reconcile")
 
@@ -451,6 +539,20 @@ def main(argv=None):
                 arguments.approved_task_catalogue, require_root_owned=True)
             if digest != arguments.approved_task_catalogue_sha256:
                 parser.error("reviewed catalogue digest differs from supervisor policy")
+        if (arguments.approved_toolchain_task or
+                arguments.approved_toolchain_task_sha256) and not arguments.advance_reviewed_toolchain:
+            parser.error("typed toolchain definition requires explicit supervisor opt-in")
+        protected = None
+        protected_identity = None
+        if arguments.advance_reviewed_toolchain:
+            if not (arguments.approved_toolchain_task
+                    and arguments.approved_toolchain_task_sha256):
+                parser.error("toolchain supervisor requires task path and SHA-256")
+            protected, protected_identity = load_toolchain_task(
+                arguments.approved_toolchain_task, require_root_owned=True
+            )
+            if protected_identity != arguments.approved_toolchain_task_sha256:
+                parser.error("typed toolchain approval digest differs")
         # Do not allocate any AWS client until root-owned approval is verified.
         client = _client()
         consumer = GatewayConsumer(
@@ -458,6 +560,9 @@ def main(argv=None):
             approved_generic_catalogue=catalogue,
             approved_catalogue_identity=digest,
             approved_catalogue_path=arguments.approved_task_catalogue,
+            approved_toolchain_task=protected,
+            approved_toolchain_identity=protected_identity,
+            approved_toolchain_path=arguments.approved_toolchain_task,
         )
         if arguments.once:
             with dispatcher_lock(state_directory):
@@ -543,6 +648,12 @@ def main(argv=None):
             catalogue, catalogue_identity = load_task_catalogue(
                 arguments.task_catalogue, require_root_owned=True
             )
+        if arguments.toolchain_task:
+            if catalogue is not None:
+                parser.error("select exactly one generic or toolchain catalogue")
+            catalogue, catalogue_identity = load_toolchain_task(
+                arguments.toolchain_task, require_root_owned=True
+            )
         state, record = prepare_image_build_dispatch(
             state_directory,
             arguments.request_id,
@@ -608,6 +719,23 @@ def main(argv=None):
             value = (advance_generic(state_directory, arguments.request_id)
                      if arguments.command == "generic-advance"
                      else generic_status(state_directory, arguments.request_id))
+        print(json.dumps(value, sort_keys=True))
+        return
+
+    if arguments.command in (
+            "toolchain-advance", "toolchain-status",
+            "toolchain-authorize-resume", "toolchain-authorize-recovery"):
+        with dispatcher_lock(state_directory):
+            if arguments.command == "toolchain-advance":
+                value = advance_toolchain(state_directory, arguments.request_id)
+            elif arguments.command == "toolchain-status":
+                value = toolchain_status(state_directory, arguments.request_id)
+            elif arguments.command == "toolchain-authorize-resume":
+                value = authorize_toolchain_resume(
+                    state_directory, arguments.request_id, arguments.phase)
+            else:
+                value = authorize_toolchain_recovery(
+                    state_directory, arguments.request_id)
         print(json.dumps(value, sort_keys=True))
         return
 

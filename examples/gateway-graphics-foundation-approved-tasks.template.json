@@ -1,0 +1,74 @@
+{
+  "schema": 2,
+  "tasks": {
+    "graphics-fonts-image-v1": {
+      "source_repository": "zog144/image-build",
+      "source_revision": "b0f53dbdec0e88b9b37feb5317398db3d20507dd",
+      "lane": "REPLACE_WITH_REVIEWED_MANAGED_LANE",
+      "lane_owner": "REPLACE_WITH_VERIFIED_PROVENANCE_HOST_ID",
+      "monthly_pin_repository_path": "project/pins/2026-10-01/commit-pin.py",
+      "monthly_pin_identity": "sha256:REPLACE_WITH_VERIFIED_MONTHLY_PIN_IDENTITY",
+      "pin_date": "2026-10-01",
+      "entries": [
+        {"id": "fontconfig-final", "project": "fontconfig", "recipe": "fontconfig/stages/final"},
+        {"id": "freetype-final", "project": "freetype", "recipe": "freetype/stages/final"},
+        {"id": "libpng-final", "project": "libpng", "recipe": "libpng/stages/final"}
+      ],
+      "arguments": {
+        "mode": "image",
+        "selection": "REPLACE_WITH_ACCEPTED_SELF_HOSTED_BASE_GENERATION_64HEX",
+        "targets": ["libpng-final", "freetype-final", "fontconfig-final"]
+      }
+    },
+    "graphics-xcb-core-image-v1": {
+      "source_repository": "zog144/image-build",
+      "source_revision": "b0f53dbdec0e88b9b37feb5317398db3d20507dd",
+      "lane": "REPLACE_AFTER_FONTS_WITH_REVIEWED_MANAGED_LANE",
+      "lane_owner": "REPLACE_WITH_VERIFIED_PROVENANCE_HOST_ID",
+      "monthly_pin_repository_path": "project/pins/2026-10-01/commit-pin.py",
+      "monthly_pin_identity": "sha256:REPLACE_WITH_VERIFIED_MONTHLY_PIN_IDENTITY",
+      "pin_date": "2026-10-01",
+      "entries": [
+        {"id": "check-final", "project": "check", "recipe": "check/stages/final"},
+        {"id": "libXau-final", "project": "libXau", "recipe": "libXau/stages/final"},
+        {"id": "libXdmcp-final", "project": "libXdmcp", "recipe": "libXdmcp/stages/final"},
+        {"id": "libevdev-final", "project": "libevdev", "recipe": "libevdev/stages/final"},
+        {"id": "libxcb-final", "project": "libxcb", "recipe": "libxcb/stages/final"},
+        {"id": "python-libevdev-final", "project": "python-libevdev", "recipe": "python-libevdev/stages/final"},
+        {"id": "xcb-proto-final", "project": "xcb-proto", "recipe": "xcb-proto/stages/final"},
+        {"id": "xorgproto-final", "project": "xorgproto", "recipe": "xorgproto/stages/final"}
+      ],
+      "arguments": {
+        "mode": "image",
+        "selection": "REPLACE_WITH_ACCEPTED_FONTS_OUTPUT_GENERATION_64HEX",
+        "targets": ["check-final", "libevdev-final", "python-libevdev-final", "xorgproto-final", "libXau-final", "libXdmcp-final", "xcb-proto-final", "libxcb-final"]
+      }
+    },
+    "graphics-x11-core-image-v1": {
+      "source_repository": "zog144/image-build",
+      "source_revision": "b0f53dbdec0e88b9b37feb5317398db3d20507dd",
+      "lane": "REPLACE_AFTER_XCB_WITH_REVIEWED_MANAGED_LANE",
+      "lane_owner": "REPLACE_WITH_VERIFIED_PROVENANCE_HOST_ID",
+      "monthly_pin_repository_path": "project/pins/2026-10-01/commit-pin.py",
+      "monthly_pin_identity": "sha256:REPLACE_WITH_VERIFIED_MONTHLY_PIN_IDENTITY",
+      "pin_date": "2026-10-01",
+      "entries": [
+        {"id": "libX11-final", "project": "libX11", "recipe": "libX11/stages/final"},
+        {"id": "libXext-final", "project": "libXext", "recipe": "libXext/stages/final"},
+        {"id": "libXfixes-final", "project": "libXfixes", "recipe": "libXfixes/stages/final"},
+        {"id": "libXfont2-final", "project": "libXfont2", "recipe": "libXfont2/stages/final"},
+        {"id": "libXi-final", "project": "libXi", "recipe": "libXi/stages/final"},
+        {"id": "libXtst-final", "project": "libXtst", "recipe": "libXtst/stages/final"},
+        {"id": "libXv-final", "project": "libXv", "recipe": "libXv/stages/final"},
+        {"id": "libfontenc-final", "project": "libfontenc", "recipe": "libfontenc/stages/final"},
+        {"id": "libxkbfile-final", "project": "libxkbfile", "recipe": "libxkbfile/stages/final"},
+        {"id": "xtrans-final", "project": "xtrans", "recipe": "xtrans/stages/final"}
+      ],
+      "arguments": {
+        "mode": "image",
+        "selection": "REPLACE_WITH_ACCEPTED_XCB_OUTPUT_GENERATION_64HEX",
+        "targets": ["xtrans-final", "libX11-final", "libXext-final", "libXfixes-final", "libXi-final", "libXtst-final", "libXv-final", "libxkbfile-final", "libfontenc-final", "libXfont2-final"]
+      }
+    }
+  }
+}

@@ -15,6 +15,9 @@ SOURCE_REPOSITORIES = {"zog144/image-build"}
 
 OPERATIONS = frozenset({
     "build.submit",
+    "toolchain.submit",
+    "toolchain.inspect",
+    "toolchain.resume",
     "build.status",
     "build.resume",
     "build.cancel",
@@ -25,7 +28,13 @@ OPERATIONS = frozenset({
 # These are maintained image-build worker entry points. The later execution adapter
 # owns all host paths and argv construction; requests select a name only.
 # Generic pipeline selections only; maintained image-build workers are excluded.
-BUILD_TASKS = frozenset({"xcb-support-image-v1"})
+BUILD_TASKS = frozenset({
+    "graphics-fonts-image-v1",
+    "graphics-xcb-core-image-v1",
+    "graphics-x11-core-image-v1",
+    "xcb-support-image-v1",
+})
+TOOLCHAIN_TASKS = frozenset({"self-hosted-c-cxx-toolchain-v1"})
 
 DIAGNOSTICS = frozenset({"host.runtime", "build.pipeline"})
 
@@ -179,6 +188,15 @@ def _parameters(operation, value):
         _lane(value["lane"])
         if value["task"] not in BUILD_TASKS:
             raise RequestProtocolError("unknown build task")
+    elif operation == "toolchain.submit":
+        _exact(value, {"lane", "task"}, "parameters")
+        _lane(value["lane"])
+        if value["task"] not in TOOLCHAIN_TASKS:
+            raise RequestProtocolError("unknown reviewed toolchain task")
+    elif operation in {"toolchain.inspect", "toolchain.resume"}:
+        _exact(value, {"lane", "operation_id"}, "parameters")
+        _lane(value["lane"])
+        _hex_identity(value["operation_id"], "operation_id")
     elif operation in {"build.status", "build.resume", "build.cancel"}:
         _exact(value, {"lane", "pipeline_id"}, "parameters")
         _lane(value["lane"])
@@ -220,7 +238,7 @@ def validate_request(value):
         "origin",
         "parameters",
     }
-    if operation == "build.submit":
+    if operation in {"build.submit", "toolchain.submit"}:
         expected.add("source")
     _exact(value, expected, "request")
     if value["schema"] != SCHEMA or type(value["schema"]) is not int:
@@ -229,7 +247,7 @@ def validate_request(value):
     _hex_identity(value["workspace_id"], "workspace_id")
     _origin(value["origin"])
     _parameters(operation, value["parameters"])
-    if operation == "build.submit":
+    if operation in {"build.submit", "toolchain.submit"}:
         _source(value["source"])
     detached = deepcopy(value)
     if len(canonical_bytes(detached)) > MAXIMUM_REQUEST_BYTES:

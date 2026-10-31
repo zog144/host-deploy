@@ -1,0 +1,1540 @@
+"""Actual privileged Linux owner for the single fresh compiler sidecar.
+
+NO network request API. Only an independently installed, 0600 root-owned
+reviewed-plan.json can select the fixed build-only sidecar. No daemon-reload,
+legacy systemd mutation, old controller recovery, or generic shell execution.
+"""
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import stat
+import subprocess
+import sys
+import time
+import uuid
+
+from . import fresh_budget_guard as budget
+from . import fresh_quota_volume as quota
+from . import fresh_sidecar_dbus as dbus
+from . import fresh_sidecar_install as sidecar
+from . import fresh_watchdog_service as independent_watchdog
+from . import fresh_deadline_timer as hard_deadline
+from . import fresh_aggregate_disk as aggregate
+from . import fresh_journal_backing as journal_backing
+from . import fresh_project_state as project_state
+from . import fresh_host_write_audit as host_write_audit
+from . import fresh_native_storage_verifier as storage_verifier
+from . import fresh_hugetlb_activation as hugetlb
+from . import fresh_canary_owner as canary_owner
+
+STATE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
+PLAN_PATH = STATE / "reviewed-plan.json"
+INSTALL_PATH = STATE / "sidecar-install.json"
+BASELINE_PATH = STATE / "legacy-baseline.json"
+ABSENT_HISTORY_APPROVAL = STATE / "disposable-absent-history-approval.json"
+ABSENT_HISTORY_SCHEMA = "host-deploy-fresh-disposable-absent-history-v1"
+ABSENT_HISTORY_APPROVAL_SCHEMA = "host-deploy-fresh-disposable-absent-history-approval-v1"
+ABSENT_HISTORY_SCOPE = "one-fresh-systemd252-disposable-native-acceptance"
+BUDGET_DIR = STATE / "budget"
+CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
+WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
+WATCHDOG_JOB = STATE / "independent-watchdog-job.json"
+WATCHDOG_JOB_COMPLETION = STATE / "independent-watchdog-job-completion.json"
+WATCHDOG_RESULT = STATE / "independent-watchdog-result.json"
+WATCHDOG_FAILURE = STATE / "independent-watchdog-failure.json"
+WATCHDOG_RECONCILE_APPROVAL = STATE / "independent-watchdog-reconcile-approval.json"
+WATCHDOG_RECONCILED = STATE / "independent-watchdog-reconciled.json"
+SIDECAR_FAILURE = STATE / "sidecar-start-failure.json"
+START_READINESS_SECONDS = 15
+DEADLINE_ATTEMPT = STATE / "hard-deadline-attempt.json"
+HUGETLB_APPROVAL = STATE / "hugetlb-ancestor-approval.json"
+HUGETLB_RECEIPT = STATE / "hugetlb-activation.json"
+CGROUP = Path("/sys/fs/cgroup/zogfreshcrossbootstrapoct25.slice")
+SLICE_UNIT = sidecar.SLICE_UNIT
+CRON_SERVICE = "crond.service"
+CRON_LOG = aggregate.EXTERNAL_MOUNT + "/controller-logs/cron.log"
+SCHEMA = "host-deploy-native-sidecar-owner-v1"
+HISTORICAL_REQUEST_ID = "371da99f23764180aad37d8e4e83595b"
+
+
+def _root():
+    if os.geteuid() != 0:
+        raise PermissionError("host owner must run with effective root")
+    if not os.path.isdir("/sys/fs/cgroup") or not Path("/proc/1/comm").read_text().strip() == "systemd":
+        raise RuntimeError("requires the actual Linux systemd host")
+    budget._protected_root(STATE)
+
+
+def _bytes(x):
+    return json.dumps(x, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii") + b"\n"
+
+
+def _sha(raw):
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _file(path):
+    # Fails closed on missing, link, nonroot, hardlink or size/mode mismatch.
+    root = budget._protected_root(path.parent)
+    fd = os.open(root / path.name, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
+                or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o600
+                or st.st_size > 131072):
+            raise PermissionError("invalid protected host-owner file")
+        return os.read(fd, st.st_size + 1)
+    finally:
+        os.close(fd)
+
+
+def _store(path, obj, *, exclusive=False):
+    _root()
+    payload = _bytes(obj)
+    budget._protected_root(path.parent)
+    if exclusive:
+        fd = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL | os.O_CREAT, 0o600)
+        try:
+            if os.write(fd, payload) != len(payload):
+                raise OSError("short protected host receipt write")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    else:
+        temp = path.parent / (".host-" + uuid.uuid4().hex)
+        fd = os.open(temp, os.O_WRONLY | os.O_NOFOLLOW | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            if os.write(fd, payload) != len(payload):
+                raise OSError("short protected host receipt write")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            os.replace(temp, path)
+        finally:
+            if temp.exists():
+                temp.unlink()
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _read_json(path):
+    return json.loads(_file(path))
+
+
+def _command(args, *, timeout=15):
+    # Read-only exact machine metadata; never accepts a shell or arbitrary unit.
+    return subprocess.run(args, check=True, text=True, capture_output=True,
+                          timeout=timeout, env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin",
+                                                "LC_ALL": "C"}).stdout.strip()
+
+
+def _show(unit, *, timeout=15):
+    known = {sidecar.UNIT, independent_watchdog.UNIT,
+             hard_deadline.UNIT, SLICE_UNIT, CRON_SERVICE,
+             journal_backing.JOURNAL_SERVICE, *journal_backing.JOURNAL_SOCKETS,
+             "root-control.service", "zog-root-control.service",
+             "zog-certbot-seed-root.service"}
+    if unit not in known:
+        # The historical unit identity comes only from an exact protected
+        # root-only baseline, never from a GitHub/SSM request.
+        historic = _read_json(BASELINE_PATH)
+        if (unit != historic.get("historical_unit")
+                or not re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}\.service", unit)):
+            raise ValueError("unapproved systemd readback target")
+    raw = _command(["/usr/bin/systemctl", "show", unit,
+                    "--property=LoadState,ActiveState,MainPID,InvocationID,"
+                    "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic,LogNamespace,"
+                    "Type,SubState,Restart,NRestarts"], timeout=timeout)
+    return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
+
+
+def _boot():
+    return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+
+def _protected_tree(path):
+    path = Path(path)
+    if not path.is_absolute() or path.is_symlink():
+        raise PermissionError("immutable executable tree location changed")
+    for cursor in [path, *path.parents]:
+        st = cursor.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o022):
+            raise PermissionError("executable tree has unprotected ancestry")
+    digest = hashlib.sha256()
+    for parent, dirs, names in os.walk(path, followlinks=False):
+        for name in sorted(dirs + names):
+            entry = Path(parent) / name
+            st = entry.lstat()
+            if (st.st_uid != 0 or st.st_mode & 0o022
+                    or (not stat.S_ISDIR(st.st_mode) and not stat.S_ISREG(st.st_mode))
+                    or (stat.S_ISREG(st.st_mode) and st.st_nlink != 1)):
+                raise PermissionError("unsafe source/companion tree entry")
+            digest.update(str(entry.relative_to(path)).encode() + b"\0")
+            if stat.S_ISREG(st.st_mode):
+                digest.update(entry.read_bytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def _legacy():
+    """Freeze either historical bad-setting OR explicitly approved disposable absence.
+
+    The absent-history path is never inferred from LoadState=not-found.
+    It requires an independent root-owned approval linked to the exact host,
+    current boot, original source plan and immutable baseline digest.
+    """
+    historic = _read_json(BASELINE_PATH)
+    retained_fields = {
+        "shared_unit", "root_control_show", "historical_unit",
+        "historical_show", "historical_bad_setting_sha256",
+    }
+    if type(historic) is not dict:
+        raise RuntimeError("protected historical baseline malformed")
+    if set(historic) == retained_fields:
+        # Original retained-host policy unchanged. No downgrade to an absent
+        # baseline when a historical bad-setting unit changes/disappears.
+        if (historic["shared_unit"] not in (
+                "root-control.service", "zog-root-control.service",
+                "zog-certbot-seed-root.service")
+                or not isinstance(historic["historical_show"], dict)
+                or historic["historical_show"].get("LoadState") != "bad-setting"
+                or _sha(_bytes(historic["historical_show"])) !=
+                    historic["historical_bad_setting_sha256"]):
+            raise RuntimeError("historical bad-setting baseline is incomplete")
+        if _show(historic["shared_unit"]) != historic["root_control_show"]:
+            raise RuntimeError("shared controller PID/InvocationID/fragment changed")
+        if _show(historic["historical_unit"]) != historic["historical_show"]:
+            raise RuntimeError("historical bad-setting PID1 evidence changed")
+        return _sha(_bytes(historic))
+
+    absent_fields = {
+        "schema", "mode", "host_id", "boot_id",
+        "shared_unit", "root_control_show",
+        "historical_unit", "historical_show", "historical_not_found_sha256",
+    }
+    if (set(historic) != absent_fields
+            or historic["schema"] != ABSENT_HISTORY_SCHEMA
+            or historic["mode"] != "absent-history"
+            or historic["shared_unit"] not in (
+                "root-control.service", "zog-root-control.service",
+                "zog-certbot-seed-root.service")
+            or type(historic["root_control_show"]) is not dict
+            or type(historic["historical_unit"]) is not str
+            or re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}\.service",
+                            historic["historical_unit"]) is None
+            or historic["historical_unit"] == historic["shared_unit"]
+            or type(historic["historical_show"]) is not dict
+            or historic["historical_show"].get("LoadState") != "not-found"
+            or historic["historical_show"].get("ActiveState") != "inactive"
+            or str(historic["historical_show"].get("MainPID")) != "0"
+            or historic["historical_show"].get("InvocationID") != ""
+            or historic["historical_show"].get("ControlGroup") != ""
+            or historic["historical_show"].get("FragmentPath") != ""
+            or _sha(_bytes(historic["historical_show"])) !=
+               historic["historical_not_found_sha256"]):
+        raise RuntimeError("disposable absent-history baseline is incomplete")
+
+    # The extra approval is a *separate* file, never supplied by a build
+    # request or manufactured by _legacy(). Native owner must install it
+    # only after independently proving the machine is disposable.
+    try:
+        plan = _read_json(PLAN_PATH)
+        approval = _read_json(ABSENT_HISTORY_APPROVAL)
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        raise PermissionError(
+            "independent disposable absent-history approval missing or unreadable"
+        ) from exc
+    expected_hash = _sha(_bytes(historic))
+    expected = {
+        "schema": ABSENT_HISTORY_APPROVAL_SCHEMA,
+        "status": "operator-approved",
+        "scope": ABSENT_HISTORY_SCOPE,
+        "allow_absent_history": True,
+        "host_id": historic["host_id"],
+        "boot_id": historic["boot_id"],
+        "plan_sha256": plan.get("sha256"),
+        "legacy_baseline_sha256": expected_hash,
+        "shared_unit": historic["shared_unit"],
+        "historical_unit": historic["historical_unit"],
+    }
+    if (type(approval) is not dict or approval != expected
+            or plan.get("installed", {}).get("legacy_baseline_sha256") != expected_hash
+            or plan.get("installed", {}).get("host_id") != historic["host_id"]
+            or plan.get("installed", {}).get("boot_id") != historic["boot_id"]
+            or plan.get("host_id") != historic["host_id"]
+            or historic["boot_id"] != _boot()
+            or not isinstance(historic["host_id"], str)
+            or not historic["host_id"]):
+        raise PermissionError("independent disposable absent-history approval missing or drifted")
+
+    # Check both units on the real PID1 through the same exact adapter as
+    # the original retained-history mode. No caller-supplied 'absent' flag.
+    if _show(historic["shared_unit"]) != historic["root_control_show"]:
+        raise RuntimeError("disposable shared controller PID1 evidence changed")
+    if _show(historic["historical_unit"]) != historic["historical_show"]:
+        raise RuntimeError("disposable absent historical unit is now present or changed")
+    return expected_hash
+
+
+def _slice_identity():
+    unit = _show(SLICE_UNIT)
+    if (unit.get("ActiveState") != "active"
+            or unit.get("ControlGroup") != "/" + SLICE_UNIT):
+        raise RuntimeError("exclusive new compiler slice not active")
+    return unit
+
+
+def _events():
+    _slice_identity()
+    path = CGROUP / "cgroup.events"
+    text = path.read_text()
+    fields = dict(x.split() for x in text.splitlines() if len(x.split()) == 2)
+    if fields.get("populated") not in ("0", "1"):
+        raise RuntimeError("fresh compiler cgroup populated status unavailable")
+    return fields
+
+
+class NativeOwner:
+    """Concrete host-owned installer, quota monitor and scoped cancel backend."""
+
+    def is_trusted_native_owner(self):
+        _root()
+        return True
+
+    def validate_old_baseline(self, expected):
+        if _legacy() != expected:
+            raise RuntimeError("historical controller/bad-setting evidence changed")
+
+    def verify_source_and_nss(self, plan):
+        _root()
+        binding = plan["identity"]
+        controller = pwd.getpwuid(binding["controller_uid"])
+        build = pwd.getpwuid(binding["build_uid"])
+        if (controller.pw_gid != binding["controller_gid"]
+                or build.pw_gid != binding["build_gid"]
+                or controller.pw_uid == build.pw_uid
+                or controller.pw_dir != binding["controller_home"]
+                or binding["project_root"] != str(
+                    Path(controller.pw_dir) / sidecar.PROJECT)):
+            raise PermissionError("fresh nonroot principals/primary groups differ")
+        for path in (Path(controller.pw_dir), Path(binding["project_root"])):
+            st = path.lstat()
+            if (not stat.S_ISDIR(st.st_mode) or st.st_uid != controller.pw_uid
+                    or st.st_gid != controller.pw_gid or st.st_mode & 0o022
+                    or path.resolve(strict=True) != path):
+                raise PermissionError("fresh owner home/Project not protected")
+        python = Path(binding["python_executable"])
+        st = python.stat()
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
+                or st.st_mode & 0o022):
+            raise PermissionError("unexpected sidecar interpreter")
+        installed = plan["installed"]
+        if _protected_tree(installed["root_control_python_root"]) != installed[
+                "root_control_tree_sha256"]:
+            raise PermissionError("installed root-control executable bytes changed")
+        if _protected_tree(installed["host_deploy_python_root"]) != installed[
+                "host_deploy_tree_sha256"]:
+            raise PermissionError("installed host-deploy native owner source changed")
+        if installed["boot_id"] != _boot():
+            raise RuntimeError("installation selected another native boot")
+        self.validate_old_baseline(installed["legacy_baseline_sha256"])
+
+    def read_unit(self, unit, *, timeout=15):
+        data = _show(unit, timeout=timeout)
+        return None if data.get("LoadState") == "not-found" else data
+
+    def socket_exists(self, socket):
+        return os.path.lexists(socket)
+
+    def prepare_once(self, plan):
+        _store(INSTALL_PATH, {
+            "schema": SCHEMA, "state": "prepared",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+        }, exclusive=True)
+        return {"state": "prepared", "plan_sha256": plan["sha256"], "durable": True}
+
+    def mark_start_attempt(self, digest):
+        record = _read_json(INSTALL_PATH)
+        if (record.get("state") != "prepared" or record.get("plan_sha256") != digest
+                or record.get("boot_id") != _boot()):
+            raise RuntimeError("fresh sidecar attempted marker uncertain")
+        record["state"] = "attempted"
+        _store(INSTALL_PATH, record)
+        return {"state": "attempted", "plan_sha256": digest, "durable": True}
+
+    def start_transient(self, unit, mode, properties):
+        _root()
+        if _read_json(INSTALL_PATH).get("state") != "attempted":
+            raise PermissionError("transient start requires durable attempted receipt")
+        def accepted(job_path):
+            record = _read_json(INSTALL_PATH)
+            if (record.get("state") != "attempted"
+                    or record.get("job_path") is not None):
+                raise RuntimeError("uncertain sidecar start job identity")
+            record["job_path"] = job_path
+            _store(INSTALL_PATH, record)
+        return dbus.start_exact_sidecar(
+            unit, mode, properties, on_ack=accepted)
+
+    def observe_unit(self, unit):
+        # Three full bounded PID1 + live proc/socket/registration readbacks.
+        # The returned role and Project are taken from the exact reviewed
+        # protected plan only AFTER its process environment was attested.
+        data = _wait_exact_sidecar_readiness(self, unit)
+        return {
+            "unit": unit, "active": True,
+            "invocation_id": data["InvocationID"],
+            "project_root": data["VerifiedProjectRoot"],
+            "socket": sidecar.SOCKET, "role": sidecar.ROLE,
+        }
+
+    def verify_live_storage(self, plan, admission):
+        """Build evidence from pinned installed bytes and actual live kernel.
+
+        Never consume user-supplied evidence or turn a JSON list of 'verified'
+        classes into admission. The kernel inspector must see active workers.
+        """
+        _root()
+        if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+            raise RuntimeError("native verifier reviewed plan changed")
+        self.verify_source_and_nss(plan)
+        current = _admission(plan)
+        if current != admission:
+            raise RuntimeError("native verifier admission identity changed")
+        side = self.observe_unit(sidecar.UNIT)
+        if side["active"] is not True:
+            raise RuntimeError("fresh source-attested controller is not active")
+        unit = _show(sidecar.UNIT)
+        pid = unit.get("MainPID", "")
+        if not pid.isdecimal() or int(pid) < 2:
+            raise RuntimeError("fresh controller MainPID is missing")
+        return storage_verifier.inspect_live(
+            plan=plan, admission=admission, controller_pid=int(pid),
+            controller_cgroup=unit.get("ControlGroup"),
+            boot_id=_boot(), host_id=admission["host_id"])
+
+    def worker_show(self, job_id):
+        """Read only one fixed recorded finite worker's actual PID1 unit."""
+        if type(job_id) is not str or not budget._HEX.fullmatch(job_id):
+            raise RuntimeError("unreviewed worker job ID")
+        unit = "zog-" + sidecar.PROJECT + "-build" + job_id + ".service"
+        raw = _command(["/usr/bin/systemctl", "show", unit,
+            "--property=LoadState,ActiveState,MainPID,ControlGroup,"
+            "InvocationID,ExecMainCode,ExecMainStatus"])
+        return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
+
+    def worker_cgroup_populated(self, group):
+        if (type(group) is not str
+                or not group.startswith("/" + SLICE_UNIT + "/")
+                or ".." in group.split("/")):
+            raise RuntimeError("foreign worker cgroup observation")
+        path = Path("/sys/fs/cgroup") / group.lstrip("/") / "cgroup.events"
+        if path.is_symlink():
+            raise RuntimeError("worker cgroup evidence redirected")
+        rows = dict(line.split() for line in path.read_text().splitlines())
+        if rows.get("populated") not in ("0", "1"):
+            raise RuntimeError("uncertain worker cgroup")
+        return rows["populated"] == "1"
+
+    def verify_empty_storage(self, plan, admission):
+        """Kernel-backed exact empty lane, never future-worker authority."""
+        _root()
+        if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+            raise RuntimeError("empty verifier reviewed plan changed")
+        self.verify_source_and_nss(plan)
+        if _admission(plan) != admission:
+            raise RuntimeError("empty admission identity changed")
+        side = self.observe_unit(sidecar.UNIT)
+        unit = _show(sidecar.UNIT)
+        pid = unit.get("MainPID", "")
+        if side["active"] is not True or not pid.isdecimal() or int(pid) < 2:
+            raise RuntimeError("trusted empty-lane controller missing")
+        return storage_verifier.inspect_empty(
+            plan=plan, admission=admission, controller_pid=int(pid),
+            controller_cgroup=unit.get("ControlGroup"),
+            boot_id=_boot(), host_id=admission["host_id"])
+
+    def verify_pending_storage(self, plan, admission):
+        """Exact claimed launch's kernel empty census, not clean idle."""
+        _root()
+        if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+            raise RuntimeError("pending verifier reviewed plan changed")
+        self.verify_source_and_nss(plan)
+        if _admission(plan) != admission:
+            raise RuntimeError("pending admission identity changed")
+        side = self.observe_unit(sidecar.UNIT)
+        unit = _show(sidecar.UNIT)
+        pid = unit.get("MainPID", "")
+        if side["active"] is not True or not pid.isdecimal() or int(pid) < 2:
+            raise RuntimeError("trusted pending controller missing")
+        return storage_verifier.inspect_pending(
+            plan=plan, admission=admission, controller_pid=int(pid),
+            controller_cgroup=unit.get("ControlGroup"),
+            boot_id=_boot(), host_id=admission["host_id"])
+
+    def sample_exact(self, x):
+        _root()
+        plan = _read_json(PLAN_PATH)
+        admission = _admission(plan)
+        if (x["request_id"] != admission["request_id"]
+                or x["project_root"] != plan["project_root"]
+                or x["host_id"] != admission["host_id"]):
+            raise RuntimeError("watchdog request/host/Project identity drift")
+        # A failed live worker witness must enter the durable UNCERTAIN
+        # cancellation path, not throw before budget.watch_once can persist
+        # stop intent. Never report a failed witness as an active sidecar.
+        try:
+            canary_owner.watch_allowed(fresh_owner=sys.modules[__name__],
+                                       native=self, plan=plan,
+                                       admission=admission, budget_record=x)
+            workers_bounded = True
+        except (OSError, RuntimeError, PermissionError, ValueError,
+                KeyError, TypeError):
+            workers_bounded = False
+        result = quota.inspect()
+        return {
+            "host_id": x["host_id"], "project_root": x["project_root"],
+            "boot_id": _boot(), "now_seconds": int(time.time()),
+            "monotonic_seconds": int(time.monotonic()),
+            "used_bytes": result["used_bytes"],
+            "monitor_receipt_sha256": x["monitor_receipt_sha256"],
+            # Cron failure must reach budget.watch_once via independent PID1
+            # watchdog, not preemptively escape the cancellation path.
+            "watchdog_active": (_show(CRON_SERVICE).get("ActiveState") == "active"
+                and verify_schedule()
+                and _show(independent_watchdog.UNIT).get("ActiveState") == "active"
+                and _show(independent_watchdog.UNIT).get("MainPID") not in (
+                    None, "", "0")),
+            "sidecar_active": (workers_bounded and
+                _show(sidecar.UNIT).get("ActiveState") == "active"),
+        }
+
+    def cancel_exact_project(self, project, request, *, reason, cancellation_id):
+        _root()
+        x = budget.read(BUDGET_DIR, request)
+        if (project != x["project_root"] or reason != x["stop_reason"]
+                or cancellation_id != x["cancellation_id"]
+                or x["status"] != "stop_attempted"):
+            raise PermissionError("fresh cancellation grant differs from frozen attempt")
+        if _events()["populated"] == "1":
+            # Exact kernel cgroup.kill, never kill a shared controller or
+            # caller-selected PID/unit. Native admission must first prove
+            # ALL fresh build jobs are descendants of this exclusive slice.
+            with (CGROUP / "cgroup.kill").open("w") as stream:
+                stream.write("1\n")
+                stream.flush()
+        return self.inspect_cancel_exact_project(
+            project, request, cancellation_id=cancellation_id)
+
+    def inspect_cancel_exact_project(self, project, request, *, cancellation_id):
+        x = budget.read(BUDGET_DIR, request)
+        if (project != x["project_root"] or x["cancellation_id"] != cancellation_id
+                or x["status"] not in ("stop_attempted", "stopped")):
+            raise PermissionError("foreign cancellation observation")
+        if _events()["populated"] != "0":
+            return None
+        return {"confirmed": True, "cancellation_id": cancellation_id,
+                "request_id": request, "project_root": project,
+                "evidence": "kernel-cgroup.events-populated-0"}
+
+
+def verify_schedule():
+    """Require exact root-owned cron file and running native scheduler."""
+    st = CRON_PATH.lstat()
+    if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
+            or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o644):
+        raise PermissionError("fresh watchdog cron file untrusted")
+    return CRON_PATH.read_text() == schedule_text()
+
+
+def schedule_text():
+    """Cron entry is fixed; includes one-minute checks and boot reconciliation.
+
+    Scheduled code loads from the root-owned accepted Python installation,
+    not via a caller-supplied PYTHONPATH or mutable working directory.
+    """
+    reviewed = _read_json(PLAN_PATH)
+    binary = reviewed["identity"]["python_executable"]
+    source = reviewed["installed"]["host_deploy_python_root"]
+    # host_deploy_python_root is a separately reviewed installer addition.
+    for path in (binary, source):
+        if (not path.startswith("/") or ".." in Path(path).parts
+                or "\n" in path or " " in path):
+            raise PermissionError("unreviewed scheduler executable path")
+    prefix = "PYTHONPATH=" + source + " " + binary + " -B -m zog.host_deploy.gateway.fresh_native_owner"
+    return ("SHELL=/bin/sh\nPATH=/usr/sbin:/usr/bin:/bin\n"
+            "* * * * * root " + prefix + " watch >>" + CRON_LOG + " 2>&1\n"
+            "@reboot root " + prefix + " recover >>" + CRON_LOG + " 2>&1\n")
+
+
+def install_schedule():
+    """Actual persistent crond hook; requires crond ALREADY running.
+
+    Does not daemon-reload, enable/restart crond, or install arbitrary jobs.
+    Native acceptance must demonstrate crond honors this cron.d syntax.
+    """
+    _root()
+    if _show(CRON_SERVICE).get("ActiveState") != "active":
+        raise RuntimeError("native crond must already be active")
+    if CRON_PATH.exists() or CRON_PATH.is_symlink():
+        raise RuntimeError("watchdog schedule exists; no overwrite")
+    data = schedule_text().encode()
+    temp = CRON_PATH.parent / (".zog-fresh-" + uuid.uuid4().hex)
+    fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)
+    try:
+        if os.write(fd, data) != len(data):
+            raise OSError("short native schedule write")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(temp, CRON_PATH)
+    dfd = os.open(CRON_PATH.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    if not verify_schedule():
+        raise RuntimeError("installed watchdog scheduler differs")
+
+
+def watch():
+    _root()
+    owner = NativeOwner()
+    # NEVER return early on crond/schedule loss: the separate PID1 watchdog
+    # must observe that failure in sample_exact and durably cancel the fresh
+    # compiler. A missing schedule is not a reason to omit the budget check.
+    budget._protected_root(BUDGET_DIR)
+    requests = sorted(p.stem for p in BUDGET_DIR.glob("*.json"))
+    if len(requests) > 1:
+        raise RuntimeError("only one newly approved cross-bootstrap request allowed")
+    for request in requests:
+        if not budget._HEX.fullmatch(request):
+            raise RuntimeError("unreviewed budget filename")
+        with canary_owner.locked(sys.modules[__name__]):
+            budget.watch_once(BUDGET_DIR, request, native_owner=owner)
+
+
+def watch_loop():
+    """Independent PID1-supervised fast watchdog, not scheduled by crond.
+
+    Systemd Restart=always makes it an independent enforcement path for
+    crond outages. On errors, let PID1 restart rather than silently exiting.
+    Native acceptance must test actual PID1 restart and missed deadline.
+    """
+    _root()
+    while True:
+        watch()
+        time.sleep(independent_watchdog.INTERVAL_SECONDS)
+
+
+def hard_stop():
+    """Fixed PID1 deadline: never rely solely on writable quota metadata.
+
+    Stage A must prove the timer executes within its 30-second safety margin.
+    The frozen timer intent is fsynced before the timer starts and binds the
+    same original request/project/cgroup. If the journal is full at expiry,
+    directly issue the kernel's exact fresh-parent kill without another
+    arbitrary host operation; normal ledger reconciliation remains uncertain.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    a = _admission(plan)
+    marker = _read_json(DEADLINE_ATTEMPT)
+    expected = budget._digest({
+        "schema": budget.SCHEMA, "request_id": a["request_id"],
+        "host_id": a["host_id"], "project_root": plan["project_root"],
+    })
+    if (type(marker) is not dict
+            or set(marker) != {
+                "schema", "plan_sha256", "request_id", "host_id",
+                "project_root", "cancellation_id", "boot_id", "state"}
+            or marker["schema"] != "host-deploy-fresh-hard-deadline-attempt-v1"
+            or marker["plan_sha256"] != plan["sha256"]
+            or marker["request_id"] != a["request_id"]
+            or marker["host_id"] != a["host_id"]
+            or marker["project_root"] != plan["project_root"]
+            or marker["cancellation_id"] != expected
+            or marker["boot_id"] != _boot()
+            or marker["state"] != "attempted"):
+        raise RuntimeError("PID1 hard deadline authority changed")
+
+    class KernelDeadlineOwner(NativeOwner):
+        def sample_exact(self, x):
+            result = super().sample_exact(x)
+            result["now_seconds"] = max(
+                result["now_seconds"], x["deadline_seconds"])
+            result["monotonic_seconds"] = max(
+                result["monotonic_seconds"],
+                x["started_monotonic_seconds"] + budget.DEADLINE_SECONDS)
+            return result
+
+    try:
+        record = budget.read(BUDGET_DIR, a["request_id"])
+        if (record["cancellation_id"] != expected
+                or record["boot_id"] != marker["boot_id"]):
+            raise RuntimeError("deadline budget identity changed")
+        with canary_owner.locked(sys.modules[__name__]):
+            budget.watch_once(BUDGET_DIR, record["request_id"],
+                              native_owner=KernelDeadlineOwner())
+    except OSError:
+        # Disk-full/failed-fsync exception only. The already-durable timer
+        # intent is enough to enforce the fixed parent cgroup boundary;
+        # do not invent a successful cancellation receipt.
+        if _events()["populated"] == "1":
+            with (CGROUP / "cgroup.kill").open("w") as stream:
+                stream.write("1\n")
+                stream.flush()
+        raise RuntimeError(
+            "kernel deadline stop issued/uncertain; ledger requires native "
+            "reconciliation; no new submission permitted")
+
+
+
+def recover():
+    """Actual @reboot recovery: restore quota and inspect, never replay jobs.
+
+    A changed boot ID makes an in-flight compiler budget fail closed. The
+    owner does NOT resubmit cross-bootstrap or blindly restore a transient
+    controller after a power loss without a reviewed fresh-boot receipt.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("reboot recovery requires protected native root")
+    # Reattach the small accounting pool first: all owner state and the
+    # original budget journal live there, never on unbounded host storage.
+    aggregate.reattach_external_after_boot()
+    _root()
+    if not verify_schedule():
+        raise RuntimeError("untrusted reboot hook")
+    volume = quota.reattach_after_boot()
+    # Mounts installed on the previous boot are not persistent. Do not
+    # silently restore a host-wide Project bind: a new boot needs a separate
+    # reviewed native binding. Until then, the existing request must fail
+    # closed and watchdog inspection cannot resume work.
+    try:
+        project_state.inspect(_read_json(PLAN_PATH)["identity"]["controller_uid"])
+        state_status = "verified"
+    except (OSError, RuntimeError, PermissionError, KeyError, ValueError):
+        state_status = "project-state-bind-unverified-no-replay"
+    # Every boot is independently identified; we do not trust a transient
+    # pre-reboot PID1 InvocationID or assume running compiler services survived.
+    # No auto-submit, cleanup, old-controller reset or silent new sidecar start.
+    journal = STATE / ("reboot-" + _boot() + ".json")
+    if not journal.exists():
+        _store(journal, {
+            "schema": "host-deploy-fresh-boot-recovery-v1",
+            "boot_id": _boot(),
+            "quota_image": str(quota.IMAGE),
+            "quota_capacity_bytes": volume["capacity_bytes"],
+            "status": "observed-reboot-needs-fresh-controller-attestation",
+            "project_state": state_status,
+        }, exclusive=True)
+    else:
+        recorded = _read_json(journal)
+        if (recorded.get("boot_id") != _boot()
+                or recorded.get("quota_image") != str(quota.IMAGE)):
+            raise RuntimeError("reboot checkpoint drift")
+    # The native watchdog transitions any in-flight original new request to
+    # uncertain/stop_requested due to changed boot-id. Its original immutable
+    # cancellation ID is inspected only; no replacement compiler submission.
+    watch()
+
+
+
+ADMISSION_PATH = STATE / "reviewed-admission.json"
+
+
+
+def _budget_directory_prepared(*, require_empty):
+    """Read-only receipt for the already precreated budget directory.
+
+    prepare-external creates owner-state/budget exactly once INSIDE the
+    bounded 2-GiB pool. prepare-work and install must consume this existing
+    directory, never mkdir it again or silently repair interrupted state.
+    An unexpected record, lock, foreign inode or a missing directory is an
+    explicit NO-GO before a build volume or new PID1 unit can be started.
+    """
+    if BUDGET_DIR != STATE / "budget":
+        raise PermissionError("fresh budget path differs from reviewed owner-state")
+    root = budget._protected_root(BUDGET_DIR)
+    parent = budget._protected_root(STATE)
+    observed = root.lstat()
+    if (not stat.S_ISDIR(observed.st_mode) or root.is_symlink()
+            or observed.st_uid != 0 or observed.st_gid != 0
+            or stat.S_IMODE(observed.st_mode) != 0o700
+            or observed.st_dev != parent.stat().st_dev):
+        raise PermissionError("preexisting budget directory is not the bounded owner directory")
+    from .fresh_aggregate_disk import EXTERNAL_MOUNT
+    # Same-device comparison can succeed on the underlying host directory
+    # when the external image has NOT been mounted. Refuse that fallback.
+    if not os.path.ismount(EXTERNAL_MOUNT):
+        raise RuntimeError("budget backing external accounting filesystem absent")
+    if parent.stat().st_dev != Path(EXTERNAL_MOUNT).stat().st_dev:
+        raise PermissionError("budget directory is not backed by 2-GiB external pool")
+    if require_empty and any(root.iterdir()):
+        raise RuntimeError("budget directory contains an existing/uncertain request; no replay")
+    return root
+
+
+def _admission(plan):
+    """Admission receipt is a root-owned, exact-structure authorization.
+
+    It is intentionally not created by the gateway or GitHub dispatcher.
+    The native protected installer must provide it only after independent
+    seed/source/host/capacity and no-old-job-mutation review.
+    """
+    a = _read_json(ADMISSION_PATH)
+    if (type(a) is not dict or set(a) != {
+            "schema", "plan_sha256", "host_id", "request_id",
+            "seed_generation", "seed_manifest_sha256",
+            "capabilities_sha256", "available_after_reservations_bytes",
+            "writable_roots", "fresh_slice", "budget_scope"}):
+        raise RuntimeError("fresh admission receipt incomplete")
+    if (a["schema"] != "host-deploy-fresh-native-admission-dedicated-v2"
+            or a["budget_scope"] != aggregate.BUDGET_SCOPE
+            or a["plan_sha256"] != plan["sha256"]
+            or a["host_id"] != plan["host_id"]
+            or a["fresh_slice"] != SLICE_UNIT
+            or a["writable_roots"] != [str(quota.MOUNT)]
+            or type(a["available_after_reservations_bytes"]) is not int
+            or a["available_after_reservations_bytes"] < budget.ADDITIONAL_DISK_BYTES
+            or not budget._HEX.fullmatch(a["request_id"])
+            or a["request_id"] == HISTORICAL_REQUEST_ID
+            or not all(isinstance(a[field], str) and (
+                a[field].startswith("sha256:") and len(a[field]) == 71)
+                for field in ("seed_manifest_sha256", "capabilities_sha256"))
+            or not isinstance(a["seed_generation"], str)
+            or not a["seed_generation"]):
+        raise RuntimeError("fresh native admission differs from reviewed authority")
+    return a
+
+
+def prepare_work():
+    """Once-only Stage A storage: quota and Project/state BEFORE seed import.
+
+    This consumes a protected independently reviewed admission identity, but
+    cannot install a controller, arm a budget, or submit a compiler job. The
+    exact immutable seed must be imported only AFTER this bind is proven.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("reviewed native storage binding changed")
+    a = _admission(plan)
+    owner = NativeOwner()
+    owner.verify_source_and_nss(plan)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    aggregate.inspect_external_pool_native()
+    # Catch the exact pre-created budget-directory conflict BEFORE the first
+    # 30-GiB allocation. Do not create it here: provision_external already did.
+    _budget_directory_prepared(require_empty=True)
+    # The original host capacity authorization includes BOTH pools. The
+    # external 2-GiB image has already been fully allocated, so enforce the
+    # remaining 30-GiB budget against the current host backing filesystem.
+    available = a["available_after_reservations_bytes"] - aggregate.EXTERNAL_BYTES
+    if available < aggregate.BUILD_BYTES:
+        raise RuntimeError("approved host capacity cannot cover both pools")
+    volume = quota.provision(
+        available_after_reservations_bytes=available,
+        mounted_writable_roots=a["writable_roots"])
+    state = project_state.install_bind(plan["identity"]["controller_uid"])
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    return {"schema": SCHEMA, "phase": "storage-prepared-only",
+            "work_capacity_bytes": volume["capacity_bytes"],
+            "project_state": state, "compiler_authorized": False}
+
+
+def install_approved():
+    """Real once-only privileged installation using fixed local receipts.
+
+    Destructive creation is restricted to the previously empty new quota
+    image and new transient sidecar. Nothing changes the original controller.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("reviewed native sidecar plan changed")
+    a = _admission(plan)
+    owner = NativeOwner()
+    owner.verify_source_and_nss(plan)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if _sha(schedule_text().encode()) != plan["installed"]["watchdog_receipt_sha256"]:
+        raise RuntimeError("unreviewed watchdog schedule source")
+    # Consume the exact prepared 0700 root-owned directory; do not mkdir,
+    # reset, delete, or replace even after an interrupted preparation.
+    _budget_directory_prepared(require_empty=True)
+    directory_fd = os.open(STATE, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    # This is inspection-only. Build quota + exact Project/state bind MUST
+    # already be in place before the separately verified immutable seed import.
+    # Never create the quota here or the earlier import may escape to host disk.
+    volume = quota.inspect()
+    if volume["capacity_bytes"] > aggregate.BUILD_BYTES:
+        raise RuntimeError("fresh kernel quota limit exceeded")
+    project_state.inspect(plan["identity"]["controller_uid"])
+    external = aggregate.inspect_external_native()
+    # Observe only the protected sidecar; it must start before Work can attest
+    # its live registration mount. This pre-activation path is not an aggregate
+    # admission, and never clears the mandatory strict arm/watch gates.
+    aggregate.validate_pre_activation(
+        volume, external, host_owner_verified=owner.is_trusted_native_owner())
+    # Verify ALL fixed backing before installing /etc/cron.d or starting
+    # native PID1 units. No ordinary shared-host side effects on failed
+    # preactivation storage proof.
+    install_schedule()
+    # Start a distinct PID1-supervised watchdog outside the compiler slice,
+    # not through cron. A PID1 reply lost after this durable marker is an
+    # UNCERTAIN installation, never permission for a second start.
+    if _show(independent_watchdog.UNIT).get("LoadState") != "not-found":
+        raise RuntimeError("independent watchdog already present")
+    if WATCHDOG_ATTEMPT.exists() or WATCHDOG_ATTEMPT.is_symlink():
+        raise RuntimeError("watchdog attempted-start already recorded")
+    _store(WATCHDOG_ATTEMPT, {
+        "schema": "host-deploy-fresh-watchdog-start-attempt-v1",
+        "plan_sha256": plan["sha256"], "boot_id": _boot(),
+        "host_id": plan["host_id"],
+        "watchdog_spec_sha256": _sha(_bytes(independent_watchdog.properties(plan))),
+        "state": "attempted",
+    }, exclusive=True)
+    try:
+        def accepted(job_path):
+            _store(WATCHDOG_JOB, {
+                "schema": "host-deploy-fresh-watchdog-job-v1",
+                "plan_sha256": plan["sha256"], "boot_id": _boot(),
+                "job_path": job_path,
+                "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+            }, exclusive=True)
+        job = independent_watchdog.start(plan, on_ack=accepted)
+        if (job.get("job_result") != "done"
+                or job.get("job_path") != _read_json(WATCHDOG_JOB)["job_path"]):
+            raise RuntimeError("watchdog PID1 completion identity unverified")
+        # PID1 job completion does not yet prove active process/socket.
+        # Persist its actual result FIRST so a later readiness race is
+        # diagnosable without guessing from an eventually active unit.
+        _store(WATCHDOG_JOB_COMPLETION, {
+            "schema": "host-deploy-fresh-watchdog-job-completion-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "job_path": job["job_path"], "job_result": job["job_result"],
+            "job_record_sha256": _sha(_file(WATCHDOG_JOB)),
+        }, exclusive=True)
+        evidence = _wait_exact_watchdog(plan)
+        _store(WATCHDOG_RESULT, {
+            "schema": "host-deploy-fresh-watchdog-result-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "job_path": job["job_path"], "job_result": job["job_result"],
+            "evidence": evidence, "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+        }, exclusive=True)
+    except Exception as exc:
+        _watchdog_failure_snapshot(plan, exc)
+        raise
+    # The top of the quota image is ROOT-owned and not writable by either
+    # isolated nonroot UID. Otherwise the build UID could rename the protected
+    # imported rootfs/registration directory despite that child being root
+    # owned. root-control grants write access only to specific copied source
+    # and output workspaces inside the bounded Project/state mount.
+    os.chown(quota.MOUNT, 0, 0)
+    os.chmod(quota.MOUNT, 0o755)
+    try:
+        receipt = sidecar.install(plan, host_owner=owner)
+        _store(STATE / "activation.json", receipt, exclusive=True)
+        owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+        return receipt
+    except Exception:
+        _sidecar_failure_snapshot(plan)
+        raise
+
+
+def _remaining_readback(deadline):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise RuntimeError("protected PID1 readiness deadline expired")
+    return left
+
+
+def _pid1_fields(unit, *, deadline=None):
+    """systemctl show with the REMAINING time, not a fresh 15s timeout."""
+    data = _show(unit, timeout=_remaining_readback(deadline)
+                 if deadline is not None else 15)
+    if deadline is not None:
+        _remaining_readback(deadline)
+    return {key: data.get(key, "") for key in (
+        "LoadState", "ActiveState", "SubState", "MainPID", "InvocationID",
+        "ControlGroup", "Type", "Restart", "NRestarts", "LogNamespace")}
+
+
+def _bounded_proc_probe(requirement, deadline):
+    """One isolated, killable read-only child bounds ALL procfs/socket I/O."""
+    remaining = _remaining_readback(deadline)
+    script = Path(__file__).with_name("fresh_readiness_probe.py")
+    # The owner first verifies its installed source tree and wheel RECORD.
+    # Do not send /proc environment or secrets back to the parent.
+    response = subprocess.run(
+        [sys.executable, "-I", "-B", str(script)],
+        input=json.dumps(requirement, sort_keys=True, separators=(",", ":")),
+        capture_output=True, text=True, timeout=remaining,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    _remaining_readback(deadline)
+    if response.returncode != 0 or len(response.stdout) > 2048:
+        raise RuntimeError("protected PID1 native proc/socket witness unverified")
+    result = json.loads(response.stdout)
+    if (type(result) is not dict or
+            result.get("status") != "exact-process-verified" or
+            result.get("pid") != str(requirement["pid"]) or
+            result.get("cgroup") != requirement["cgroup"] or
+            result.get("kind") != requirement["kind"] or
+            result.get("socket_listener_verified") is not (
+                requirement["kind"] == "sidecar")):
+        raise RuntimeError("native proc/socket witness differs from PID1")
+    return result
+
+
+def _exact_pid1_process(data, *, unit, restart, log_namespace, cgroup):
+    pid = data["MainPID"]
+    if (data["LoadState"] != "loaded" or data["ActiveState"] != "active"
+            or data["SubState"] != "running" or data["Type"] != "exec"
+            or data["Restart"] != restart or data["NRestarts"] != "0"
+            or data["LogNamespace"] != log_namespace
+            or data["ControlGroup"] != cgroup
+            or not pid.isdecimal() or not 1 < int(pid) < 2**31
+            or not re.fullmatch(r"[0-9a-f]{32}", data["InvocationID"])):
+        raise RuntimeError("protected PID1 process identity not established")
+    return int(pid)
+
+
+def _watchdog_pid1_evidence(plan, *, deadline=None):
+    if deadline is None:
+        deadline = time.monotonic() + START_READINESS_SECONDS
+    observed = _pid1_fields(independent_watchdog.UNIT, deadline=deadline)
+    props = independent_watchdog.properties(plan)
+    pid = _exact_pid1_process(
+        observed, unit=independent_watchdog.UNIT, restart="always",
+        log_namespace=props["LogNamespace"],
+        cgroup="/system.slice/" + independent_watchdog.UNIT)
+    _bounded_proc_probe({
+        "kind": "watchdog", "pid": pid, "argv": props["ExecStart"],
+        "env": props["Environment"], "cgroup": observed["ControlGroup"],
+        "socket": None, "socket_gid": None, "registration": None,
+    }, deadline)
+    _remaining_readback(deadline)
+    return observed
+
+
+def _sidecar_pid1_evidence(plan, *, deadline):
+    observed = _pid1_fields(sidecar.UNIT, deadline=deadline)
+    if observed["LoadState"] == "not-found":
+        raise RuntimeError("protected sidecar absent from PID1")
+    if observed["ActiveState"] == "failed":
+        raise RuntimeError("protected sidecar PID1 startup failed")
+    pid = _exact_pid1_process(
+        observed, unit=sidecar.UNIT, restart="no",
+        log_namespace=sidecar.LOG_NAMESPACE,
+        cgroup="/" + sidecar.SLICE_UNIT + "/" + sidecar.UNIT)
+    _bounded_proc_probe({
+        "kind": "sidecar", "pid": pid,
+        "argv": plan["properties"]["ExecStart"],
+        "env": plan["properties"]["Environment"],
+        "cgroup": observed["ControlGroup"], "socket": sidecar.SOCKET,
+        "socket_gid": plan["identity"]["controller_gid"],
+        "registration": [sidecar.REGISTRATION_SOURCE,
+                         sidecar.REGISTRATION_DEST],
+    }, deadline)
+    _remaining_readback(deadline)
+    return observed
+
+
+def _wait_exact_watchdog(plan):
+    deadline = time.monotonic() + START_READINESS_SECONDS
+    stable = None
+    count = 0
+    while True:
+        try:
+            evidence = _watchdog_pid1_evidence(plan, deadline=deadline)
+            _remaining_readback(deadline)
+        except (RuntimeError, OSError, UnicodeError, ValueError,
+                subprocess.TimeoutExpired):
+            # A slow readback may never turn into a late success.
+            if time.monotonic() >= deadline:
+                raise RuntimeError("independent PID1 watchdog activation unproven")
+            evidence = None
+        if evidence is not None:
+            if stable == evidence:
+                count += 1
+            else:
+                stable, count = evidence, 1
+            # Recheck the same process after stable readiness; THIRD full
+            # PID1/proc witness is required before returning success.
+            if count >= 3:
+                _remaining_readback(deadline)
+                return evidence
+        else:
+            stable, count = None, 0
+        if time.monotonic() >= deadline:
+            raise RuntimeError("independent PID1 watchdog activation unproven")
+        time.sleep(min(0.1, _remaining_readback(deadline)))
+
+
+def _wait_exact_sidecar_readiness(owner, unit):
+    """Single 15s budget for 3 complete PID1/proc/listener/mount witnesses."""
+    if unit != sidecar.UNIT:
+        raise RuntimeError("unreviewed sidecar readiness target")
+    deadline = time.monotonic() + START_READINESS_SECONDS
+    plan = _read_json(PLAN_PATH)
+    _remaining_readback(deadline)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("sidecar readiness plan differs from installed source")
+    stable = None
+    count = 0
+    while True:
+        try:
+            data = _sidecar_pid1_evidence(plan, deadline=deadline)
+            _remaining_readback(deadline)
+        except (RuntimeError, OSError, UnicodeError, ValueError,
+                subprocess.TimeoutExpired):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("protected sidecar PID1/socket readiness timed out")
+            data = None
+        if data is not None:
+            if data == stable:
+                count += 1
+            else:
+                stable, count = data, 1
+            if count >= 3:
+                _remaining_readback(deadline)
+                return {**data, "VerifiedProjectRoot": plan["project_root"]}
+        else:
+            stable, count = None, 0
+        if time.monotonic() >= deadline:
+            raise RuntimeError("protected sidecar PID1/socket readiness timed out")
+        time.sleep(min(0.1, _remaining_readback(deadline)))
+
+
+def _watchdog_failure_snapshot(plan, error=None):
+    """Record a fixed, nonsecret post-error observation without masking it."""
+    if WATCHDOG_FAILURE.exists() or WATCHDOG_FAILURE.is_symlink():
+        return
+    try:
+        snapshot = _pid1_fields(independent_watchdog.UNIT)
+    except Exception:
+        snapshot = {"observation": "unavailable"}
+    try:
+        job = _read_json(WATCHDOG_JOB)
+    except (OSError, ValueError, KeyError, PermissionError):
+        job = {}
+    reason = getattr(error, "status", "readiness-or-receipt-unproven")
+    if type(reason) is not str or not re.fullmatch(r"[a-z0-9-]{1,80}", reason):
+        reason = "unclassified-start-failure"
+    try:
+        completion = _read_json(WATCHDOG_JOB_COMPLETION)
+    except (OSError, ValueError, KeyError, PermissionError):
+        completion = {}
+    try:
+        _store(WATCHDOG_FAILURE, {
+            "schema": "host-deploy-fresh-watchdog-failure-v1",
+            "pid1_job_outcome": reason,
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+            "job_path": job.get("job_path"),
+            "job_record_sha256": (_sha(_file(WATCHDOG_JOB))
+                                  if job else None),
+            "job_completed_result": completion.get("job_result"),
+            "job_completion_sha256": (_sha(_file(WATCHDOG_JOB_COMPLETION))
+                                      if completion else None),
+            "pid1_snapshot": snapshot,
+            "status": "needs-selected-original-attempt-reconciliation",
+        }, exclusive=True)
+    except Exception:
+        # Preserve the *original* failure and attempted marker. Uncertain
+        # diagnostics may not authorize any restart or new installation.
+        pass
+
+
+def _sidecar_failure_snapshot(plan):
+    """Preserve first failed socket/PID1 readback without invoking a restart."""
+    if SIDECAR_FAILURE.exists() or SIDECAR_FAILURE.is_symlink():
+        return
+    try:
+        unit = _pid1_fields(sidecar.UNIT)
+    except Exception:
+        unit = {"observation": "unavailable"}
+    try:
+        attempt = _read_json(INSTALL_PATH)
+    except Exception:
+        attempt = {}
+    try:
+        _store(SIDECAR_FAILURE, {
+            "schema": "host-deploy-fresh-sidecar-start-failure-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "start_state": attempt.get("state"),
+            "job_path": attempt.get("job_path"),
+            "attempt_sha256": (_sha(_file(INSTALL_PATH))
+                               if attempt else None),
+            "pid1_snapshot": unit,
+            "socket_present": os.path.lexists(sidecar.SOCKET),
+            "status": "original-sidecar-attempt-uncertain-no-retry",
+        }, exclusive=True)
+    except Exception:
+        pass
+
+
+def inspect_watchdog_attempt():
+    """Read-only original-attempt proof for a separately protected approval."""
+    _root()
+    plan = _read_json(PLAN_PATH)
+    attempt = _read_json(WATCHDOG_ATTEMPT)
+    if (attempt.get("schema") != "host-deploy-fresh-watchdog-start-attempt-v1"
+            or attempt.get("state") != "attempted"
+            or attempt.get("plan_sha256") != plan["sha256"]
+            or attempt.get("boot_id") != _boot()
+            or attempt.get("host_id") != plan["host_id"]
+            or attempt.get("watchdog_spec_sha256") !=
+                _sha(_bytes(independent_watchdog.properties(plan)))):
+        raise RuntimeError("watchdog attempted marker differs from reviewed installation")
+    job = _read_json(WATCHDOG_JOB)
+    if (job.get("schema") != "host-deploy-fresh-watchdog-job-v1"
+            or job.get("plan_sha256") != plan["sha256"]
+            or job.get("boot_id") != _boot()
+            or job.get("attempt_sha256") != _sha(_file(WATCHDOG_ATTEMPT))
+            or not isinstance(job.get("job_path"), str)
+            or not re.fullmatch(
+                r"/org/freedesktop/systemd1/job/[1-9][0-9]*",
+                job["job_path"])):
+        raise RuntimeError("original watchdog PID1 job record uncertain")
+    # No completion record is NOT retroactive proof of a successful PID1
+    # job. Explicit operator approval may separately adopt the still-live
+    # exact original worker only when original method ACK exists.
+    completed = "unconfirmed"
+    if WATCHDOG_JOB_COMPLETION.exists() or WATCHDOG_JOB_COMPLETION.is_symlink():
+        result = _read_json(WATCHDOG_JOB_COMPLETION)
+        if (result.get("schema") !=
+                "host-deploy-fresh-watchdog-job-completion-v1"
+                or result.get("plan_sha256") != plan["sha256"]
+                or result.get("boot_id") != _boot()
+                or result.get("job_path") != job["job_path"]
+                or result.get("job_result") != "done"
+                or result.get("job_record_sha256") !=
+                    _sha(_file(WATCHDOG_JOB))):
+            raise RuntimeError("original watchdog job completion receipt uncertain")
+        completed = "recorded-done"
+    evidence = _wait_exact_watchdog(plan)
+    return {
+        "schema": "host-deploy-fresh-watchdog-reconciliation-review-v1",
+        "host_id": plan["host_id"], "boot_id": _boot(),
+        "plan_sha256": plan["sha256"],
+        "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+        "job_path": job["job_path"],
+        "job_record_sha256": _sha(_file(WATCHDOG_JOB)),
+        "original_job_completion": completed,
+        "evidence": evidence,
+        "evidence_sha256": _sha(_bytes(evidence)),
+        "status": "original-attempt-readback-only",
+        "compiler_authorized": False,
+    }
+
+
+def reconcile_install_approved():
+    """One separately approved continuation, NEVER retrying original watchdog.
+
+    Must not be called automatically by ordinary install, reboot, cron,
+    watchdog or worker RPC. A changed boot, executable, PID1 invocation,
+    previous sidecar start attempt or absent operator approval fails closed.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("reconciliation plan identity changed")
+    owner = NativeOwner()
+    owner.verify_source_and_nss(plan)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if (_sha(schedule_text().encode()) !=
+            plan["installed"]["watchdog_receipt_sha256"] or not verify_schedule()):
+        raise RuntimeError("reconciliation watchdog schedule untrusted")
+    _budget_directory_prepared(require_empty=True)
+    volume = quota.inspect()
+    project_state.inspect(plan["identity"]["controller_uid"])
+    ext = aggregate.inspect_external_native()
+    aggregate.validate_pre_activation(
+        volume, ext, host_owner_verified=owner.is_trusted_native_owner())
+    if (INSTALL_PATH.exists() or INSTALL_PATH.is_symlink()
+            or (STATE / "activation.json").exists()
+            or WATCHDOG_RECONCILED.exists()
+            or WATCHDOG_RECONCILED.is_symlink()
+            or owner.read_unit(sidecar.UNIT) is not None
+            or owner.socket_exists(sidecar.SOCKET)):
+        raise RuntimeError("prior sidecar installation/continuation is uncertain")
+    review = inspect_watchdog_attempt()
+    approved = _read_json(WATCHDOG_RECONCILE_APPROVAL)
+    expected = {
+        "schema": "host-deploy-fresh-watchdog-reconcile-approval-v1",
+        "status": "operator-approved", "allow_continue_original": True,
+        "host_id": review["host_id"], "boot_id": review["boot_id"],
+        "plan_sha256": review["plan_sha256"],
+        "attempt_sha256": review["attempt_sha256"],
+        "job_path": review["job_path"],
+        "job_record_sha256": review["job_record_sha256"],
+        "original_job_completion": review["original_job_completion"],
+        "invocation_id": review["evidence"]["InvocationID"],
+        "main_pid": review["evidence"]["MainPID"],
+        "evidence_sha256": review["evidence_sha256"],
+    }
+    if approved != expected:
+        raise PermissionError("watchdog original-attempt reconciliation lacks exact approval")
+    if inspect_watchdog_attempt() != review:
+        raise RuntimeError("watchdog PID1 evidence changed before selected continuation")
+    # Consume the one-shot approval before ANY new sidecar start attempt.
+    _store(WATCHDOG_RECONCILED, {
+        "schema": "host-deploy-fresh-watchdog-reconciled-v1",
+        "review_sha256": _sha(_bytes(review)),
+        "approval_sha256": _sha(_file(WATCHDOG_RECONCILE_APPROVAL)),
+        "plan_sha256": plan["sha256"],
+        "boot_id": _boot(), "job_path": review["job_path"],
+        "invocation_id": review["evidence"]["InvocationID"],
+        "status": "approved-original-watchdog-only",
+    }, exclusive=True)
+    os.chown(quota.MOUNT, 0, 0)
+    os.chmod(quota.MOUNT, 0o755)
+    try:
+        receipt = sidecar.install(plan, host_owner=owner)
+        _store(STATE / "activation.json", receipt, exclusive=True)
+        owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+        return receipt
+    except Exception:
+        # Original watchdog must not be started again. The sidecar has its
+        # own attempted-start record. Retain ALL protected evidence.
+        _sidecar_failure_snapshot(plan)
+        raise
+
+
+def activate_hugetlb_approved():
+    """Separately operator-approved host-owned shared-root activation.
+
+    Never called by arm, watchdog, reboot recovery, SSM or the build broker.
+    This changes PID1-owned cgroup2 root state and needs explicit host scope.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("HugeTLB plan/source binding changed")
+    native = NativeOwner()
+    native.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    _budget_directory_prepared(require_empty=True)
+    if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
+        raise RuntimeError("HugeTLB activation requires protected installed sidecar")
+    version = _command(["/usr/bin/systemctl", "--version"]).splitlines()[0].split()
+    if len(version) < 2 or version[:2] != ["systemd", "252"]:
+        raise RuntimeError("HugeTLB ancestor approval applies to systemd 252 only")
+    _slice_identity()
+    controller = _show(sidecar.UNIT)
+    pid = int(controller["MainPID"])
+    if (controller.get("ActiveState") != "active"
+            or storage_verifier._processes() != [pid]
+            or storage_verifier._cgroup(pid) !=
+               "/" + sidecar.SLICE_UNIT + "/" + sidecar.UNIT):
+        raise RuntimeError("HugeTLB activation requires exclusive fresh controller")
+    if HUGETLB_RECEIPT.exists() or HUGETLB_RECEIPT.is_symlink():
+        raise RuntimeError("HugeTLB root activation receipt already exists")
+    approval = _read_json(HUGETLB_APPROVAL)
+    receipt = hugetlb.activate_with_approval(
+        approval, host_id=plan["installed"]["host_id"],
+        boot_id=_boot(), plan_sha256=plan["sha256"])
+    # This durable receipt does not authorize compiler or canary admission.
+    _store(HUGETLB_RECEIPT, receipt, exclusive=True)
+    native.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    return {"status": "hugetlb-prerequisite-needs-native-review",
+            "boot_id": _boot(), "plan_sha256": plan["sha256"]}
+
+
+def arm_approved():
+    """Durably arm one admitted new request AFTER kernel + cgroup acceptance."""
+    _root()
+    plan = _read_json(PLAN_PATH)
+    a = _admission(plan)
+    # Source admission is bound to the reviewed gate-producing root-control
+    # successor. Old installed bytes cannot arm an idle lane, since those
+    # builds could still start workers without a protected claim.
+    canary_owner.require_gate_source(plan)
+    owner = NativeOwner()
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if _read_json(STATE / "activation.json")["plan_sha256"] != plan["sha256"]:
+        raise RuntimeError("sidecar activation not authenticated")
+    if (not verify_schedule()
+            or _show(CRON_SERVICE).get("ActiveState") != "active"
+            or _show(independent_watchdog.UNIT).get("ActiveState") != "active"
+            or _show(independent_watchdog.UNIT).get("MainPID") in (None, "", "0")
+            or _read_json(WATCHDOG_ATTEMPT).get("plan_sha256") != plan["sha256"]):
+        raise RuntimeError("independent PID1 and reboot-persistent watchdog missing")
+    _budget_directory_prepared(require_empty=True)
+    if owner.observe_unit(sidecar.UNIT)["active"] is not True:
+        raise RuntimeError("sidecar not active")
+    _slice_identity()
+    current = quota.inspect()
+    project_state.inspect(plan["identity"]["controller_uid"])
+    if current["capacity_bytes"] > aggregate.BUILD_BYTES:
+        raise RuntimeError("kernel disk quota not active")
+    # Seal the dedicated parent slice's HugeTLB controller before any
+    # worker or canary can be granted. memory.max does NOT charge HugeTLB;
+    # seal fails closed if cgroup limits, controller or empty PID census drift.
+    controller_pid = int(_show(sidecar.UNIT)["MainPID"])
+    hugetlb.recheck(_read_json(HUGETLB_RECEIPT),
+                    host_id=plan["installed"]["host_id"],
+                    boot_id=_boot(), plan_sha256=plan["sha256"])
+    storage_verifier.seal_hugetlb_before_arm(controller_pid)
+    # Every root-owned journal, metadata artifact and new process log must
+    # have independently verified kernel backing in the OTHER bounded pool.
+    # Root-owned native verifier rechecks the exact host, boot, source bytes,
+    # Project binds, journal and EVERY currently live worker/descendant.
+    # This is not a caller-provided list of cleared writer classes.
+    owner.verify_empty_storage(plan, a)
+    # Install an independent PID1-monotonic overall deadline BEFORE
+    # recording the new budget start. Its deadline is strictly earlier
+    # than the allowed 21,600-second span even if both watchdogs die.
+    if DEADLINE_ATTEMPT.exists() or DEADLINE_ATTEMPT.is_symlink():
+        raise RuntimeError("hard deadline has already been attempted")
+    if _show(hard_deadline.UNIT).get("LoadState") != "not-found":
+        raise RuntimeError("hard deadline transient timer already exists")
+    # Root-owned, fsynced timer intent must carry the exact same
+    # cancellation identity even if the accounting filesystem fills before
+    # the independent kernel timer fires.
+    cancellation_id = budget._digest({
+        "schema": budget.SCHEMA, "request_id": a["request_id"],
+        "host_id": a["host_id"], "project_root": plan["project_root"],
+    })
+    _store(DEADLINE_ATTEMPT, {
+        "schema": "host-deploy-fresh-hard-deadline-attempt-v1",
+        "plan_sha256": plan["sha256"], "request_id": a["request_id"],
+        "host_id": a["host_id"], "project_root": plan["project_root"],
+        "cancellation_id": cancellation_id,
+        "boot_id": _boot(), "state": "attempted",
+    }, exclusive=True)
+    hard_deadline.start(plan)
+    timer = _show(hard_deadline.UNIT)
+    if (timer.get("LoadState") != "loaded"
+            or timer.get("ActiveState") != "active"
+            or timer.get("Unit") != hard_deadline.STOP_UNIT
+            or not timer.get("NextElapseUSecMonotonic", "").isdigit()
+            or int(timer["NextElapseUSecMonotonic"]) <= int(time.monotonic()*1e6)):
+        raise RuntimeError("independent kernel-backed deadline timer unverified")
+    x = budget.begin(
+        request_id=a["request_id"], host_id=a["host_id"],
+        project_root=plan["project_root"], boot_id=_boot(),
+        now_seconds=int(time.time()), monotonic_seconds=int(time.monotonic()),
+        used_bytes=current["used_bytes"], sidecar_plan_sha256=plan["sha256"],
+        monitor_receipt_sha256=plan["installed"]["watchdog_receipt_sha256"])
+    budget.write_once(BUDGET_DIR, x)
+    # Starting any worker remains denied until a separate reviewed grant.
+    canary_owner.arm_empty(sys.modules[__name__], owner, plan, a)
+    return {"request_id": x["request_id"], "status": x["status"],
+            "budget_scope": aggregate.BUDGET_SCOPE,
+            "deadline_seconds": x["deadline_seconds"],
+            "dedicated_build_capacity_bytes": current["capacity_bytes"],
+            "dedicated_total_reserved_bytes": aggregate.TOTAL_BYTES}
+
+
+def prepare_journal():
+    """One-shot exact journal bind backing before any fresh PID1 activation."""
+    _root()
+    return journal_backing.install_binds_before_activation()
+
+
+def prepare_external():
+    """Privileged once-only 2-GiB accounting pool BEFORE operator stages plan.
+
+    Does not allocate the compiler volume, start services, mutate shared
+    controller, or authorize compilation.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("protected native owner required")
+    available = os.statvfs(aggregate.EXTERNAL_MOUNT.rsplit("/", 1)[0])
+    remaining = available.f_bavail * available.f_frsize
+    return aggregate.provision_external(
+        available_after_reservations_bytes=remaining)
+
+
+def inspect_native_worker_storage():
+    """Fixed read-only kernel witness: NO admission, no mutation, no dispatch."""
+    _root()
+    plan = _read_json(PLAN_PATH)
+    admission = _admission(plan)
+    return NativeOwner().verify_live_storage(plan, admission)
+
+
+def inspect_host_write_surfaces():
+    """One fixed, read-only native diagnostic, safe BEFORE any pool allocation.
+
+    This diagnostic cannot prepare storage, arm a compiler, or mutate PID1.
+    Unlike the protected owner mutations, it must not require mounted
+    owner-state: Work needs evidence before choosing the disk topology.
+    """
+    if os.geteuid() != 0 or Path("/proc/1/comm").read_text().strip() != "systemd":
+        raise PermissionError("native root with PID1 systemd required")
+    return host_write_audit.inspect()
+
+
+def main():
+    # Fixed root-owned cron entrypoint; no user supplied Project/request or
+    # executable. No remote dispatch, no generic root shell.
+    if len(sys.argv) != 2 or sys.argv[1] not in ("prepare-external", "prepare-work", "prepare-journal", "install", "activate-hugetlb", "arm",
+        "watch", "watch-loop", "hard-stop", "recover",
+        "grant-canary", "grant-compiler", "observe-canary-live",
+        "observe-canary-terminal", "accept-canary",
+        "observe-compiler-live", "observe-compiler-terminal",
+        "accept-compiler-clean",
+        "inspect-host-write-surfaces", "inspect-native-worker-storage",
+        "inspect-watchdog-attempt", "reconcile-install"):
+        raise SystemExit("use only fixed root-owned watch or recover entrypoint")
+    if sys.argv[1] == "grant-canary":
+        canary_owner.grant(sys.modules[__name__], NativeOwner(), kind="canary")
+    elif sys.argv[1] == "grant-compiler":
+        canary_owner.grant(sys.modules[__name__], NativeOwner(), kind="compiler")
+    elif sys.argv[1] == "observe-canary-live":
+        canary_owner.observe_live(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "observe-canary-terminal":
+        canary_owner.observe_terminal(sys.modules[__name__])
+    elif sys.argv[1] == "accept-canary":
+        canary_owner.accept_canary(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "observe-compiler-live":
+        canary_owner.observe_compiler_live(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "observe-compiler-terminal":
+        canary_owner.observe_compiler_terminal(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "accept-compiler-clean":
+        canary_owner.accept_compiler_cleanup(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "inspect-watchdog-attempt":
+        sys.stdout.write(_bytes(inspect_watchdog_attempt()).decode("ascii"))
+    elif sys.argv[1] == "reconcile-install":
+        reconcile_install_approved()
+    elif sys.argv[1] == "inspect-native-worker-storage":
+        sys.stdout.write(_bytes(inspect_native_worker_storage()).decode("ascii"))
+    elif sys.argv[1] == "inspect-host-write-surfaces":
+        sys.stdout.write(_bytes(inspect_host_write_surfaces()).decode("ascii"))
+    elif sys.argv[1] == "prepare-external":
+        prepare_external()
+    elif sys.argv[1] == "prepare-work":
+        prepare_work()
+    elif sys.argv[1] == "prepare-journal":
+        prepare_journal()
+    elif sys.argv[1] == "recover":
+        recover()
+    elif sys.argv[1] == "install":
+        install_approved()
+    elif sys.argv[1] == "activate-hugetlb":
+        activate_hugetlb_approved()
+    elif sys.argv[1] == "arm":
+        arm_approved()
+    elif sys.argv[1] == "watch-loop":
+        watch_loop()
+    elif sys.argv[1] == "hard-stop":
+        hard_stop()
+    else:
+        watch()
+
+
+if __name__ == "__main__":
+    main()
