@@ -13,7 +13,7 @@ from .certificate_renewal import REQUEST_ID, RenewalBlocked
 # result reader. It does NOT attest a live installed checkout: Work must
 # independently verify the deployed box-control source and broker UID.
 ISSUER_LIFECYCLE_BOX_CONTROL_REPOSITORY = "zog144/box-control"
-ISSUER_LIFECYCLE_BOX_CONTROL_REVISION = "a3e939b7a22ef6277ae9712961ffbd5a18ccac39"
+ISSUER_LIFECYCLE_BOX_CONTROL_REVISION = "9111606eef306292d70fd4d941eeb73f48b33ff1"
 ISSUER_LIFECYCLE_CLIENT_MODULE = (
     "box-control/src/zog/box_control/issuer_lifecycle_client.py"
 )
@@ -28,15 +28,17 @@ class SelectedIssuerController:
     direct_selected_launch = True
 
     def __init__(self, socket_path, *, controller_uid=None, client_factory=None):
+        # The independently installed root authority, never the RPC response,
+        # chooses the expected server UID. Never construct an unpinned client.
+        if (type(controller_uid) is not int or
+                not 1000 <= controller_uid < 2**31):
+            raise RenewalBlocked("issuer-controller-uid-required")
         if client_factory is None:
             from zog.box_control.issuer_lifecycle_client import IssuerLifecycleClient
             client_factory = IssuerLifecycleClient
-        if controller_uid is not None and (type(controller_uid) is not int or controller_uid <= 0):
-            raise RenewalBlocked("issuer-controller-uid-invalid")
         self._controller_uid = controller_uid
         try:
-            self._client = (client_factory(socket_path, controller_uid=controller_uid)
-                            if controller_uid is not None else client_factory(socket_path))
+            self._client = client_factory(socket_path, controller_uid=controller_uid)
         except Exception:
             raise RenewalBlocked("issuer-lifecycle-broker-unavailable") from None
 
@@ -102,8 +104,6 @@ class SelectedIssuerController:
 
     def inspect_issuer_result(self, request_id):
         """Read only the controller's authenticated saved inspect invocation."""
-        if self._controller_uid is None:
-            raise RenewalBlocked("issuer-inspection-controller-uid-required")
         if type(request_id) is not str or not REQUEST_ID.fullmatch(request_id):
             raise RenewalBlocked("issuer-lifecycle-request-id-invalid")
         try:
