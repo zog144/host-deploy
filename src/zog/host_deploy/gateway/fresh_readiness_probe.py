@@ -44,6 +44,8 @@ def _verified_listener(path, pid, uid, gid):
         _bad()
     target = "socket:[" + inodes[0] + "]"
     fds = Path("/proc") / str(pid) / "fd"
+    if not fds.is_dir():
+        _bad()
     if not any(os.readlink(fds / fd) == target
                for fd in os.listdir(fds)
                if fd.isdecimal() and (fds / fd).is_symlink()):
