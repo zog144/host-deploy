@@ -265,7 +265,8 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     assert calls.index("watchdog-attempt") < calls.index("pid1-watchdog")
     assert calls.index("pid1-watchdog") < calls.index("pid1-start")
     assert calls.index("kernel-quota") < calls.index("pid1-start")
-    assert calls.index("pid1-start") < calls.index("activation-checkpoint")
+    assert calls.index("pid1-start") < len(calls)-1
+    assert calls[-1] == "activation-checkpoint"
     assert calls.count("old-baseline") == 4
 
 
