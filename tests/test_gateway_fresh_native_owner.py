@@ -216,6 +216,8 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
                             calls.append("pid1-watchdog"),
                             {"job_path": "/org/freedesktop/systemd1/job/42",
                              "job_result": "done"})[-1])
+    monkeypatch.setattr(owner.independent_watchdog, "properties",
+                        lambda plan: {"ExecStart": ["fixed-watch"], "Environment": []})
     monkeypatch.setattr(owner, "_wait_exact_watchdog", lambda plan: {
         "LoadState": "loaded", "ActiveState": "active",
         "MainPID": "123", "InvocationID": "a"*32,
