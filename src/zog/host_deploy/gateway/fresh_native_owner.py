@@ -136,7 +136,7 @@ def _command(args, *, timeout=15):
                                                 "LC_ALL": "C"}).stdout.strip()
 
 
-def _show(unit):
+def _show(unit, *, timeout=15):
     known = {sidecar.UNIT, independent_watchdog.UNIT,
              hard_deadline.UNIT, SLICE_UNIT, CRON_SERVICE,
              journal_backing.JOURNAL_SERVICE, *journal_backing.JOURNAL_SOCKETS,
@@ -152,7 +152,7 @@ def _show(unit):
     raw = _command(["/usr/bin/systemctl", "show", unit,
                     "--property=LoadState,ActiveState,MainPID,InvocationID,"
                     "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic,LogNamespace,"
-                    "Type,SubState,Restart,NRestarts"])
+                    "Type,SubState,Restart,NRestarts"], timeout=timeout)
     return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
 
 
@@ -346,8 +346,8 @@ class NativeOwner:
             raise RuntimeError("installation selected another native boot")
         self.validate_old_baseline(installed["legacy_baseline_sha256"])
 
-    def read_unit(self, unit):
-        data = _show(unit)
+    def read_unit(self, unit, *, timeout=15):
+        data = _show(unit, timeout=timeout)
         return None if data.get("LoadState") == "not-found" else data
 
     def socket_exists(self, socket):
@@ -384,38 +384,18 @@ class NativeOwner:
             unit, mode, properties, on_ack=accepted)
 
     def observe_unit(self, unit):
+        # Three full bounded PID1 + live proc/socket/registration readbacks.
+        # The returned role and Project are taken from the exact reviewed
+        # protected plan only AFTER its process environment was attested.
         data = _wait_exact_sidecar_readiness(self, unit)
-        if data is None:
-            raise RuntimeError("sidecar PID1 entry is absent after start")
-        values = dict(item.split("=", 1) for item in data.get(
-            "Environment", "").split() if "=" in item)
         expected = _read_json(PLAN_PATH)
-        fd = os.stat(sidecar.SOCKET, follow_symlinks=False)
-        if (not stat.S_ISSOCK(fd.st_mode) or fd.st_uid != 0
-                or fd.st_gid != expected["identity"]["controller_gid"]
-                or stat.S_IMODE(fd.st_mode) != 0o660):
-            raise RuntimeError("unexpected fresh controller socket ownership")
-        pid = data.get("MainPID", "")
-        if (not pid.isdecimal() or int(pid) < 2
-                or data.get("LogNamespace") != sidecar.LOG_NAMESPACE):
-            raise RuntimeError("fresh controller PID/log namespace not attested")
-        registration_source = Path(sidecar.REGISTRATION_SOURCE)
-        registration_visible = Path("/proc") / pid / "root" / sidecar.REGISTRATION_DEST.lstrip("/")
-        # Actual controller PID's mount namespace must see the NEW bounded
-        # registration inode, never the shared historical host directory.
-        original = registration_source.lstat()
-        seen = registration_visible.stat()
-        if (not stat.S_ISDIR(original.st_mode)
-                or not stat.S_ISDIR(seen.st_mode)
-                or original.st_dev != seen.st_dev
-                or original.st_ino != seen.st_ino):
-            raise RuntimeError("root-control imported build root escaped 30GiB pool")
+        if sidecar.review_plan(expected["identity"], expected["installed"]) != expected:
+            raise RuntimeError("sidecar plan changed after native readiness")
         return {
-            "unit": unit, "active": data.get("ActiveState") == "active",
-            "invocation_id": data.get("InvocationID"),
-            "project_root": values.get("ROOT_CONTROL_AUTHORIZED_PROJECT"),
-            "socket": values.get("ROOT_CONTROL_SOCKET"),
-            "role": values.get("ROOT_CONTROL_ROLE"),
+            "unit": unit, "active": True,
+            "invocation_id": data["InvocationID"],
+            "project_root": expected["project_root"],
+            "socket": sidecar.SOCKET, "role": sidecar.ROLE,
         }
 
     def verify_live_storage(self, plan, admission):
@@ -976,102 +956,168 @@ def install_approved():
         raise
 
 
-def _pid1_fields(unit):
-    """Nonsecret bounded diagnostic snapshot; never export process environment."""
-    data = _show(unit)
+def _remaining_readback(deadline):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise RuntimeError("protected PID1 readiness deadline expired")
+    return left
+
+
+def _pid1_fields(unit, *, deadline=None):
+    """systemctl show with the REMAINING time, not a fresh 15s timeout."""
+    data = _show(unit, timeout=_remaining_readback(deadline)
+                 if deadline is not None else 15)
+    if deadline is not None:
+        _remaining_readback(deadline)
     return {key: data.get(key, "") for key in (
         "LoadState", "ActiveState", "SubState", "MainPID", "InvocationID",
         "ControlGroup", "Type", "Restart", "NRestarts", "LogNamespace")}
 
 
-def _watchdog_pid1_evidence(plan):
-    """Only exact PID1+proc watcher executable, original cgroup and environment."""
-    observed = _pid1_fields(independent_watchdog.UNIT)
+def _bounded_proc_probe(requirement, deadline):
+    """One isolated, killable read-only child bounds ALL procfs/socket I/O."""
+    remaining = _remaining_readback(deadline)
+    script = Path(__file__).with_name("fresh_readiness_probe.py")
+    # The owner first verifies its installed source tree and wheel RECORD.
+    # Do not send /proc environment or secrets back to the parent.
+    response = subprocess.run(
+        [sys.executable, "-I", "-B", str(script)],
+        input=json.dumps(requirement, sort_keys=True, separators=(",", ":")),
+        capture_output=True, text=True, timeout=remaining,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    _remaining_readback(deadline)
+    if response.returncode != 0 or len(response.stdout) > 2048:
+        raise RuntimeError("protected PID1 native proc/socket witness unverified")
+    result = json.loads(response.stdout)
+    if (type(result) is not dict or
+            result.get("status") != "exact-process-verified" or
+            result.get("pid") != str(requirement["pid"]) or
+            result.get("cgroup") != requirement["cgroup"] or
+            result.get("kind") != requirement["kind"] or
+            result.get("socket_listener_verified") is not (
+                requirement["kind"] == "sidecar")):
+        raise RuntimeError("native proc/socket witness differs from PID1")
+    return result
+
+
+def _exact_pid1_process(data, *, unit, restart, log_namespace, cgroup):
+    pid = data["MainPID"]
+    if (data["LoadState"] != "loaded" or data["ActiveState"] != "active"
+            or data["SubState"] != "running" or data["Type"] != "exec"
+            or data["Restart"] != restart or data["NRestarts"] != "0"
+            or data["LogNamespace"] != log_namespace
+            or data["ControlGroup"] != cgroup
+            or not pid.isdecimal() or not 1 < int(pid) < 2**31
+            or not re.fullmatch(r"[0-9a-f]{32}", data["InvocationID"])):
+        raise RuntimeError("protected PID1 process identity not established")
+    return int(pid)
+
+
+def _watchdog_pid1_evidence(plan, *, deadline=None):
+    if deadline is None:
+        deadline = time.monotonic() + START_READINESS_SECONDS
+    observed = _pid1_fields(independent_watchdog.UNIT, deadline=deadline)
     props = independent_watchdog.properties(plan)
-    pid_string = observed["MainPID"]
-    if (observed["LoadState"] != "loaded"
-            or observed["ActiveState"] != "active"
-            or observed["SubState"] != "running"
-            or observed["Type"] != "exec"
-            or observed["Restart"] != "always"
-            or observed["NRestarts"] != "0"
-            or observed["LogNamespace"] != props["LogNamespace"]
-            or observed["ControlGroup"] != (
-                "/system.slice/" + independent_watchdog.UNIT)
-            or not pid_string.isdecimal() or int(pid_string) < 2
-            or not re.fullmatch(r"[0-9a-f]{32}", observed["InvocationID"])):
-        raise RuntimeError("independent PID1 watchdog identity not established")
-    pid = int(pid_string)
-    actual_argv = Path("/proc") / str(pid) / "cmdline"
-    actual_env = Path("/proc") / str(pid) / "environ"
-    expected = props["ExecStart"]
-    if actual_argv.read_bytes().split(b"\0")[:-1] != [
-            arg.encode("utf-8") for arg in expected]:
-        raise RuntimeError("independent watchdog PID argv differs")
-    env_items = actual_env.read_bytes().split(b"\0")
-    env_items = [entry.decode("utf-8") for entry in env_items if entry]
-    actual_map = dict(item.split("=", 1) for item in env_items if "=" in item)
-    for item in props["Environment"]:
-        name, value = item.split("=", 1)
-        if actual_map.get(name) != value:
-            raise RuntimeError("independent watchdog process environment differs")
-    exe = Path("/proc") / str(pid) / "exe"
-    native_binary = os.stat(expected[0])
-    running_binary = os.stat(exe)
-    if (native_binary.st_dev, native_binary.st_ino) != (
-            running_binary.st_dev, running_binary.st_ino):
-        raise RuntimeError("independent watchdog executable identity differs")
-    cgroup = (Path("/proc") / str(pid) / "cgroup").read_text().splitlines()
-    if cgroup != ["0::" + observed["ControlGroup"]]:
-        raise RuntimeError("independent watchdog process escaped original cgroup")
+    pid = _exact_pid1_process(
+        observed, unit=independent_watchdog.UNIT, restart="always",
+        log_namespace=props["LogNamespace"],
+        cgroup="/system.slice/" + independent_watchdog.UNIT)
+    _bounded_proc_probe({
+        "kind": "watchdog", "pid": pid, "argv": props["ExecStart"],
+        "env": props["Environment"], "cgroup": observed["ControlGroup"],
+        "socket": None, "socket_gid": None, "registration": None,
+    }, deadline)
+    _remaining_readback(deadline)
+    return observed
+
+
+def _sidecar_pid1_evidence(plan, *, deadline):
+    observed = _pid1_fields(sidecar.UNIT, deadline=deadline)
+    if observed["LoadState"] == "not-found":
+        raise RuntimeError("protected sidecar absent from PID1")
+    if observed["ActiveState"] == "failed":
+        raise RuntimeError("protected sidecar PID1 startup failed")
+    pid = _exact_pid1_process(
+        observed, unit=sidecar.UNIT, restart="no",
+        log_namespace=sidecar.LOG_NAMESPACE,
+        cgroup="/" + sidecar.SLICE_UNIT + "/" + sidecar.UNIT)
+    _bounded_proc_probe({
+        "kind": "sidecar", "pid": pid,
+        "argv": plan["properties"]["ExecStart"],
+        "env": plan["properties"]["Environment"],
+        "cgroup": observed["ControlGroup"], "socket": sidecar.SOCKET,
+        "socket_gid": plan["identity"]["controller_gid"],
+        "registration": [sidecar.REGISTRATION_SOURCE,
+                         sidecar.REGISTRATION_DEST],
+    }, deadline)
+    _remaining_readback(deadline)
     return observed
 
 
 def _wait_exact_watchdog(plan):
     deadline = time.monotonic() + START_READINESS_SECONDS
     stable = None
+    count = 0
     while True:
         try:
-            evidence = _watchdog_pid1_evidence(plan)
-        except (RuntimeError, OSError, UnicodeError):
+            evidence = _watchdog_pid1_evidence(plan, deadline=deadline)
+            _remaining_readback(deadline)
+        except (RuntimeError, OSError, UnicodeError, ValueError,
+                subprocess.TimeoutExpired):
+            # A slow readback may never turn into a late success.
+            if time.monotonic() >= deadline:
+                raise RuntimeError("independent PID1 watchdog activation unproven")
             evidence = None
         if evidence is not None:
-            # Require consecutive exact PID1 and /proc observations, not a
-            # momentary active flag during an unfinished transient startup.
             if stable == evidence:
+                count += 1
+            else:
+                stable, count = evidence, 1
+            # Recheck the same process after stable readiness; THIRD full
+            # PID1/proc witness is required before returning success.
+            if count >= 3:
+                _remaining_readback(deadline)
                 return evidence
-            stable = evidence
         else:
-            stable = None
+            stable, count = None, 0
         if time.monotonic() >= deadline:
             raise RuntimeError("independent PID1 watchdog activation unproven")
-        time.sleep(0.1)
+        time.sleep(min(0.1, _remaining_readback(deadline)))
 
 
 def _wait_exact_sidecar_readiness(owner, unit):
-    """Bounded socket+PID1 wait; never call StartTransientUnit again."""
+    """Single 15s budget for 3 complete PID1/proc/listener/mount witnesses."""
     if unit != sidecar.UNIT:
         raise RuntimeError("unreviewed sidecar readiness target")
     deadline = time.monotonic() + START_READINESS_SECONDS
-    last_identity = None
+    plan = _read_json(PLAN_PATH)
+    _remaining_readback(deadline)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("sidecar readiness plan differs from installed source")
+    stable = None
+    count = 0
     while True:
-        data = owner.read_unit(unit)
-        if data is not None and data.get("ActiveState") == "active":
-            identity = (data.get("InvocationID"), data.get("MainPID"))
-            if (identity[0] and identity[1] not in ("", "0", None)
-                    and owner.socket_exists(sidecar.SOCKET)):
-                if identity == last_identity:
-                    return data
-                last_identity = identity
+        try:
+            data = _sidecar_pid1_evidence(plan, deadline=deadline)
+            _remaining_readback(deadline)
+        except (RuntimeError, OSError, UnicodeError, ValueError,
+                subprocess.TimeoutExpired):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("protected sidecar PID1/socket readiness timed out")
+            data = None
+        if data is not None:
+            if data == stable:
+                count += 1
             else:
-                last_identity = None
-        elif data is not None and data.get("ActiveState") == "failed":
-            raise RuntimeError("protected sidecar PID1 startup failed")
+                stable, count = data, 1
+            if count >= 3:
+                _remaining_readback(deadline)
+                return data
         else:
-            last_identity = None
+            stable, count = None, 0
         if time.monotonic() >= deadline:
             raise RuntimeError("protected sidecar PID1/socket readiness timed out")
-        time.sleep(0.1)
+        time.sleep(min(0.1, _remaining_readback(deadline)))
 
 
 def _watchdog_failure_snapshot(plan, error=None):
