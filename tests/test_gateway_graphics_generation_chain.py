@@ -207,7 +207,7 @@ def test_root_native_operation_denies_nonroot_before_trusted_read(monkeypatch):
     seen = []
     monkeypatch.setattr(chain.os, "geteuid", lambda: 1000)
     with pytest.raises(PermissionError):
-        chain.install_next_native(
+        chain._install_with_attesters(
             previous_task=chain.TASKS[0],
             attest_native_owner=lambda _: seen.append("owner"),
             attest_accepted_predecessor=lambda *args: seen.append("producer"))
