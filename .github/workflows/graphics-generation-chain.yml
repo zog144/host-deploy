@@ -1,9 +1,9 @@
 name: Bounded graphical generation chaining - source only
 on:
   push:
-    branches: [regular/graphical-generation-chain-20261031]
+    branches: [regular/graphical-generation-chain-20261031, regular/graphical-composition-binding-20261031]
   pull_request:
-    branches: [regular/first-graphics-catalogue-20261031, regular/toolchain-gateway-20261019]
+    branches: [regular/graphical-generation-chain-20261031, regular/first-graphics-catalogue-20261031, regular/toolchain-gateway-20261019]
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/image-build
-          ref: efb7110006cafeb170da5c2606dccfeb17b6055b
+          ref: 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
           path: dependencies/image-build
           persist-credentials: false
       - name: Setup Python
@@ -35,7 +35,7 @@ jobs:
           root = Path("dependencies/image-build")
           assert subprocess.check_output(
             ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-          ).strip() == "efb7110006cafeb170da5c2606dccfeb17b6055b"
+          ).strip() == "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
           pin = root / "project/pins/2026-10-01/commit-pin.py"
           assert hashlib.sha256(pin.read_bytes()).hexdigest() == (
             "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"

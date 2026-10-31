@@ -7,7 +7,7 @@ on host-deploy draft PR #2.
 
 ## Exact verified source inputs
 
-- **Image-build source:** `efb7110006cafeb170da5c2606dccfeb17b6055b`,
+- **Image-build source:** `1f07e83dbd80dacb9bed0d6494c697375f0e26cd`,
   verified as immutable GitHub source. This is a *source revision*, never
   a self-hosted rootfs/generation ID.
 - **October pin:** `project/pins/2026-10-01/commit-pin.py`, original
