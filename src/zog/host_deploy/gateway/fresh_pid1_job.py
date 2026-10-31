@@ -7,6 +7,8 @@ blocking wait without a deadline or reliance on a job that systemd unloaded.
 """
 import asyncio
 import re
+import signal
+import threading
 
 MAX_WAIT_SECONDS = 20
 _JOB = re.compile(r"/org/freedesktop/systemd1/job/[1-9][0-9]*\Z")
@@ -16,6 +18,33 @@ class JobNotProven(RuntimeError):
     def __init__(self, status="uncertain"):
         super().__init__("protected PID1 job " + status)
         self.status = status
+
+
+def _durable_ack_with_deadline(callback, job_path, remaining):
+    """Interrupt an overdue fsync without abandoning it on another thread.
+
+    An interrupted/partial protected receipt is UNCERTAIN and never permits a
+    second StartTransientUnit. Linux SIGALRM cannot preempt an uninterruptible
+    kernel D-state; an external native watchdog is still needed for that case.
+    """
+    if remaining <= 0:
+        raise JobNotProven("ack-after-deadline")
+    if (threading.current_thread() is not threading.main_thread()
+            or not hasattr(signal, "setitimer")
+            or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0)):
+        raise JobNotProven("ack-deadline-ownership-unverified")
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def expired(signum, frame):
+        raise JobNotProven("ack-timeout")
+
+    signal.signal(signal.SIGALRM, expired)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+        callback(job_path)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 async def start_and_wait(bus, message, unit, *, on_ack=None,
@@ -102,9 +131,8 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
         # This callback must fsync the job identity before accepting a
         # completion. A lost ack remains a durable attempted-start marker.
         if on_ack is not None:
-            # fsync is synchronous and intentionally not abandoned on another
-            # thread: a late durable ACK is uncertain, NEVER a second start.
-            on_ack(job_path)
+            _durable_ack_with_deadline(
+                on_ack, job_path, deadline - loop.time())
         if loop.time() >= deadline:
             raise JobNotProven("ack-after-deadline")
         while job_path not in received:
