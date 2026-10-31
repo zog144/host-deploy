@@ -186,10 +186,11 @@ def test_two_independent_proofs_required_before_verified_renewal(tmp_path, monke
     assert ctrl.issued == 1
     certificate["operation_updated_at"] = (
         datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat()
-    good = timer.run(config, controller=ctrl, issuer_checker=inspector,
-                     issuer_observer=authenticated)
-    assert good["phase"] == "verified"
-    assert good["publication"] == "unchanged-no-delivery"
+    # Two matching advisory proofs still cannot impersonate a separately
+    # UID-pinned, InvocationID-bound selected inspect-result.
+    with pytest.raises(RenewalBlocked, match="broker-not-authenticated"):
+        timer.run(config, controller=ctrl, issuer_checker=inspector,
+                  issuer_observer=authenticated)
     assert ctrl.issued == 1
 
 
