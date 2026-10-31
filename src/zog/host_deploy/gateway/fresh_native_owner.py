@@ -43,6 +43,7 @@ BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
 WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
 WATCHDOG_JOB = STATE / "independent-watchdog-job.json"
+WATCHDOG_JOB_COMPLETION = STATE / "independent-watchdog-job-completion.json"
 WATCHDOG_RESULT = STATE / "independent-watchdog-result.json"
 WATCHDOG_FAILURE = STATE / "independent-watchdog-failure.json"
 WATCHDOG_RECONCILE_APPROVAL = STATE / "independent-watchdog-reconcile-approval.json"
@@ -936,6 +937,18 @@ def install_approved():
                 "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
             }, exclusive=True)
         job = independent_watchdog.start(plan, on_ack=accepted)
+        if (job.get("job_result") != "done"
+                or job.get("job_path") != _read_json(WATCHDOG_JOB)["job_path"]):
+            raise RuntimeError("watchdog PID1 completion identity unverified")
+        # PID1 job completion does not yet prove active process/socket.
+        # Persist its actual result FIRST so a later readiness race is
+        # diagnosable without guessing from an eventually active unit.
+        _store(WATCHDOG_JOB_COMPLETION, {
+            "schema": "host-deploy-fresh-watchdog-job-completion-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "job_path": job["job_path"], "job_result": job["job_result"],
+            "job_record_sha256": _sha(_file(WATCHDOG_JOB)),
+        }, exclusive=True)
         evidence = _wait_exact_watchdog(plan)
         _store(WATCHDOG_RESULT, {
             "schema": "host-deploy-fresh-watchdog-result-v1",
@@ -1077,6 +1090,10 @@ def _watchdog_failure_snapshot(plan, error=None):
     if type(reason) is not str or not re.fullmatch(r"[a-z0-9-]{1,80}", reason):
         reason = "unclassified-start-failure"
     try:
+        completion = _read_json(WATCHDOG_JOB_COMPLETION)
+    except (OSError, ValueError, KeyError, PermissionError):
+        completion = {}
+    try:
         _store(WATCHDOG_FAILURE, {
             "schema": "host-deploy-fresh-watchdog-failure-v1",
             "pid1_job_outcome": reason,
@@ -1085,6 +1102,9 @@ def _watchdog_failure_snapshot(plan, error=None):
             "job_path": job.get("job_path"),
             "job_record_sha256": (_sha(_file(WATCHDOG_JOB))
                                   if job else None),
+            "job_completed_result": completion.get("job_result"),
+            "job_completion_sha256": (_sha(_file(WATCHDOG_JOB_COMPLETION))
+                                      if completion else None),
             "pid1_snapshot": snapshot,
             "status": "needs-selected-original-attempt-reconciliation",
         }, exclusive=True)
