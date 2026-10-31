@@ -146,9 +146,9 @@ def test_root_only_native_install_cannot_be_called_by_regular_chat(monkeypatch):
         raise AssertionError("native proof bypass")
     with pytest.raises(PermissionError):
         graphics.install_native(
-            approval=a, read_managed_lane=forbidden,
+            read_managed_lane=forbidden,
             read_accepted_base=forbidden, read_installed_pin=forbidden,
-            attest_installed_source=forbidden)
+            attest_installed_source=forbidden, attest_host_identity=forbidden)
     assert not invoked
 
 
@@ -163,3 +163,27 @@ def test_no_automatic_native_install_or_compiler_dispatch():
     assert '"compiler_authorized": False' in source
     assert "attest_installed_source(SOURCE)" in source
     assert "read_accepted_base(" in source
+
+
+def test_host_attestation_blocks_root_install_before_catalogue_write(monkeypatch):
+    from zog.host_deploy.gateway import fresh_budget_guard, fresh_native_owner
+    a, l, b, r = example()
+    seen=[]
+    monkeypatch.setattr(graphics.os,"geteuid",lambda: 0)
+    monkeypatch.setattr(graphics.quota,"inspect",
+                        lambda: {"capacity_bytes": 30*1024**3 - 4096})
+    monkeypatch.setattr(graphics.aggregate,"inspect_external_pool_native",
+                        lambda: {"limit_bytes": 2*1024**3 - 4096,
+                                 "mount_verified":True,
+                                 "allocation_verified":True,
+                                 "budget_scope":graphics.aggregate.BUDGET_SCOPE})
+    monkeypatch.setattr(fresh_budget_guard,"_protected_root",lambda p: True)
+    monkeypatch.setattr(fresh_native_owner,"_read_json",lambda p:a)
+    with pytest.raises(graphics.GraphicalCatalogueBlocked):
+        graphics.install_native(
+            read_managed_lane=lambda _: seen.append("lane"),
+            read_accepted_base=lambda _: seen.append("base"),
+            read_installed_pin=lambda *_: seen.append("pin"),
+            attest_installed_source=lambda _:True,
+            attest_host_identity=lambda *_:False)
+    assert seen == []
