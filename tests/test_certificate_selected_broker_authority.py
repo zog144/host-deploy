@@ -15,7 +15,7 @@ def identities():
     from zog.host_deploy.certificate_issuer_lifecycle import ISSUER_LIFECYCLE_BOX_CONTROL_REVISION
     record = {
         "schema": authority.SCHEMA,
-        "host_id": "host-owner",
+        "host_id": "55555555-5555-4555-8555-555555555555",
         "installation_id": "11111111-1111-4111-8111-111111111111",
         "state_volume_id": "22222222-2222-4222-8222-222222222222",
         "certificate_id": "station-web", "hostnames": ["candidate.example.org"],
