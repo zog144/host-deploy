@@ -122,10 +122,10 @@ def verify(policy, inspection, observer, binding=None, *, root_reader=None):
             or not record["consumer_binding_sha256"].startswith("sha256:")
             or not _HEX.fullmatch(record["consumer_binding_sha256"][7:])):
         _deny()
-    for key in ("host_id", "certificate_id"):
-        if type(record[key]) is not str or not _ID.fullmatch(record[key]):
-            _deny()
-    for key in ("installation_id", "state_volume_id"):
+    if (type(record["certificate_id"]) is not str
+            or not _ID.fullmatch(record["certificate_id"])):
+        _deny()
+    for key in ("host_id", "installation_id", "state_volume_id"):
         if type(record[key]) is not str or not _UUID.fullmatch(record[key]):
             _deny()
     if (type(record["storage_id"]) is not str
