@@ -106,7 +106,8 @@ def test_lost_method_reply_does_not_retry():
 
 
 def test_sidecar_readiness_requires_three_full_stable_witnesses(monkeypatch):
-    plan = {"identity": {}, "installed": {}}
+    plan = {"identity": {}, "installed": {},
+            "project_root": "/home/owner/fresh-cross-bootstrap-oct25"}
     monkeypatch.setattr(owner, "_read_json", lambda _: plan)
     monkeypatch.setattr(owner.sidecar, "review_plan", lambda *_: plan)
     evidence = {"MainPID": "41", "InvocationID": "a"*32,
@@ -120,7 +121,8 @@ def test_sidecar_readiness_requires_three_full_stable_witnesses(monkeypatch):
     monkeypatch.setattr(owner, "_sidecar_pid1_evidence", probe)
     monkeypatch.setattr(owner.time, "sleep", lambda _: None)
     got = owner._wait_exact_sidecar_readiness(object(), owner.sidecar.UNIT)
-    assert got == evidence
+    assert got["MainPID"] == evidence["MainPID"]
+    assert got["VerifiedProjectRoot"] == plan["project_root"]
     assert observed == []
 
 
