@@ -165,8 +165,11 @@ def install_native(*, read_managed_lane, read_accepted_base,
         _fail()
     work = quota.inspect()
     external = aggregate.inspect_external_pool_native()
-    if (work["capacity_bytes"] != 30 * 1024**3
-            or external["limit_bytes"] > 2 * 1024**3
+    # Capacity in ext4 is slightly smaller than its exact 30/2-GiB
+    # preallocated backing image. Both inspectors separately verify the
+    # full fixed backing lengths and st_blocks on the real host.
+    if (not 0 < work["capacity_bytes"] <= 30 * 1024**3
+            or not 0 < external["limit_bytes"] <= 2 * 1024**3
             or external.get("mount_verified") is not True
             or external.get("allocation_verified") is not True
             or external.get("budget_scope") != aggregate.BUDGET_SCOPE):
@@ -188,8 +191,8 @@ def install_native(*, read_managed_lane, read_accepted_base,
         accepted_base=read_accepted_base(a["accepted_base_generation_id"]),
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
         actual_reservation={
-            "work_bytes": work["capacity_bytes"],
-            "external_bytes": 2 * 1024**3,
+            "work_bytes": quota.BUILD_BYTES,
+            "external_bytes": aggregate.EXTERNAL_BYTES,
             "scope": external["budget_scope"],
         })
     # Existing root-owned catalogue loader verifies every ancestor is
