@@ -5,6 +5,8 @@ This does not exercise native admission, real compiler, SSM or AWS.
 """
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import stat
@@ -37,6 +39,20 @@ def protected_chain(monkeypatch):
     monkeypatch.setattr(first, "CATALOGUE", store / "fonts-catalogue")
     monkeypatch.setattr(first, "RECEIPT", store / "fonts-receipt")
     monkeypatch.setattr(chain, "first", first)
+    # Ephemeral /root-only owner-fencing fixture, never installed native state.
+    from zog.host_deploy.gateway import fresh_canary_owner, fresh_native_owner
+    monkeypatch.setattr(fresh_native_owner, "_boot", lambda: "fixture-boot")
+    @contextmanager
+    def same_worker_claim_lock(_owner):
+        lock = os.open(store / "native-admission.lock",
+                       os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            os.close(lock)
+    monkeypatch.setattr(fresh_canary_owner, "locked", same_worker_claim_lock)
     from zog.host_deploy.gateway import fresh_quota_volume, fresh_aggregate_disk
     monkeypatch.setattr(fresh_quota_volume, "inspect",
                         lambda: {"capacity_bytes": 30*1024**3 - 4096})
