@@ -25,6 +25,40 @@ def _bytes(path, size=65536):
     return data
 
 
+def _verified_listener(path, pid, uid, gid):
+    """Kernel LISTEN socket inode + PID fd + SO_PEERCRED, not pathname inode."""
+    st = os.stat(path, follow_symlinks=False)
+    if (not stat.S_ISSOCK(st.st_mode) or st.st_uid != 0
+        or st.st_gid != requirement["socket_gid"]
+        or stat.S_IMODE(st.st_mode) != 0o660):
+        _bad()
+    # Filesystem pathname inode != kernel socket fd inode. Verify the
+    # kernel's LISTENING AF_UNIX stream entry and the exact PID's open
+    # socket:[kernel-inode] FD, not equality with pathname st_ino.
+    inodes = []
+    for line in _bytes("/proc/net/unix", 1024 * 1024).decode(
+        "utf-8").splitlines()[1:]:
+        cols = line.split(maxsplit=7)
+        if (len(cols) == 8 and cols[7] == path
+            and cols[4] == "0001"
+            and int(cols[3], 16) & 0x00010000):
+        inodes.append(cols[6])
+    if len(inodes) != 1:
+        _bad()
+    target = "socket:[" + inodes[0] + "]"
+    fds = root / "fd"
+    if not any(os.readlink(fds / fd) == target
+           for fd in os.listdir(fds)
+           if fd.isdecimal() and (fds / fd).is_symlink()):
+        _bad()
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        sock.connect(path)
+        creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+        peer_pid, peer_uid, peer_gid = struct.unpack("3i", creds)
+        if (peer_pid, peer_uid, peer_gid) != (pid, 0, 0):
+        _bad()
+
 def inspect(requirement):
     if (type(requirement) is not dict
             or set(requirement) != {"kind", "pid", "argv", "env", "cgroup",
@@ -87,38 +121,8 @@ def inspect(requirement):
             or attributes.get("Pid", "").strip() != str(pid)):
         _bad()
     if kind == "sidecar":
-        path = requirement["socket"]
-        st = os.stat(path, follow_symlinks=False)
-        if (not stat.S_ISSOCK(st.st_mode) or st.st_uid != 0
-                or st.st_gid != requirement["socket_gid"]
-                or stat.S_IMODE(st.st_mode) != 0o660):
-            _bad()
-        # Filesystem pathname inode != kernel socket fd inode. Verify the
-        # kernel's LISTENING AF_UNIX stream entry and the exact PID's open
-        # socket:[kernel-inode] FD, not equality with pathname st_ino.
-        inodes = []
-        for line in _bytes("/proc/net/unix", 1024 * 1024).decode(
-                "utf-8").splitlines()[1:]:
-            cols = line.split(maxsplit=7)
-            if (len(cols) == 8 and cols[7] == path
-                    and cols[4] == "0001"
-                    and int(cols[3], 16) & 0x00010000):
-                inodes.append(cols[6])
-        if len(inodes) != 1:
-            _bad()
-        target = "socket:[" + inodes[0] + "]"
-        fds = root / "fd"
-        if not any(os.readlink(fds / fd) == target
-                   for fd in os.listdir(fds)
-                   if fd.isdecimal() and (fds / fd).is_symlink()):
-            _bad()
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.25)
-            sock.connect(path)
-            creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
-            peer_pid, peer_uid, peer_gid = struct.unpack("3i", creds)
-            if (peer_pid, peer_uid, peer_gid) != (pid, 0, 0):
-                _bad()
+        _verified_listener(requirement["socket"], pid, 0,
+                           requirement["socket_gid"])
         origin, destination = requirement["registration"]
         source_stat = os.stat(origin, follow_symlinks=False)
         child_stat = (root / "root" / destination.lstrip("/")).stat()
