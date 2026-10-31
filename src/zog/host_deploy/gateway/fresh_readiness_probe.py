@@ -18,11 +18,21 @@ def _bad():
 
 
 def _bytes(path, size=65536):
+    # procfs seq_file reads may return a short PAGE-sized chunk even when
+    # more rows remain. Read to EOF with a strict cap; a single raw read
+    # could miss a legitimate late /proc/net/unix listening row.
+    chunks = []
+    used = 0
     with open(path, "rb", buffering=0) as source:
-        data = source.read(size + 1)
-    if len(data) > size:
-        _bad()
-    return data
+        while True:
+            chunk = source.read(min(8192, size + 1 - used))
+            if not chunk:
+                break
+            used += len(chunk)
+            if used > size:
+                _bad()
+            chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _verified_listener(path, pid, uid, gid):
