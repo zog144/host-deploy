@@ -958,6 +958,235 @@ def install_approved():
     return receipt
 
 
+def _pid1_fields(unit):
+    """Nonsecret bounded diagnostic snapshot; never export process environment."""
+    data = _show(unit)
+    return {key: data.get(key, "") for key in (
+        "LoadState", "ActiveState", "SubState", "MainPID", "InvocationID",
+        "ControlGroup", "Type", "Restart", "NRestarts", "LogNamespace")}
+
+
+def _watchdog_pid1_evidence(plan):
+    """Only exact PID1+proc watcher executable, original cgroup and environment."""
+    observed = _pid1_fields(independent_watchdog.UNIT)
+    props = independent_watchdog.properties(plan)
+    pid_string = observed["MainPID"]
+    if (observed["LoadState"] != "loaded"
+            or observed["ActiveState"] != "active"
+            or observed["SubState"] != "running"
+            or observed["Type"] != "exec"
+            or observed["Restart"] != "always"
+            or observed["NRestarts"] != "0"
+            or observed["LogNamespace"] != props["LogNamespace"]
+            or observed["ControlGroup"] != (
+                "/system.slice/" + independent_watchdog.UNIT)
+            or not pid_string.isdecimal() or int(pid_string) < 2
+            or not re.fullmatch(r"[0-9a-f]{32}", observed["InvocationID"])):
+        raise RuntimeError("independent PID1 watchdog identity not established")
+    pid = int(pid_string)
+    actual_argv = Path("/proc") / str(pid) / "cmdline"
+    actual_env = Path("/proc") / str(pid) / "environ"
+    expected = props["ExecStart"]
+    if actual_argv.read_bytes().split(b"\\0")[:-1] != [
+            arg.encode("utf-8") for arg in expected]:
+        raise RuntimeError("independent watchdog PID argv differs")
+    env_items = actual_env.read_bytes().split(b"\\0")
+    env_items = [entry.decode("utf-8") for entry in env_items if entry]
+    actual_map = dict(item.split("=", 1) for item in env_items if "=" in item)
+    for item in props["Environment"]:
+        name, value = item.split("=", 1)
+        if actual_map.get(name) != value:
+            raise RuntimeError("independent watchdog process environment differs")
+    exe = Path("/proc") / str(pid) / "exe"
+    native_binary = os.stat(expected[0])
+    running_binary = os.stat(exe)
+    if (native_binary.st_dev, native_binary.st_ino) != (
+            running_binary.st_dev, running_binary.st_ino):
+        raise RuntimeError("independent watchdog executable identity differs")
+    cgroup = (Path("/proc") / str(pid) / "cgroup").read_text().splitlines()
+    if cgroup != ["0::" + observed["ControlGroup"]]:
+        raise RuntimeError("independent watchdog process escaped original cgroup")
+    return observed
+
+
+def _wait_exact_watchdog(plan):
+    deadline = time.monotonic() + START_READINESS_SECONDS
+    stable = None
+    while True:
+        try:
+            evidence = _watchdog_pid1_evidence(plan)
+        except (RuntimeError, OSError, UnicodeError):
+            evidence = None
+        if evidence is not None:
+            # Require consecutive exact PID1 and /proc observations, not a
+            # momentary active flag during an unfinished transient startup.
+            if stable == evidence:
+                return evidence
+            stable = evidence
+        else:
+            stable = None
+        if time.monotonic() >= deadline:
+            raise RuntimeError("independent PID1 watchdog activation unproven")
+        time.sleep(0.1)
+
+
+def _wait_exact_sidecar_readiness(owner, unit):
+    """Bounded socket+PID1 wait; never call StartTransientUnit again."""
+    if unit != sidecar.UNIT:
+        raise RuntimeError("unreviewed sidecar readiness target")
+    deadline = time.monotonic() + START_READINESS_SECONDS
+    last_identity = None
+    while True:
+        data = owner.read_unit(unit)
+        if data is not None and data.get("ActiveState") == "active":
+            identity = (data.get("InvocationID"), data.get("MainPID"))
+            if (identity[0] and identity[1] not in ("", "0", None)
+                    and owner.socket_exists(sidecar.SOCKET)):
+                if identity == last_identity:
+                    return data
+                last_identity = identity
+            else:
+                last_identity = None
+        elif data is not None and data.get("ActiveState") == "failed":
+            raise RuntimeError("protected sidecar PID1 startup failed")
+        else:
+            last_identity = None
+        if time.monotonic() >= deadline:
+            raise RuntimeError("protected sidecar PID1/socket readiness timed out")
+        time.sleep(0.1)
+
+
+def _watchdog_failure_snapshot(plan):
+    """Record a fixed, nonsecret post-error observation without masking it."""
+    if WATCHDOG_FAILURE.exists() or WATCHDOG_FAILURE.is_symlink():
+        return
+    try:
+        snapshot = _pid1_fields(independent_watchdog.UNIT)
+    except Exception:
+        snapshot = {"observation": "unavailable"}
+    try:
+        job = _read_json(WATCHDOG_JOB)
+    except (OSError, ValueError, KeyError, PermissionError):
+        job = {}
+    try:
+        _store(WATCHDOG_FAILURE, {
+            "schema": "host-deploy-fresh-watchdog-failure-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+            "job_path": job.get("job_path"),
+            "job_record_sha256": (_sha(_file(WATCHDOG_JOB))
+                                  if job else None),
+            "pid1_snapshot": snapshot,
+            "status": "needs-selected-original-attempt-reconciliation",
+        }, exclusive=True)
+    except Exception:
+        # Preserve the *original* failure and attempted marker. Uncertain
+        # diagnostics may not authorize any restart or new installation.
+        pass
+
+
+def inspect_watchdog_attempt():
+    """Read-only original-attempt proof for a separately protected approval."""
+    _root()
+    plan = _read_json(PLAN_PATH)
+    attempt = _read_json(WATCHDOG_ATTEMPT)
+    if (attempt.get("schema") != "host-deploy-fresh-watchdog-start-attempt-v1"
+            or attempt.get("state") != "attempted"
+            or attempt.get("plan_sha256") != plan["sha256"]
+            or attempt.get("boot_id") != _boot()
+            or attempt.get("host_id") != plan["host_id"]
+            or attempt.get("watchdog_spec_sha256") !=
+                _sha(_bytes(independent_watchdog.properties(plan)))):
+        raise RuntimeError("watchdog attempted marker differs from reviewed installation")
+    job = _read_json(WATCHDOG_JOB)
+    if (job.get("plan_sha256") != plan["sha256"]
+            or job.get("boot_id") != _boot()
+            or job.get("attempt_sha256") != _sha(_file(WATCHDOG_ATTEMPT))):
+        raise RuntimeError("original watchdog PID1 job record uncertain")
+    evidence = _wait_exact_watchdog(plan)
+    return {
+        "schema": "host-deploy-fresh-watchdog-reconciliation-review-v1",
+        "host_id": plan["host_id"], "boot_id": _boot(),
+        "plan_sha256": plan["sha256"],
+        "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+        "job_path": job["job_path"],
+        "job_record_sha256": _sha(_file(WATCHDOG_JOB)),
+        "evidence": evidence,
+        "evidence_sha256": _sha(_bytes(evidence)),
+        "status": "original-attempt-readback-only",
+        "compiler_authorized": False,
+    }
+
+
+def reconcile_install_approved():
+    """One separately approved continuation, NEVER retrying original watchdog.
+
+    Must not be called automatically by ordinary install, reboot, cron,
+    watchdog or worker RPC. A changed boot, executable, PID1 invocation,
+    previous sidecar start attempt or absent operator approval fails closed.
+    """
+    _root()
+    plan = _read_json(PLAN_PATH)
+    if sidecar.review_plan(plan["identity"], plan["installed"]) != plan:
+        raise RuntimeError("reconciliation plan identity changed")
+    owner = NativeOwner()
+    owner.verify_source_and_nss(plan)
+    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+    if (_sha(schedule_text().encode()) !=
+            plan["installed"]["watchdog_receipt_sha256"] or not verify_schedule()):
+        raise RuntimeError("reconciliation watchdog schedule untrusted")
+    _budget_directory_prepared(require_empty=True)
+    volume = quota.inspect()
+    project_state.inspect(plan["identity"]["controller_uid"])
+    ext = aggregate.inspect_external_native()
+    aggregate.validate_pre_activation(
+        volume, ext, host_owner_verified=owner.is_trusted_native_owner())
+    if (INSTALL_PATH.exists() or INSTALL_PATH.is_symlink()
+            or (STATE / "activation.json").exists()
+            or WATCHDOG_RECONCILED.exists()
+            or WATCHDOG_RECONCILED.is_symlink()
+            or owner.read_unit(sidecar.UNIT) is not None
+            or owner.socket_exists(sidecar.SOCKET)):
+        raise RuntimeError("prior sidecar installation/continuation is uncertain")
+    review = inspect_watchdog_attempt()
+    approved = _read_json(WATCHDOG_RECONCILE_APPROVAL)
+    expected = {
+        "schema": "host-deploy-fresh-watchdog-reconcile-approval-v1",
+        "status": "operator-approved", "allow_continue_original": True,
+        "host_id": review["host_id"], "boot_id": review["boot_id"],
+        "plan_sha256": review["plan_sha256"],
+        "attempt_sha256": review["attempt_sha256"],
+        "job_path": review["job_path"],
+        "job_record_sha256": review["job_record_sha256"],
+        "invocation_id": review["evidence"]["InvocationID"],
+        "main_pid": review["evidence"]["MainPID"],
+        "evidence_sha256": review["evidence_sha256"],
+    }
+    if approved != expected:
+        raise PermissionError("watchdog original-attempt reconciliation lacks exact approval")
+    # Consume the one-shot approval before ANY new sidecar start attempt.
+    _store(WATCHDOG_RECONCILED, {
+        "schema": "host-deploy-fresh-watchdog-reconciled-v1",
+        "review_sha256": _sha(_bytes(review)),
+        "approval_sha256": _sha(_file(WATCHDOG_RECONCILE_APPROVAL)),
+        "plan_sha256": plan["sha256"],
+        "boot_id": _boot(), "job_path": review["job_path"],
+        "invocation_id": review["evidence"]["InvocationID"],
+        "status": "approved-original-watchdog-only",
+    }, exclusive=True)
+    os.chown(quota.MOUNT, 0, 0)
+    os.chmod(quota.MOUNT, 0o755)
+    try:
+        receipt = sidecar.install(plan, host_owner=owner)
+        _store(STATE / "activation.json", receipt, exclusive=True)
+        owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+        return receipt
+    except Exception:
+        # Original watchdog must not be started again. The sidecar has its
+        # own attempted-start record. Retain ALL protected evidence.
+        raise
+
+
 def activate_hugetlb_approved():
     """Separately operator-approved host-owned shared-root activation.
 
