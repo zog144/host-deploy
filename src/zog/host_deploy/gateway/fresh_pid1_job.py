@@ -29,11 +29,14 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
     deadline = loop.time() + timeout
     received = {}
     arrived = asyncio.Event()
+    trusted_sender = None
 
     def handler(msg):
         if (msg.message_type == MessageType.SIGNAL
                 and msg.interface == "org.freedesktop.systemd1.Manager"
                 and msg.member == "JobRemoved"
+                and trusted_sender is not None
+                and msg.sender == trusted_sender
                 and msg.path == "/org/freedesktop/systemd1"
                 and msg.signature == "uoss" and len(msg.body) == 4):
             _, path, name, result = msg.body
@@ -67,6 +70,15 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
             signature="s", body=[rule]))
         if match.signature != "":
             raise JobNotProven("signal-match-unconfirmed")
+        owner = await call(Message(
+            destination="org.freedesktop.DBus", path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus", member="GetNameOwner",
+            signature="s", body=["org.freedesktop.systemd1"]))
+        if (owner.signature != "s" or len(owner.body) != 1
+                or type(owner.body[0]) is not str
+                or not re.fullmatch(r":[0-9]+(?:\\.[0-9]+)+", owner.body[0])):
+            raise JobNotProven("PID1-unique-sender-unconfirmed")
+        trusted_sender = owner.body[0]
         subscribed = await call(Message(
             destination="org.freedesktop.systemd1",
             path="/org/freedesktop/systemd1",
