@@ -181,6 +181,7 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     monkeypatch.setattr(owner.budget, "_protected_root", lambda path: Path(path))
     monkeypatch.setattr(owner, "_root", lambda: None)
     plan = {
+        "host_id": "test-host",
         "sha256": "sha256:"+"a"*64, "identity": {
             "build_uid": 24302, "build_gid": 24302,
             "controller_uid": 24301,
