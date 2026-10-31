@@ -3,6 +3,7 @@ import pytest
 
 from zog.host_deploy.gateway import consumer
 from zog.host_deploy.gateway import graphics_generation_chain as chain
+from zog.host_deploy.gateway import graphics_chain_export as export
 from test_gateway_graphics_generation_chain import (
     scenario, evidence, FONTS, LANE,
 )
@@ -37,8 +38,8 @@ def runner(tmp_path, monkeypatch, *, task=chain.TASKS[1], duplicate=False,
     monkeypatch.setattr(consumer, "_reserve_reviewed_advance",
                         lambda *_: True)
     monkeypatch.setattr(
-        chain, "load_installed_step",
-        lambda selected, *, policy_sha256: (
+        export, "load_selected_step",
+        lambda root, pin, selected, policy_sha256: (
             (cat, digest) if selected == chain.TASKS[1] else
             (base, chain._hash(base))))
     prepared = []
@@ -56,6 +57,8 @@ def runner(tmp_path, monkeypatch, *, task=chain.TASKS[1], duplicate=False,
     obj.approved_catalogue_identity = chain._hash(base)
     obj.approved_catalogue_path = None
     obj.approved_graphical_chain_policy_sha256 = APPROVAL_DIGEST
+    obj.approved_graphical_export_pin_path = "/etc/zog/host-deploy/graphical-peer.json"
+    obj.graphical_export_directory = str(tmp_path / "exports")
     return obj, xcb, prepared, invoked
 
 
@@ -107,9 +110,9 @@ def test_missing_verified_successor_blocks_before_preparation(
         tmp_path, monkeypatch):
     obj, xcb, prepared, invoked = runner(tmp_path, monkeypatch)
     def missing(*args, **kwargs):
-        raise chain.ChainBlocked("no native accepted predecessor")
-    monkeypatch.setattr(chain, "load_installed_step", missing)
-    with pytest.raises(chain.ChainBlocked):
+        raise export.GraphicalExportBlocked("no authenticated compiler Host")
+    monkeypatch.setattr(export, "load_selected_step", missing)
+    with pytest.raises(export.GraphicalExportBlocked):
         obj._advance_one_reviewed()
     assert not prepared and not invoked
 
