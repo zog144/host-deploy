@@ -14,7 +14,7 @@ Only three tasks are allowed, in this order:
 
 There is no automatic submission, fourth step, manual base-generation override, wildcard recipe, replacement attempt, background compiler retry or project/lane fallback.
 
-Source remains image-build b0f53dbdec0e88b9b37feb5317398db3d20507dd. Monthly pin remains the original October 1 source, SHA-256 d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36.
+Source remains image-build efb7110006cafeb170da5c2606dccfeb17b6055b. Monthly pin remains the original October 1 source, SHA-256 d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36.
 
 The operator must first approve a canonical root-owned 0600 graphics-generation-chain-policy-v1.json in protected owner-state on the dedicated external 2-GiB volume. It binds exact Host ID, installation, lane owner, Project, original fonts catalogue and install-receipt digests, accepted base generation and receipt, producer source/pin, exact three task names, the fixed 30+2 GiB reservation, and the 21,600-second execution limit. The approval is not a GitHub request field or a replaceable user-supplied JSON file.
 
@@ -22,7 +22,9 @@ The operator must first approve a canonical root-owned 0600 graphics-generation-
 
 The pure resolve_successor function consumes an immutable previous catalogue/receipt and a normalized accepted-generation record. Source-level structure checks require exact previous task/request/pipeline, previous catalogue SHA, selected input, source/pin/Host/lane/installation, a distinct 64-hex accepted image output, canonical manifest, producer and acceptance receipt hashes, success with zero missing evidence and uncertainty=false.
 
-The normalized record is only trustworthy when supplied by a separately installed, independently reviewed native image-build attester. A pipeline.inspect status of completed is not itself accepted-generation evidence. The attester must independently reopen the genuine image-build generation catalogue/manifest, canonical provenance, verification and pipeline records, check input/output relationships and file identities, and reject stale/released/rolled-back/incomplete/foreign results. No synthetic fixture, GitHub comment, source hash or arbitrary 64-hex value may become authority.
+The normalized record is only trustworthy when supplied by the exact installed image-build attester at source `efb7110006cafeb170da5c2606dccfeb17b6055b`. A pipeline.inspect status of completed is not itself accepted-generation evidence. The producer reader independently reopens the genuine image-build generation catalogue/manifest, canonical build-record provenance, source/recipe pin snapshot, installed verification and durable pipeline/remote-operation records. It rejects stale/released/rolled-back/incomplete/foreign results. Its `acceptance_receipt_sha256` is the existing canonical build-record generation-root record ID, and `producer_receipt_sha256` is the SHA-256 of the exact retained completed producer result bytes; neither is a synthesized acceptance file.
+
+Host-deploy's `graphics_generation_attester.installed_capability(...)` is the protected consumer adapter. It reads the root-owned chain policy itself, derives exactly one admitted/completed predecessor request from the durable gateway ledger, revalidates the frozen current lane/dispatch and clean exact source/build-record/controller checkouts using read-only Git commands, then invokes `python -B -s -m zog.image_build.graphical_generation_acceptance` through the lane's frozen Python/PYTHONPATH. Trusted context is sent on stdin. No output generation, recipe path, shell command or context file is accepted from the GitHub request.
 
 The root-only install_next_native operation validates protected file ancestry and exact mode-0600 records, demands the local trusted Host/source/boot/exclusive-idle attester, rereads existing 30-GiB build and 2-GiB external reservation inspectors and invokes the trusted generation-attester capability. It creates only one new immutable successor catalogue and receipt using O_EXCL, fsync, hash reread and no replacement/auto-repair on partial failure. Existing catalogues remain immutable. This is not a compiler authorization.
 
@@ -32,7 +34,9 @@ The supervisor still requires the original reviewed fonts-catalogue file plus ex
 
 On each admitted, allowlisted graphical build.submit, load_installed_step rechecks the initial root approval and accepted predecessor step-file lineage, and returns a concrete schema-2 task catalogue with an exact immutable generation selection. The gateway durably freezes that per-request catalogue hash, checks it again before advancing, and refuses multiple admitted request identities for the same task/lane. Other generic tasks retain the old behaviour.
 
-Consequently the Regular chat can submit fonts, then XCB after genuinely accepted fonts output and protected promotion, then X11 after genuinely accepted XCB output and promotion — without manually repinning the selected generation each time. The operator's original source/policy pin is never silently replaced. Any missing predecessor means no new stage.
+The acceptance-reader side of the chain is now source-complete: a Regular-chat fonts request can eventually be bound to genuine producer acceptance without a manually supplied generation ID, and the protected owner can derive the corresponding successor catalogue.
+
+**Execution composition remains a separate blocker.** At image-build `efb7110006cafeb170da5c2606dccfeb17b6055b`, an ordinary `mode=image` pipeline still requires its `selection` to be a promoted second-stage `kind=toolchain`. The current successor catalogue would select the accepted fonts **image** as the XCB selection (and the accepted XCB image as the X11 selection), which the image-build execution guard correctly rejects. Therefore this PR MUST NOT yet claim that XCB/X11 automatic compilation is runnable. The next source correction must define a bounded predecessor-composition contract that layers accepted graphical image output onto the immutable toolchain base without weakening the toolchain-kind guard or allowing caller-selected generations.
 
 ## Unresolved native gates — NO-GO
 
@@ -42,7 +46,7 @@ Before native enablement: independently attest exact installed image-build/root-
 
 ## Next owner handoffs
 
-image-build Regular: produce an independent canonical accepted-generation attester for genuine pipeline/generation/manifest/build-record/verification records. Check that the normalized accepted-generation fields match actual producer contracts; correct the adapter/source contract before native integration.
+image-build Regular: accepted-generation attester is implemented at `efb7110006cafeb170da5c2606dccfeb17b6055b`; preserve it read-only. Next image-build/host-deploy source task is the bounded predecessor-composition contract required to consume an accepted image predecessor while retaining the immutable toolchain base.
 
 root-control Regular: independently review the protected native attester trust model, root-only 0600/O_EXCL safety, state filesystem and symlink provenance, peer process/UID/GID, one-time policy pin, no sibling/retained-Host mutation, duplicate suppression and lifetime/boot constraints.
 
