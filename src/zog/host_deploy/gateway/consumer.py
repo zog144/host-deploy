@@ -592,7 +592,26 @@ def main(argv=None):
             parser.error("reviewed generic catalogue requires explicit opt-in")
         catalogue = None
         digest = None
-        if arguments.advance_reviewed_generic:
+        if arguments.approved_graphical_chain_policy_sha256:
+            if not arguments.advance_reviewed_generic:
+                parser.error("graphical chaining requires explicit generic opt-in")
+            if not (arguments.approved_graphical_export_pin_path
+                    and arguments.graphical_export_directory
+                    and arguments.approved_task_catalogue_sha256):
+                parser.error("graphical chain requires signed remote first catalogue and digest")
+            # A command-center has no filesystem access to compiler root STATE.
+            # Re-read the independently pinned signed Host export on each poll.
+            from .graphics_generation_chain import TASKS
+            from .graphics_chain_export import load_selected_step
+            catalogue, digest = load_selected_step(
+                arguments.graphical_export_directory,
+                arguments.approved_graphical_export_pin_path,
+                TASKS[0], arguments.approved_graphical_chain_policy_sha256)
+            if digest != arguments.approved_task_catalogue_sha256:
+                parser.error("remote fonts digest differs from operator approval")
+            if arguments.approved_task_catalogue:
+                parser.error("compiler root catalogue path forbidden for remote gateway")
+        elif arguments.advance_reviewed_generic:
             if not (arguments.approved_task_catalogue and
                     arguments.approved_task_catalogue_sha256):
                 parser.error("opt-in requires catalogue path and reviewed SHA-256")
@@ -600,20 +619,6 @@ def main(argv=None):
                 arguments.approved_task_catalogue, require_root_owned=True)
             if digest != arguments.approved_task_catalogue_sha256:
                 parser.error("reviewed catalogue digest differs from supervisor policy")
-        if arguments.approved_graphical_chain_policy_sha256:
-            if not arguments.advance_reviewed_generic:
-                parser.error("graphical chaining requires explicit generic opt-in")
-            if not (arguments.approved_graphical_export_pin_path
-                    and arguments.graphical_export_directory):
-                parser.error("graphical chain needs authenticated remote Host export")
-            from .graphics_generation_chain import TASKS
-            from .graphics_chain_export import load_selected_step
-            first_chain, first_hash = load_selected_step(
-                arguments.graphical_export_directory,
-                arguments.approved_graphical_export_pin_path,
-                TASKS[0], arguments.approved_graphical_chain_policy_sha256)
-            if first_chain != catalogue or first_hash != digest:
-                parser.error("graphical chain does not match approved fonts")
         if (arguments.approved_toolchain_task or
                 arguments.approved_toolchain_task_sha256) and not arguments.advance_reviewed_toolchain:
             parser.error("typed toolchain definition requires explicit supervisor opt-in")
