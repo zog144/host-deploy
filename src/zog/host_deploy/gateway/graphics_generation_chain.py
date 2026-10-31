@@ -332,3 +332,87 @@ def install_next_native(*, previous_task, attest_native_owner,
     finally:
         os.close(fd)
     return receipt
+
+
+def load_installed_step(task, *, policy_sha256):
+    """Read only immutable root-installed step; no generation supplied by caller.
+
+    A supervisor may opt into ONE pinned chain-policy hash on startup.
+    Successor catalogues can then be used for separate admitted GitHub
+    requests without operator/manual generation-specific repins. This does
+    not authorize any request, producer execution, or native worker launch.
+    """
+    if task not in TASKS or not _valid_hex(policy_sha256, EXACT_SHA):
+        _deny()
+    from .fresh_budget_guard import _protected_root
+    _protected_root(STORE)
+    policy = validate_policy(_read_locked(POLICY))
+    if _hash(policy) != policy_sha256:
+        _deny()
+
+    catalogue, first_digest = task_catalogue.load(
+        first.CATALOGUE, require_root_owned=True)
+    receipt = _read_locked(first.RECEIPT)
+    if first_digest != receipt.get("catalogue_sha256"):
+        _deny()
+    _previous(policy, TASKS[0], catalogue, receipt)
+    if task == TASKS[0]:
+        return catalogue, first_digest
+
+    previous_digest = first_digest
+    for successor in TASKS[1:]:
+        path, receipt_path = FILES[successor]
+        current, digest = task_catalogue.load(
+            path, require_root_owned=True)
+        installed = _read_locked(receipt_path)
+        expected_keys = {
+            "schema", "task", "catalogue_sha256",
+            "selection_generation_id", "chain_policy_sha256",
+            "previous_catalogue_sha256", "predecessor_evidence_sha256",
+            "predecessor_generation_manifest_sha256",
+            "predecessor_acceptance_receipt_sha256",
+            "predecessor_request_id", "predecessor_pipeline_id",
+            "source_revision", "monthly_pin_identity", "host_id",
+            "installation_id", "lane", "lane_owner", "compiler_authorized",
+            "status",
+        }
+        if (type(installed) is not dict or set(installed) != expected_keys
+                or set(current["tasks"]) != {successor}
+                or installed["schema"] != RECEIPT
+                or installed["task"] != successor
+                or installed["catalogue_sha256"] != digest
+                or installed["previous_catalogue_sha256"] != previous_digest
+                or installed["chain_policy_sha256"] != policy_sha256
+                or installed["selection_generation_id"] !=
+                    current["tasks"][successor]["arguments"]["selection"]
+                or installed["source_revision"] != first.SOURCE
+                or installed["monthly_pin_identity"] !=
+                    policy["monthly_pin_identity"]
+                or installed["host_id"] != policy["host_id"]
+                or installed["installation_id"] != policy["installation_id"]
+                or installed["lane"] != policy["lane"]
+                or installed["lane_owner"] != policy["lane_owner"]
+                or installed["status"] != "installed-not-compiler-admission"
+                or installed["compiler_authorized"] is not False):
+            _deny()
+        for key in ("predecessor_evidence_sha256",
+                    "predecessor_generation_manifest_sha256",
+                    "predecessor_acceptance_receipt_sha256"):
+            if not _valid_hex(installed[key], EXACT_SHA):
+                _deny()
+        for key in ("predecessor_request_id", "predecessor_pipeline_id"):
+            if not _valid_hex(installed[key], EXACT_ID):
+                _deny()
+        spec = current["tasks"][successor]
+        if (spec["source_revision"] != first.SOURCE
+                or spec["source_repository"] != first.REPOSITORY
+                or spec["monthly_pin_identity"] != policy["monthly_pin_identity"]
+                or spec["monthly_pin_repository_path"] != first.PIN_PATH
+                or spec["pin_date"] != first.PIN_DATE
+                or spec["lane"] != policy["lane"]
+                or spec["lane_owner"] != policy["lane_owner"]):
+            _deny()
+        if task == successor:
+            return current, digest
+        previous_digest = digest
+    _deny()
