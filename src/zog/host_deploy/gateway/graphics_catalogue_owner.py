@@ -27,6 +27,7 @@ APPROVAL_SCHEMA = "host-deploy-graphics-catalogue-approval-v1"
 EVIDENCE_SCHEMA = "image-build-self-hosted-base-acceptance-v1"
 RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v1"
 STORE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
+APPROVAL = STORE / "graphics-foundation-approval-v1.json"
 CATALOGUE = STORE / "graphics-foundation-catalogue-v1.json"
 RECEIPT = STORE / "graphics-foundation-catalogue-receipt-v1.json"
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -147,8 +148,9 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
             "compiler_authorized": False}
 
 
-def install_native(*, approval, read_managed_lane, read_accepted_base,
-                   read_installed_pin, attest_installed_source):
+def install_native(*, read_managed_lane, read_accepted_base,
+                   read_installed_pin, attest_installed_source,
+                   attest_host_identity):
     """Root owner only; one non-replacing installation into existing STATE.
 
     The four reader capabilities MUST be independently installed privileged
@@ -171,11 +173,16 @@ def install_native(*, approval, read_managed_lane, read_accepted_base,
         _fail()
     root = STORE
     from .fresh_budget_guard import _protected_root
+    from .fresh_native_owner import _read_json
     _protected_root(root)
+    # Approval MUST be a preinstalled 0600 root-only record in protected
+    # external STATE; no caller-selected plan/approval/path is supported.
+    a = _checked_approval(_read_json(APPROVAL))
+    if attest_host_identity(a["host_id"], a["installation_id"]) is not True:
+        _fail()
     for target in (CATALOGUE, RECEIPT):
         if target.exists() or target.is_symlink():
             _fail()
-    a = _checked_approval(approval)
     candidate = prepare(
         approval=a, lane_record=read_managed_lane(a["lane"]),
         accepted_base=read_accepted_base(a["accepted_base_generation_id"]),
