@@ -139,9 +139,8 @@ def test_pinned_controller_adapter_accepts_inspect_but_no_general_commands():
     with pytest.raises(RenewalBlocked, match="uid-required"):
         SelectedIssuerController(
             "/run/zog/certify-lifecycle.sock",
-            client_factory=lambda _: Broker("/run/zog/certify-lifecycle.sock",
-                                            controller_uid=23001)
-        ).inspect_issuer_result(ID)
+            client_factory=lambda *a, **k: pytest.fail("unpinned construction")
+        )
 
 
 def test_selected_inspect_persists_distinct_id_and_uses_only_saved_reader(tmp_path):
