@@ -47,6 +47,7 @@ WATCHDOG_RESULT = STATE / "independent-watchdog-result.json"
 WATCHDOG_FAILURE = STATE / "independent-watchdog-failure.json"
 WATCHDOG_RECONCILE_APPROVAL = STATE / "independent-watchdog-reconcile-approval.json"
 WATCHDOG_RECONCILED = STATE / "independent-watchdog-reconciled.json"
+SIDECAR_FAILURE = STATE / "sidecar-start-failure.json"
 START_READINESS_SECONDS = 15
 DEADLINE_ATTEMPT = STATE / "hard-deadline-attempt.json"
 HUGETLB_APPROVAL = STATE / "hugetlb-ancestor-approval.json"
@@ -952,10 +953,14 @@ def install_approved():
     # and output workspaces inside the bounded Project/state mount.
     os.chown(quota.MOUNT, 0, 0)
     os.chmod(quota.MOUNT, 0o755)
-    receipt = sidecar.install(plan, host_owner=owner)
-    _store(STATE / "activation.json", receipt, exclusive=True)
-    owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
-    return receipt
+    try:
+        receipt = sidecar.install(plan, host_owner=owner)
+        _store(STATE / "activation.json", receipt, exclusive=True)
+        owner.validate_old_baseline(plan["installed"]["legacy_baseline_sha256"])
+        return receipt
+    except Exception:
+        _sidecar_failure_snapshot(plan)
+        raise
 
 
 def _pid1_fields(unit):
@@ -1085,6 +1090,34 @@ def _watchdog_failure_snapshot(plan):
         pass
 
 
+def _sidecar_failure_snapshot(plan):
+    """Preserve first failed socket/PID1 readback without invoking a restart."""
+    if SIDECAR_FAILURE.exists() or SIDECAR_FAILURE.is_symlink():
+        return
+    try:
+        unit = _pid1_fields(sidecar.UNIT)
+    except Exception:
+        unit = {"observation": "unavailable"}
+    try:
+        attempt = _read_json(INSTALL_PATH)
+    except Exception:
+        attempt = {}
+    try:
+        _store(SIDECAR_FAILURE, {
+            "schema": "host-deploy-fresh-sidecar-start-failure-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "start_state": attempt.get("state"),
+            "job_path": attempt.get("job_path"),
+            "attempt_sha256": (_sha(_file(INSTALL_PATH))
+                               if attempt else None),
+            "pid1_snapshot": unit,
+            "socket_present": os.path.lexists(sidecar.SOCKET),
+            "status": "original-sidecar-attempt-uncertain-no-retry",
+        }, exclusive=True)
+    except Exception:
+        pass
+
+
 def inspect_watchdog_attempt():
     """Read-only original-attempt proof for a separately protected approval."""
     _root()
@@ -1164,6 +1197,8 @@ def reconcile_install_approved():
     }
     if approved != expected:
         raise PermissionError("watchdog original-attempt reconciliation lacks exact approval")
+    if inspect_watchdog_attempt() != review:
+        raise RuntimeError("watchdog PID1 evidence changed before selected continuation")
     # Consume the one-shot approval before ANY new sidecar start attempt.
     _store(WATCHDOG_RECONCILED, {
         "schema": "host-deploy-fresh-watchdog-reconciled-v1",
@@ -1184,6 +1219,7 @@ def reconcile_install_approved():
     except Exception:
         # Original watchdog must not be started again. The sidecar has its
         # own attempted-start record. Retain ALL protected evidence.
+        _sidecar_failure_snapshot(plan)
         raise
 
 
