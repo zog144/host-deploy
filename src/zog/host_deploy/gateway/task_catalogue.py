@@ -169,7 +169,9 @@ def validate(value):
         if (arguments["mode"] != "image"
                 or arguments.get("targets") != list(reviewed["targets"])):
             raise TaskCatalogueError(
-                "generic image targets differ from reviewed task selection"
+                "XCB image targets differ from reviewed selection"
+                if name == "xcb-support-image-v1"
+                else "generic image targets differ from reviewed selection"
             )
         output["tasks"][name] = json.loads(json.dumps(item))
     return output
