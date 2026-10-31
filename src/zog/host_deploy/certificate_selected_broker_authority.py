@@ -1,8 +1,9 @@
 """Independently installed certificate lifecycle broker authority.
 
 The timer's JSON chooses neither the broker's UID nor an alternate socket.
-Only the protected host-install owner and local consumer binding may approve
-those identities. This module is read-only and cannot enable renewal.
+The protected installer must independently derive and publish a *non-secret*
+root-owned 0444 attested policy from the private 0600 consumer binding.
+This module is read-only and cannot enable renewal.
 """
 import json
 import os
@@ -23,6 +24,7 @@ FIELDS = {
     "certificate_id", "hostnames", "policy_sha256", "host_policy_digest",
     "issuer_lifecycle_socket", "controller_uid", "caller_uid", "issuer_uid",
     "issuer_gid", "storage_id", "grant_id", "box_control_revision",
+    "consumer_binding_sha256",
 }
 
 
@@ -31,7 +33,7 @@ def _deny():
 
 
 def _root_file(path=ROOT_PATH):
-    """Retained O_NOFOLLOW dirfd walk, exact root owner and 0600 leaf."""
+    """Retained O_NOFOLLOW dirfd walk, root-owned readable non-secret 0444 pin."""
     if path != ROOT_PATH:
         _deny()
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -50,7 +52,7 @@ def _root_file(path=ROOT_PATH):
         try:
             info = os.fstat(leaf)
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
-                    or stat.S_IMODE(info.st_mode) != 0o600
+                    or stat.S_IMODE(info.st_mode) != 0o444
                     or info.st_nlink != 1 or not 0 < info.st_size <= 8192):
                 _deny()
             raw = os.read(leaf, 8193)
@@ -76,7 +78,7 @@ def _root_file(path=ROOT_PATH):
         _deny()
 
 
-def verify(policy, inspection, observer, binding, *, root_reader=None):
+def verify(policy, inspection, observer, binding=None, *, root_reader=None):
     """Check immutable host-install owner binding and split-UID policy pins."""
     if root_reader is None:
         root_reader = _root_file
@@ -107,12 +109,18 @@ def verify(policy, inspection, observer, binding, *, root_reader=None):
             or record["storage_id"] != observer["storage_id"]
             or record["grant_id"] != observer["grant_id"]):
         _deny()
-    if (record["host_id"] != binding["host_id"]
-            or record["installation_id"] != binding["installation_id"]
-            or record["state_volume_id"] != binding["state_volume_id"]
-            or record["certificate_id"] != binding["certificate_id"]
-            or record["hostnames"] != binding["hostnames"]
-            or record["policy_sha256"] != binding["policy_sha256"]):
+    # The installer checks the private consumer binding, then publishes this
+    # immutable 0444 projection. A non-root timer cannot read the 0600
+    # consumer binding; optional in-process comparison is installer-only.
+    if binding is not None and (
+            type(binding) is not dict
+            or any(record[key] != binding.get(key) for key in (
+                "host_id", "installation_id", "state_volume_id",
+                "certificate_id", "hostnames", "policy_sha256"))):
+        _deny()
+    if (type(record["consumer_binding_sha256"]) is not str
+            or not record["consumer_binding_sha256"].startswith("sha256:")
+            or not _HEX.fullmatch(record["consumer_binding_sha256"][7:])):
         _deny()
     for key in ("host_id", "certificate_id"):
         if type(record[key]) is not str or not _ID.fullmatch(record[key]):
