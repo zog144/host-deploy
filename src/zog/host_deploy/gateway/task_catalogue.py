@@ -17,15 +17,68 @@ _RECIPE = re.compile(r"(?:[a-zA-Z0-9+_.-]+/)+[a-zA-Z0-9+_.-]+\Z")
 _LANE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MONTH = re.compile(r"\d{4}-\d{2}-01\Z")
 
-# Approved XCB support selection only. The operator supplies *identities*,
-# never new recipe paths or maintained-worker aliases through the catalogue.
-XCB_ENTRIES = (
-    ("xcb-util-final", "xcb-util", "xcb-util/stages/final"),
-    ("xcb-util-image-final", "xcb-util-image", "xcb-util-image/stages/final"),
-    ("xcb-util-keysyms-final", "xcb-util-keysyms", "xcb-util-keysyms/stages/final"),
-    ("xcb-util-wm-final", "xcb-util-wm", "xcb-util-wm/stages/final"),
-    ("xcb-util-xrm-final", "xcb-util-xrm", "xcb-util-xrm/stages/final"),
-)
+# Finite reviewed graphical selections only. The issue supplies a task name;
+# exact recipe paths, package targets, source revision, lane owner, monthly pin
+# and immutable base generation remain root-owned catalogue data.
+REVIEWED_IMAGE_TASKS = {
+    "graphics-fonts-image-v1": {
+        "entries": (
+            ("fontconfig-final", "fontconfig", "fontconfig/stages/final"),
+            ("freetype-final", "freetype", "freetype/stages/final"),
+            ("libpng-final", "libpng", "libpng/stages/final"),
+        ),
+        "targets": ("libpng-final", "freetype-final", "fontconfig-final"),
+    },
+    "graphics-xcb-core-image-v1": {
+        "entries": (
+            ("check-final", "check", "check/stages/final"),
+            ("libXau-final", "libXau", "libXau/stages/final"),
+            ("libXdmcp-final", "libXdmcp", "libXdmcp/stages/final"),
+            ("libevdev-final", "libevdev", "libevdev/stages/final"),
+            ("libxcb-final", "libxcb", "libxcb/stages/final"),
+            ("python-libevdev-final", "python-libevdev", "python-libevdev/stages/final"),
+            ("xcb-proto-final", "xcb-proto", "xcb-proto/stages/final"),
+            ("xorgproto-final", "xorgproto", "xorgproto/stages/final"),
+        ),
+        "targets": (
+            "check-final", "libevdev-final", "python-libevdev-final",
+            "xorgproto-final", "libXau-final", "libXdmcp-final",
+            "xcb-proto-final", "libxcb-final",
+        ),
+    },
+    "graphics-x11-core-image-v1": {
+        "entries": (
+            ("libX11-final", "libX11", "libX11/stages/final"),
+            ("libXext-final", "libXext", "libXext/stages/final"),
+            ("libXfixes-final", "libXfixes", "libXfixes/stages/final"),
+            ("libXfont2-final", "libXfont2", "libXfont2/stages/final"),
+            ("libXi-final", "libXi", "libXi/stages/final"),
+            ("libXtst-final", "libXtst", "libXtst/stages/final"),
+            ("libXv-final", "libXv", "libXv/stages/final"),
+            ("libfontenc-final", "libfontenc", "libfontenc/stages/final"),
+            ("libxkbfile-final", "libxkbfile", "libxkbfile/stages/final"),
+            ("xtrans-final", "xtrans", "xtrans/stages/final"),
+        ),
+        "targets": (
+            "xtrans-final", "libX11-final", "libXext-final", "libXfixes-final",
+            "libXi-final", "libXtst-final", "libXv-final", "libxkbfile-final",
+            "libfontenc-final", "libXfont2-final",
+        ),
+    },
+    "xcb-support-image-v1": {
+        "entries": (
+            ("xcb-util-final", "xcb-util", "xcb-util/stages/final"),
+            ("xcb-util-image-final", "xcb-util-image", "xcb-util-image/stages/final"),
+            ("xcb-util-keysyms-final", "xcb-util-keysyms", "xcb-util-keysyms/stages/final"),
+            ("xcb-util-wm-final", "xcb-util-wm", "xcb-util-wm/stages/final"),
+            ("xcb-util-xrm-final", "xcb-util-xrm", "xcb-util-xrm/stages/final"),
+        ),
+        "targets": (
+            "xcb-util-final", "xcb-util-image-final", "xcb-util-keysyms-final",
+            "xcb-util-wm-final", "xcb-util-xrm-final",
+        ),
+    },
+}
 
 class TaskCatalogueError(ValueError):
     pass
@@ -75,10 +128,13 @@ def validate(value):
         if normalized != sorted(normalized, key=lambda e: e["id"]) or len(
                 {v["id"] for v in normalized}) != len(normalized):
             raise TaskCatalogueError("generic recipe entries must be unique and sorted")
-        if name == "xcb-support-image-v1" and normalized != [
+        reviewed = REVIEWED_IMAGE_TASKS[name]
+        if normalized != [
                 {"id": identifier, "project": project, "recipe": recipe}
-                for identifier, project, recipe in XCB_ENTRIES]:
-            raise TaskCatalogueError("XCB recipe identities differ from reviewed selection")
+                for identifier, project, recipe in reviewed["entries"]]:
+            raise TaskCatalogueError(
+                "generic recipe identities differ from reviewed task selection"
+            )
         arguments = item["arguments"]
         if type(arguments) is not dict or arguments.get("mode") not in {
                 "bootstrap", "image", "native-check", "seed-check"}:
@@ -105,10 +161,11 @@ def validate(value):
                 or len(names) != len(set(names))
                 or not set(names).issubset({v["id"] for v in normalized})):
             raise TaskCatalogueError("pipeline targets are not unique selected recipes")
-        if name == "xcb-support-image-v1" and (
-                arguments["mode"] != "image"
-                or arguments.get("targets") != [entry[0] for entry in XCB_ENTRIES]):
-            raise TaskCatalogueError("XCB image targets differ from reviewed selection")
+        if (arguments["mode"] != "image"
+                or arguments.get("targets") != list(reviewed["targets"])):
+            raise TaskCatalogueError(
+                "generic image targets differ from reviewed task selection"
+            )
         output["tasks"][name] = json.loads(json.dumps(item))
     return output
 

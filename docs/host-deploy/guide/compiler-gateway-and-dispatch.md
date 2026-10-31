@@ -44,3 +44,36 @@ Before an owner-gateway production cutover, establish the exact source pins, req
 - [Lost-workspace adoption and uncertainty](../GATEWAY-ADOPTION.md)
 - [Compiler owner RPC candidate](compiler-owner-rpc.md)
 - [Remote control recovery](../RECOVERY.md)
+
+
+## Reviewed graphical foundation submissions
+
+The generic image pipeline has four finite graphical selectors. Three are the
+foundation batches used before the existing XCB/i3 support task:
+
+- `graphics-fonts-image-v1` — libpng, FreeType and Fontconfig;
+- `graphics-xcb-core-image-v1` — Check/libevdev test support, xorgproto,
+  libXau/libXdmcp, xcb-proto and libxcb;
+- `graphics-x11-core-image-v1` — the reviewed consumer-driven X11 core;
+- `xcb-support-image-v1` — the later xcb-util/i3 support phase already present.
+
+A GitHub issue selects only one of these names and a canonical lane. It cannot
+supply recipe paths, targets, environment, shell commands, a monthly pin or a base
+generation. The root-owned task catalogue binds all of those values, including the
+exact image-build commit, lane owner, monthly-pin identity and immutable 64-hex base
+generation. Changing any of them changes the catalogue identity and requires owner
+review.
+
+Foundation publication is intentionally sequential. The fonts task is admitted
+against an independently accepted self-hosted image generation. The XCB task must
+be repinned by the protected owner to the accepted fonts output generation, and the
+X11 task must be repinned to the accepted XCB output generation. The public request
+contract does not accept a caller-selected `selection` field and must not be
+extended to do so merely to avoid that review boundary.
+
+Source support is not native admission. Before enabling `build.submit` for one of
+these tasks, the protected compiler owner must have current native acceptance, the
+dedicated lane/capacity reservation must be live, the exact root-owned catalogue
+must be installed and hash-pinned, and the deployed image-build source must match
+the catalogue revision. A successful GitHub/OIDC/SQS send proves transport only;
+it does not prove compiler admission or compilation success.

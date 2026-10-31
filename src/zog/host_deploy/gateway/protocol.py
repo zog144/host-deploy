@@ -28,7 +28,12 @@ OPERATIONS = frozenset({
 # These are maintained image-build worker entry points. The later execution adapter
 # owns all host paths and argv construction; requests select a name only.
 # Generic pipeline selections only; maintained image-build workers are excluded.
-BUILD_TASKS = frozenset({"xcb-support-image-v1"})
+BUILD_TASKS = frozenset({
+    "graphics-fonts-image-v1",
+    "graphics-xcb-core-image-v1",
+    "graphics-x11-core-image-v1",
+    "xcb-support-image-v1",
+})
 TOOLCHAIN_TASKS = frozenset({"self-hosted-c-cxx-toolchain-v1"})
 
 DIAGNOSTICS = frozenset({"host.runtime", "build.pipeline"})
