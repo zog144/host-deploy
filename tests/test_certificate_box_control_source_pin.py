@@ -70,6 +70,7 @@ def _pinned_client():
         return module
 
     load_real_module("role_broker_client", src_dir / "role_broker_client.py")
+    load_real_module("issuer_inspection_evidence", src_dir / "issuer_inspection_evidence.py")
     imported = load_real_module("issuer_lifecycle_client", expected)
     assert Path(imported.__file__).resolve(strict=True) == expected
     client = imported.IssuerLifecycleClient(
@@ -173,3 +174,31 @@ def test_real_inspection_reader_requires_pinned_controller_uid():
     )
     with pytest.raises(module.RoleBrokerError, match="UID"):
         client.inspect_issuer_result(REQUEST_ID)
+
+def test_actual_unix_socket_rejects_foreign_server_uid_before_sending(tmp_path):
+    import socket
+    import threading
+    module, client = _pinned_client()
+    path = str(tmp_path / "foreign.sock")
+    client.socket_path = Path(path)
+    # Use the actual OS peer credentials, never a fixture claiming UID 23001.
+    role_module = sys.modules[module.__package__ + ".role_broker"]
+    role_module._peer_uid = lambda sock: os.getuid()
+    accepted = []
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(path)
+        server.listen(1)
+        def serve():
+            conn, _ = server.accept()
+            with conn:
+                accepted.append(conn.recv(1))
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        if os.getuid() == 23001:
+            pytest.skip("requires foreign UID relative to exact pin")
+        with pytest.raises(module.RoleBrokerError, match="UID"):
+            client.application_request_result(REQUEST_ID)
+        thread.join(timeout=3)
+    assert accepted == [b""]
+
+
