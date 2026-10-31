@@ -25,6 +25,12 @@ def test_live_listener_matches_kernel_socket_fd_and_peer_identity(tmp_path):
     server, path = create_listener(tmp_path)
     try:
         assert stat.S_ISSOCK(os.lstat(path).st_mode)
+        rows = [row.split(maxsplit=7) for row in
+                Path("/proc/net/unix").read_text().splitlines()[1:]]
+        matching = [row for row in rows if len(row) == 8 and row[7] == path]
+        assert matching, "expected real bound socket in /proc/net/unix"
+        assert matching[0][4] == "0001", matching
+        assert int(matching[0][3], 16) & 0x10000, matching
         # Works even though the pathname inode and socket:[inode] are NOT
         # the same identity. No false pathname-inode equality shortcut.
         probe._verified_listener(path, os.getpid(), os.getuid(), os.getgid())
