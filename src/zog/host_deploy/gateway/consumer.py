@@ -180,9 +180,11 @@ class GatewayConsumer:
                 continue
             current_catalogue = self.approved_generic_catalogue
             current_digest = self.approved_catalogue_identity
-            policy_sha = self.approved_graphical_chain_policy_sha256
-            task_name = state["request"]["parameters"]["task"]
+            policy_sha = getattr(
+                self, "approved_graphical_chain_policy_sha256", None)
+            task_name = None
             if policy_sha is not None:
+                task_name = state["request"]["parameters"]["task"]
                 from .graphics_generation_chain import TASKS, load_installed_step
                 if task_name in TASKS:
                     current_catalogue, current_digest = load_installed_step(
