@@ -26,6 +26,7 @@ def identities():
         "issuer_uid": 24001, "issuer_gid": 24002,
         "storage_id": "c" * 32, "grant_id": "d" * 32,
         "box_control_revision": ISSUER_LIFECYCLE_BOX_CONTROL_REVISION,
+        "consumer_binding_sha256": "sha256:" + "9" * 64,
     }
     policy = {
         "certificate_id": "station-web", "policy_sha256": "a" * 64,
@@ -61,6 +62,7 @@ def test_exact_root_authority_binds_uid_host_installation_and_issuer():
         ("host_policy_digest", "sha256:" + "0" * 64),
         ("policy_sha256", "0" * 64),
         ("box_control_revision", "f" * 40),
+        ("consumer_binding_sha256", "sha256:bad"),
         ("issuer_lifecycle_socket", "/tmp/foreign.sock"),
     ):
         with pytest.raises(RenewalBlocked, match="root-authority"):
