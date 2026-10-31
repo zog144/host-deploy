@@ -332,6 +332,33 @@ def _install_with_attesters(*, previous_task, attest_native_owner,
         previous_receipt = _read_locked(previous_receipt_path)
         if previous_receipt.get("catalogue_sha256") != observed_digest:
             _deny()
+        if previous_task == TASKS[1]:
+            # X11 must reopen the original accepted Fonts producer, not
+            # merely trust a syntactically valid inherited XCB receipt.
+            verified_fonts = attest_accepted_predecessor(
+                TASKS[0], policy["first_catalogue_sha256"],
+                policy["first_base_generation_id"])
+            if (type(verified_fonts) is not dict
+                    or verified_fonts.get("schema") != EVIDENCE
+                    or verified_fonts.get("task") != TASKS[0]
+                    or verified_fonts.get("status") != "accepted"
+                    or verified_fonts.get("uncertainty") is not False
+                    or verified_fonts.get("missing_evidence_count") != 0
+                    or previous_receipt.get("previous_catalogue_sha256")
+                        != policy["first_catalogue_sha256"]
+                    or previous_receipt.get("predecessor_evidence_sha256")
+                        != _hash(verified_fonts)
+                    or previous_receipt.get("graphical_predecessor_generation_id")
+                        != verified_fonts.get("output_generation_id")
+                    or previous_receipt.get("predecessor_request_id")
+                        != verified_fonts.get("request_id")
+                    or previous_receipt.get("predecessor_pipeline_id")
+                        != verified_fonts.get("pipeline_id")
+                    or previous_receipt.get("predecessor_generation_manifest_sha256")
+                        != verified_fonts.get("generation_manifest_sha256")
+                    or previous_receipt.get("predecessor_acceptance_receipt_sha256")
+                        != verified_fonts.get("acceptance_receipt_sha256")):
+                _deny()
         successor = TASKS[TASKS.index(previous_task) + 1]
         next_path, next_receipt_path = FILES[successor]
         # Preserve any partial write indefinitely. Never automatically delete,
