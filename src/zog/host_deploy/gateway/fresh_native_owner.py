@@ -388,13 +388,10 @@ class NativeOwner:
         # The returned role and Project are taken from the exact reviewed
         # protected plan only AFTER its process environment was attested.
         data = _wait_exact_sidecar_readiness(self, unit)
-        expected = _read_json(PLAN_PATH)
-        if sidecar.review_plan(expected["identity"], expected["installed"]) != expected:
-            raise RuntimeError("sidecar plan changed after native readiness")
         return {
             "unit": unit, "active": True,
             "invocation_id": data["InvocationID"],
-            "project_root": expected["project_root"],
+            "project_root": data["VerifiedProjectRoot"],
             "socket": sidecar.SOCKET, "role": sidecar.ROLE,
         }
 
@@ -1112,7 +1109,7 @@ def _wait_exact_sidecar_readiness(owner, unit):
                 stable, count = data, 1
             if count >= 3:
                 _remaining_readback(deadline)
-                return data
+                return {**data, "VerifiedProjectRoot": plan["project_root"]}
         else:
             stable, count = None, 0
         if time.monotonic() >= deadline:
