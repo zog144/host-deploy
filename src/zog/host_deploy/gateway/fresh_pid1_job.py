@@ -19,14 +19,19 @@ class JobNotProven(RuntimeError):
 
 
 async def start_and_wait(bus, message, unit, *, on_ack=None,
-                         timeout=MAX_WAIT_SECONDS):
+                         timeout=MAX_WAIT_SECONDS, deadline=None):
     from dbus_next import Message, MessageType
 
     if (type(timeout) not in (int, float) or not 0 < timeout <= MAX_WAIT_SECONDS
             or type(unit) is not str or not unit.endswith(".service")):
         raise ValueError("invalid protected PID1 wait authority")
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
+    # The protected wrapper creates this deadline BEFORE bus.connect().
+    # Direct tests may omit it, in which case only their already-connected
+    # synthetic D-Bus exchange is measured.
+    deadline = loop.time() + timeout if deadline is None else deadline
+    if deadline <= loop.time():
+        raise JobNotProven("deadline-expired")
     received = {}
     arrived = asyncio.Event()
     trusted_sender = None
@@ -56,6 +61,8 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
             reply = await asyncio.wait_for(bus.call(msg), remaining)
         except asyncio.TimeoutError:
             raise JobNotProven("method-timeout") from None
+        if loop.time() >= deadline:
+            raise JobNotProven("deadline-expired")
         if reply.message_type == MessageType.ERROR:
             raise JobNotProven("PID1-error-reply")
         return reply
@@ -95,7 +102,11 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
         # This callback must fsync the job identity before accepting a
         # completion. A lost ack remains a durable attempted-start marker.
         if on_ack is not None:
+            # fsync is synchronous and intentionally not abandoned on another
+            # thread: a late durable ACK is uncertain, NEVER a second start.
             on_ack(job_path)
+        if loop.time() >= deadline:
+            raise JobNotProven("ack-after-deadline")
         while job_path not in received:
             arrived.clear()
             if job_path in received:
@@ -107,6 +118,10 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
                 await asyncio.wait_for(arrived.wait(), remaining)
             except asyncio.TimeoutError:
                 raise JobNotProven("completion-timeout") from None
+        # A cached 'done' before the method reply must not bypass deadline
+        # checks after the potentially slow protected durable ACK.
+        if loop.time() >= deadline:
+            raise JobNotProven("completion-after-deadline")
         result = received[job_path]
         if result != "done":
             raise JobNotProven("failed-result-" + str(result)[:48])
@@ -114,3 +129,30 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
                 "unit": unit, "method": "StartTransientUnit", "reload": False}
     finally:
         bus.remove_message_handler(handler)
+
+
+async def connect_and_wait(connector, message, unit, *, on_ack=None,
+                           timeout=MAX_WAIT_SECONDS):
+    """Bound bus establishment AND job observation to one monotonic budget.
+
+    No connection timeout ever invokes StartTransientUnit. The one method
+    invocation is not repeated after a late/missing reply or callback error.
+    """
+    if type(timeout) not in (int, float) or not 0 < timeout <= MAX_WAIT_SECONDS:
+        raise ValueError("invalid protected PID1 wait authority")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    try:
+        bus = await asyncio.wait_for(connector(), max(0, deadline - loop.time()))
+    except asyncio.TimeoutError:
+        raise JobNotProven("connect-timeout") from None
+    if loop.time() >= deadline:
+        # A bus may finish connecting at the timeout boundary; never start.
+        bus.disconnect()
+        raise JobNotProven("connect-after-deadline")
+    try:
+        return await start_and_wait(
+            bus, message, unit, on_ack=on_ack,
+            timeout=timeout, deadline=deadline)
+    finally:
+        bus.disconnect()
