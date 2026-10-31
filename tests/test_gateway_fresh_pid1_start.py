@@ -105,39 +105,47 @@ def test_lost_method_reply_does_not_retry():
     assert bus.calls.count("StartTransientUnit") == 1
 
 
-def test_unit_readiness_waits_for_active_and_socket(monkeypatch):
-    recorded = iter([
-        {"ActiveState": "activating", "MainPID": "0"},
-        {"ActiveState": "active", "MainPID": "41", "InvocationID": "a"*32},
-        {"ActiveState": "active", "MainPID": "41", "InvocationID": "a"*32},
-        {"ActiveState": "active", "MainPID": "41", "InvocationID": "a"*32}])
-    checks = iter([False, True, True])
-    native = SimpleNamespace(
-        read_unit=lambda _: next(recorded),
-        socket_exists=lambda _: next(checks))
+def test_sidecar_readiness_requires_three_full_stable_witnesses(monkeypatch):
+    plan = {"identity": {}, "installed": {}}
+    monkeypatch.setattr(owner, "_read_json", lambda _: plan)
+    monkeypatch.setattr(owner.sidecar, "review_plan", lambda *_: plan)
+    evidence = {"MainPID": "41", "InvocationID": "a"*32,
+                "ActiveState": "active"}
+    observed = [None, evidence, evidence, evidence]
+    def probe(_, *, deadline):
+        item = observed.pop(0)
+        if item is None:
+            raise RuntimeError("sidecar not listening yet")
+        return item
+    monkeypatch.setattr(owner, "_sidecar_pid1_evidence", probe)
     monkeypatch.setattr(owner.time, "sleep", lambda _: None)
-    observed = owner._wait_exact_sidecar_readiness(native, owner.sidecar.UNIT)
-    assert observed["MainPID"] == "41"
+    got = owner._wait_exact_sidecar_readiness(object(), owner.sidecar.UNIT)
+    assert got == evidence
+    assert observed == []
 
 
-def test_watchdog_wait_requires_two_stable_readbacks(monkeypatch):
+def test_watchdog_wait_requires_three_full_stable_readbacks(monkeypatch):
     evidence = {"MainPID": "42", "InvocationID": "a"*32}
-    observations = iter([None, evidence, evidence])
-    def observe(_):
-        item = next(observations)
+    observed = [None, evidence, evidence, evidence]
+    def probe(_, *, deadline):
+        item = observed.pop(0)
         if item is None:
             raise RuntimeError("still activating")
         return item
-    monkeypatch.setattr(owner, "_watchdog_pid1_evidence", observe)
+    monkeypatch.setattr(owner, "_watchdog_pid1_evidence", probe)
     monkeypatch.setattr(owner.time, "sleep", lambda _: None)
     assert owner._wait_exact_watchdog({}) == evidence
+    assert observed == []
 
 
 def test_watchdog_expired_readiness_stays_no_go(monkeypatch):
     monkeypatch.setattr(owner, "_watchdog_pid1_evidence",
-                        lambda _: (_ for _ in ()).throw(RuntimeError("unready")))
-    counter = iter([0., 30.])
-    monkeypatch.setattr(owner.time, "monotonic", lambda: next(counter))
+                        lambda _, *, deadline: (_ for _ in ()).throw(
+                            RuntimeError("unready")))
+    initial = owner.time.monotonic()
+    monotonic = iter([initial, initial+30])
+    monkeypatch.setattr(owner.time, "monotonic",
+                        lambda: next(monotonic, initial+30))
     with pytest.raises(RuntimeError, match="activation unproven"):
         owner._wait_exact_watchdog({})
 
@@ -296,7 +304,7 @@ def test_incorrect_watchdog_pid1_identity_is_rejected_before_proc(
         "NRestarts": "0", "LogNamespace": "zogfreshcrossbootstrapoct25",
     }
     valid[field] = value
-    monkeypatch.setattr(owner, "_pid1_fields", lambda _: valid)
+    monkeypatch.setattr(owner, "_pid1_fields", lambda _, **kwargs: valid)
     monkeypatch.setattr(wd, "properties", lambda plan: {
         "ExecStart": ["/usr/bin/python3", "-B", "-m", "zog.host_deploy.gateway.fresh_native_owner",
                       "watch-loop"],
@@ -305,3 +313,114 @@ def test_incorrect_watchdog_pid1_identity_is_rejected_before_proc(
         "LogNamespace": "zogfreshcrossbootstrapoct25"})
     with pytest.raises(RuntimeError, match="identity not established"):
         owner._watchdog_pid1_evidence({})
+
+def test_cached_completed_job_with_slow_durable_ack_cannot_pass_deadline():
+    bus = Bus(event="before")
+    confirmed = []
+    async def run():
+        loop = asyncio.get_running_loop()
+        native_time = loop.time
+        offset = [0]
+        loop.time = lambda: native_time() + offset[0]
+        def slow_ack(path):
+            confirmed.append(path)
+            offset[0] = 21
+        try:
+            return await jobs.start_and_wait(
+                bus, Message(path="/org/freedesktop/systemd1",
+                             member="StartTransientUnit"),
+                UNIT, timeout=20, on_ack=slow_ack)
+        finally:
+            loop.time = native_time
+    with pytest.raises(jobs.JobNotProven, match="ack-after-deadline"):
+        asyncio.run(run())
+    assert confirmed == [JOB]
+    assert bus.calls.count("StartTransientUnit") == 1
+
+
+def test_stalled_system_bus_connection_does_not_submit():
+    bus = Bus()
+    async def connect():
+        await asyncio.sleep(1)
+        return bus
+    with pytest.raises(jobs.JobNotProven, match="connect-timeout"):
+        asyncio.run(jobs.connect_and_wait(
+            connect, Message(path="/org/freedesktop/systemd1",
+                             member="StartTransientUnit"),
+            UNIT, timeout=0.02))
+    assert bus.calls == []
+
+
+def test_sidecar_rejects_foreign_process_before_socket_probe(monkeypatch):
+    fields = {
+        "LoadState": "loaded", "ActiveState": "active",
+        "SubState": "running", "MainPID": "123",
+        "InvocationID": "a"*32, "ControlGroup":
+            "/"+owner.sidecar.SLICE_UNIT+"/"+owner.sidecar.UNIT,
+        "Type": "exec", "Restart": "no", "NRestarts": "0",
+        "LogNamespace": owner.sidecar.LOG_NAMESPACE}
+    monkeypatch.setattr(owner, "_pid1_fields", lambda _, **kw: fields)
+    monkeypatch.setattr(owner, "_bounded_proc_probe",
+                        lambda *a: pytest.fail("unexpected proc/socket probe"))
+    plan = {"properties":{"ExecStart":["/usr/bin/python3","-B",
+                                      "-m","zog.root_control"],
+                          "Environment":["ROOT_CONTROL_ROLE=build-only-project-v1"]},
+            "identity":{"controller_gid":123}}
+    for key, changed in [("Type","simple"), ("Restart","always"),
+                         ("NRestarts","1"), ("MainPID","0"),
+                         ("LogNamespace","foreign"), ("SubState","dead"),
+                         ("ControlGroup","/system.slice/other.service")]:
+        with pytest.raises(RuntimeError, match="identity not established"):
+            owner._sidecar_pid1_evidence(
+                plan, deadline=owner.time.monotonic()+5)
+        # Ensure each distinct bad field cannot fall back to pathname check.
+        old = fields[key]; fields[key] = changed
+        with pytest.raises(RuntimeError, match="identity not established"):
+            owner._sidecar_pid1_evidence(
+                plan, deadline=owner.time.monotonic()+5)
+        fields[key] = old
+
+
+def test_over_budget_watchdog_proc_read_cannot_become_success(monkeypatch):
+    evidence = {"MainPID":"42","InvocationID":"a"*32}
+    real_time = owner.time.monotonic
+    advance=[0.]
+    def timed(): return real_time()+advance[0]
+    monkeypatch.setattr(owner.time,"monotonic",timed)
+    def slow_read(_, *, deadline):
+        advance[0] = 16
+        return evidence
+    monkeypatch.setattr(owner, "_watchdog_pid1_evidence",slow_read)
+    with pytest.raises(RuntimeError, match="activation unproven"):
+        owner._wait_exact_watchdog({})
+
+
+def test_over_budget_sidecar_socket_read_cannot_become_success(monkeypatch):
+    plan={"identity":{},"installed":{}}
+    monkeypatch.setattr(owner,"_read_json",lambda _:plan)
+    monkeypatch.setattr(owner.sidecar,"review_plan",lambda *_:plan)
+    real_time=owner.time.monotonic
+    advance=[0.]
+    monkeypatch.setattr(owner.time,"monotonic",
+                        lambda:real_time()+advance[0])
+    def slow_read(_, *, deadline):
+        advance[0]=16
+        return {"MainPID":"42","InvocationID":"a"*32}
+    monkeypatch.setattr(owner,"_sidecar_pid1_evidence",slow_read)
+    with pytest.raises(RuntimeError,match="readiness timed out"):
+        owner._wait_exact_sidecar_readiness(object(), owner.sidecar.UNIT)
+
+
+def test_proc_probe_cannot_succeed_after_subprocess_timeout_budget(monkeypatch):
+    from types import SimpleNamespace
+    clock = [0.]
+    monkeypatch.setattr(owner.time,"monotonic",lambda:clock[0])
+    def fake_run(cmd, **kwargs):
+        assert kwargs["timeout"] == 15
+        assert cmd[1:3] == ["-I", "-B"]
+        clock[0]=16.
+        return SimpleNamespace(returncode=0,stdout='{"status":"exact-process-verified"}')
+    monkeypatch.setattr(owner.subprocess, "run",fake_run)
+    with pytest.raises(RuntimeError,match="deadline expired"):
+        owner._bounded_proc_probe(
+            {"kind":"watchdog","pid":2,"cgroup":"/system.slice/fixed"},15.)
