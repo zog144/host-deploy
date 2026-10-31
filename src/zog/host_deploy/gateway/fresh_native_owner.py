@@ -42,6 +42,12 @@ ABSENT_HISTORY_SCOPE = "one-fresh-systemd252-disposable-native-acceptance"
 BUDGET_DIR = STATE / "budget"
 CRON_PATH = Path("/etc/cron.d/zog-fresh-cross-bootstrap-oct25")
 WATCHDOG_ATTEMPT = STATE / "independent-watchdog-attempt.json"
+WATCHDOG_JOB = STATE / "independent-watchdog-job.json"
+WATCHDOG_RESULT = STATE / "independent-watchdog-result.json"
+WATCHDOG_FAILURE = STATE / "independent-watchdog-failure.json"
+WATCHDOG_RECONCILE_APPROVAL = STATE / "independent-watchdog-reconcile-approval.json"
+WATCHDOG_RECONCILED = STATE / "independent-watchdog-reconciled.json"
+START_READINESS_SECONDS = 15
 DEADLINE_ATTEMPT = STATE / "hard-deadline-attempt.json"
 HUGETLB_APPROVAL = STATE / "hugetlb-ancestor-approval.json"
 HUGETLB_RECEIPT = STATE / "hugetlb-activation.json"
@@ -143,7 +149,8 @@ def _show(unit):
             raise ValueError("unapproved systemd readback target")
     raw = _command(["/usr/bin/systemctl", "show", unit,
                     "--property=LoadState,ActiveState,MainPID,InvocationID,"
-                    "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic,LogNamespace"])
+                    "ControlGroup,Environment,FragmentPath,Unit,NextElapseUSecMonotonic,LogNamespace,"
+                    "Type,SubState,Restart,NRestarts"])
     return dict(row.split("=", 1) for row in raw.splitlines() if "=" in row)
 
 
@@ -364,10 +371,18 @@ class NativeOwner:
         _root()
         if _read_json(INSTALL_PATH).get("state") != "attempted":
             raise PermissionError("transient start requires durable attempted receipt")
-        return dbus.start_exact_sidecar(unit, mode, properties)
+        def accepted(job_path):
+            record = _read_json(INSTALL_PATH)
+            if (record.get("state") != "attempted"
+                    or record.get("job_path") is not None):
+                raise RuntimeError("uncertain sidecar start job identity")
+            record["job_path"] = job_path
+            _store(INSTALL_PATH, record)
+        return dbus.start_exact_sidecar(
+            unit, mode, properties, on_ack=accepted)
 
     def observe_unit(self, unit):
-        data = self.read_unit(unit)
+        data = _wait_exact_sidecar_readiness(self, unit)
         if data is None:
             raise RuntimeError("sidecar PID1 entry is absent after start")
         values = dict(item.split("=", 1) for item in data.get(
@@ -907,15 +922,29 @@ def install_approved():
     _store(WATCHDOG_ATTEMPT, {
         "schema": "host-deploy-fresh-watchdog-start-attempt-v1",
         "plan_sha256": plan["sha256"], "boot_id": _boot(),
+        "host_id": plan["host_id"],
+        "watchdog_spec_sha256": _sha(_bytes(independent_watchdog.properties(plan))),
         "state": "attempted",
     }, exclusive=True)
-    independent_watchdog.start(plan)
-    active_watchdog = _show(independent_watchdog.UNIT)
-    if (active_watchdog.get("ActiveState") != "active"
-            or active_watchdog.get("MainPID") in (None, "", "0")
-            or active_watchdog.get("ControlGroup", "").startswith(
-                "/" + sidecar.SLICE_UNIT)):
-        raise RuntimeError("independent PID1 watchdog activation unproven")
+    try:
+        def accepted(job_path):
+            _store(WATCHDOG_JOB, {
+                "schema": "host-deploy-fresh-watchdog-job-v1",
+                "plan_sha256": plan["sha256"], "boot_id": _boot(),
+                "job_path": job_path,
+                "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+            }, exclusive=True)
+        job = independent_watchdog.start(plan, on_ack=accepted)
+        evidence = _wait_exact_watchdog(plan)
+        _store(WATCHDOG_RESULT, {
+            "schema": "host-deploy-fresh-watchdog-result-v1",
+            "plan_sha256": plan["sha256"], "boot_id": _boot(),
+            "job_path": job["job_path"], "job_result": job["job_result"],
+            "evidence": evidence, "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
+        }, exclusive=True)
+    except Exception:
+        _watchdog_failure_snapshot(plan)
+        raise
     # The top of the quota image is ROOT-owned and not writable by either
     # isolated nonroot UID. Otherwise the build UID could rename the protected
     # imported rootfs/registration directory despite that child being root
@@ -1103,7 +1132,8 @@ def main():
         "observe-canary-terminal", "accept-canary",
         "observe-compiler-live", "observe-compiler-terminal",
         "accept-compiler-clean",
-        "inspect-host-write-surfaces", "inspect-native-worker-storage"):
+        "inspect-host-write-surfaces", "inspect-native-worker-storage",
+        "inspect-watchdog-attempt", "reconcile-install"):
         raise SystemExit("use only fixed root-owned watch or recover entrypoint")
     if sys.argv[1] == "grant-canary":
         canary_owner.grant(sys.modules[__name__], NativeOwner(), kind="canary")
@@ -1121,6 +1151,10 @@ def main():
         canary_owner.observe_compiler_terminal(sys.modules[__name__], NativeOwner())
     elif sys.argv[1] == "accept-compiler-clean":
         canary_owner.accept_compiler_cleanup(sys.modules[__name__], NativeOwner())
+    elif sys.argv[1] == "inspect-watchdog-attempt":
+        sys.stdout.write(_bytes(inspect_watchdog_attempt()).decode("ascii"))
+    elif sys.argv[1] == "reconcile-install":
+        reconcile_install_approved()
     elif sys.argv[1] == "inspect-native-worker-storage":
         sys.stdout.write(_bytes(inspect_native_worker_storage()).decode("ascii"))
     elif sys.argv[1] == "inspect-host-write-surfaces":
