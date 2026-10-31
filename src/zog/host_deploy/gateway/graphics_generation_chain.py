@@ -296,6 +296,19 @@ def install_next_native(*, previous_task, attest_native_owner,
     policy = validate_policy(_read_locked(POLICY))
     if attest_native_owner(policy) is not True:
         _deny()
+    # Reobserve the same fully backed 30+2 GiB allocation policy as fonts.
+    # The trusted owner must also attest current boot, installed source/pin,
+    # genuine producer acceptance and exclusive idle worker authority.
+    from . import fresh_quota_volume as quota
+    from . import fresh_aggregate_disk as aggregate
+    work = quota.inspect()
+    external = aggregate.inspect_external_pool_native()
+    if (not 0 < work["capacity_bytes"] <= 30 * 1024**3
+            or not 0 < external["limit_bytes"] <= 2 * 1024**3
+            or external.get("mount_verified") is not True
+            or external.get("allocation_verified") is not True
+            or external.get("budget_scope") != aggregate.BUDGET_SCOPE):
+        _deny()
     previous_path, previous_receipt_path = (
         (first.CATALOGUE, first.RECEIPT)
         if previous_task == TASKS[0] else FILES[previous_task])
