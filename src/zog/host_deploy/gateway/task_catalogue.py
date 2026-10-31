@@ -80,6 +80,11 @@ REVIEWED_IMAGE_TASKS = {
     },
 }
 
+
+# Compatibility name retained for the existing reviewed-supervisor regression.
+# It is derived from the finite task map rather than forming a second authority.
+XCB_ENTRIES = REVIEWED_IMAGE_TASKS["xcb-support-image-v1"]["entries"]
+
 class TaskCatalogueError(ValueError):
     pass
 
