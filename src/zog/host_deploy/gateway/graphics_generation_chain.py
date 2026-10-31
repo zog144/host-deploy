@@ -288,8 +288,8 @@ def _exclusive_write(path, raw):
         os.close(fd)
 
 
-def install_next_native(*, previous_task, attest_native_owner,
-                        attest_accepted_predecessor):
+def _install_with_attesters(*, previous_task, attest_native_owner,
+                            attest_accepted_predecessor):
     """Protected single-step promotion. Does not start/schedule a compiler.
 
     Both attestations MUST be independently installed root-only capabilities,
@@ -376,6 +376,47 @@ def install_next_native(*, previous_task, attest_native_owner,
         finally:
             os.close(fd)
         return receipt
+
+
+
+
+def _verified_native_owner(policy):
+    """Native root-control owner source, not a supplied bool or RPC claim."""
+    from . import fresh_native_owner as owner
+    from . import fresh_canary_owner as canary
+    from . import fresh_budget_guard as budget
+    plan = owner._read_json(owner.PLAN_PATH)
+    admission = owner._admission(plan)
+    if (plan["host_id"] != policy["host_id"]
+            or plan["project_root"] != policy["project_root"]
+            or plan["installed"]["boot_id"] != owner._boot()):
+        return False
+    record = budget.read(owner.BUDGET_DIR, admission["request_id"])
+    witness = canary.watch_allowed(
+        fresh_owner=owner, native=owner.NativeOwner(), plan=plan,
+        admission=admission, budget_record=record)
+    return witness["status"] == "native-idle-only"
+
+
+def install_next_native(*, previous_task):
+    """Fixed privileged entrypoint; never accepts caller-supplied attesters.
+
+    The protected installer must supply authenticated original gateway request
+    history on this compiler Host before the read-only producer capability can
+    succeed. Missing or foreign source history remains NO-GO.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("native graphical owner requires root")
+    if previous_task not in TASKS[:2]:
+        _deny()
+    from .graphics_generation_attester import installed_capability
+    approved_history = STORE / "authenticated-gateway-history"
+    from .fresh_budget_guard import _protected_root
+    _protected_root(approved_history)
+    return _install_with_attesters(
+        previous_task=previous_task,
+        attest_native_owner=_verified_native_owner,
+        attest_accepted_predecessor=installed_capability(approved_history))
 
 
 def load_installed_step(task, *, policy_sha256):
