@@ -63,7 +63,7 @@ def accepted_pin_bytes():
 
 
 def test_source_and_october_pin_are_exact():
-    assert graphics.SOURCE == "b0f53dbdec0e88b9b37feb5317398db3d20507dd"
+    assert graphics.SOURCE == "efb7110006cafeb170da5c2606dccfeb17b6055b"
     assert graphics.PIN_SHA256 == "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
     assert graphics.PIN_PATH == "project/pins/2026-10-01/commit-pin.py"
     assert graphics.TASK == "graphics-fonts-image-v1"

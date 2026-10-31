@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/image-build
-          ref: b0f53dbdec0e88b9b37feb5317398db3d20507dd
+          ref: efb7110006cafeb170da5c2606dccfeb17b6055b
           path: dependencies/image-build
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -31,7 +31,7 @@ jobs:
           from pathlib import Path
           from subprocess import check_output
           root=Path('dependencies/image-build')
-          assert check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip() == 'b0f53dbdec0e88b9b37feb5317398db3d20507dd'
+          assert check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip() == 'efb7110006cafeb170da5c2606dccfeb17b6055b'
           p=root/'project/pins/2026-10-01/commit-pin.py'
           assert p.is_file() and not p.is_symlink()
           assert hashlib.sha256(p.read_bytes()).hexdigest() == 'd3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36'
