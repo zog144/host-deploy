@@ -113,7 +113,8 @@ def test_selected_inspect_round_trip_uses_real_pinned_client():
     def local_broker(operation, **args):
         calls.append((operation, args))
         if operation == "start":
-            return {"program": "inspect", "runtime_id": "RUNTIME01"}
+            return {"request_id": REQUEST_ID, "program": "inspect",
+                    "runtime_id": "RUNTIME01"}
         if operation == "result":
             return {
                 "request_id": REQUEST_ID, "program": "inspect",
