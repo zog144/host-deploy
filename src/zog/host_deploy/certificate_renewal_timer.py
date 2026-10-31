@@ -418,6 +418,23 @@ def run(policy, *, controller, issuer_checker=None,
             "fingerprint_sha256": inspected.fingerprint_sha256,
         }
 
+    def require_selected_postflight(request_id, fingerprint, outcome):
+        if policy["controller_backend"] != "selected-broker":
+            return True
+        started = _pending_start(
+            policy["journal_directory"],
+            policy_sha256=policy["policy_sha256"],
+            certificate_id=policy["certificate_id"], request_id=request_id)
+        result = controller.application_request_result(request_id)
+        if result is None:
+            raise RenewalBlocked("selected-inspection-original-result-unavailable")
+        trusted = issuer_observer(
+            policy, request_id=request_id, started=started,
+            controller_result=result)
+        return _selected_postflight(
+            policy, controller, renewal_id=request_id,
+            fingerprint=fingerprint, outcome=outcome, renewal_proof=trusted)
+
     # If a changed renewal was previously verified, it must be delivered
     # before a newer renewal is authorized. Never replace an uncertain key.
     with _locked(policy["journal_directory"]) as fd:
@@ -431,6 +448,14 @@ def run(policy, *, controller, issuer_checker=None,
                     or confirmation["outcome"] != "renewed"
                     or confirmation["fingerprint_sha256"] != previous["fingerprint"]):
                 raise RenewalBlocked("renewal-publication-proof-stale")
+        if not require_selected_postflight(
+                previous["request_id"], previous["fingerprint"], "renewed"):
+            return {
+                "schema": previous["schema"], "phase": "awaiting-inspection",
+                "request_id": previous["request_id"], "outcome": "renewed",
+                "fingerprint": previous["fingerprint"],
+                "publication": "blocked-pending-selected-inspection",
+            }
         if policy["publication_policy_file"] is None:
             raise RenewalBlocked("publication-authorization-required")
         approval = publication_policy_loader(policy)
@@ -475,6 +500,13 @@ def run(policy, *, controller, issuer_checker=None,
     if status is None and response["phase"] in ("idle", "verified"):
         raise RenewalBlocked("issuer-readiness-unproven")
     if response["phase"] == "verified":
+        if not require_selected_postflight(
+                response["request_id"], response["fingerprint"],
+                response["outcome"]):
+            return {
+                **response, "phase": "awaiting-inspection",
+                "publication": "blocked-pending-selected-inspection",
+            }
         if response["outcome"] == "unchanged":
             return {**response, "publication": "unchanged-no-delivery"}
         if response["outcome"] == "renewed":
