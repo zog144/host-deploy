@@ -45,3 +45,9 @@ jobs:
         run: |
           PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py
           python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_owner.py
+
+      - name: Verify real root-owned one-shot catalogue file, mode and receipt on ephemeral CI
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+        run: |
+          sudo -E env PYTHONPATH="$PWD/src" "$(command -v python)" -m pytest -q tests/test_gateway_first_graphics_native_install.py -rs
