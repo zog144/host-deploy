@@ -301,60 +301,81 @@ def install_next_native(*, previous_task, attest_native_owner,
         raise PermissionError("root-only graphical generation owner required")
     if previous_task not in TASKS[:2]:
         _deny()
-    from .fresh_budget_guard import _protected_root
-    _protected_root(STORE)
-    policy = validate_policy(_read_locked(POLICY))
-    if attest_native_owner(policy) is not True:
-        _deny()
-    # Reobserve the same fully backed 30+2 GiB allocation policy as fonts.
-    # The trusted owner must also attest current boot, installed source/pin,
-    # genuine producer acceptance and exclusive idle worker authority.
-    from . import fresh_quota_volume as quota
-    from . import fresh_aggregate_disk as aggregate
-    work = quota.inspect()
-    external = aggregate.inspect_external_pool_native()
-    if (not 0 < work["capacity_bytes"] <= 30 * 1024**3
-            or not 0 < external["limit_bytes"] <= 2 * 1024**3
-            or external.get("mount_verified") is not True
-            or external.get("allocation_verified") is not True
-            or external.get("budget_scope") != aggregate.BUDGET_SCOPE):
-        _deny()
-    previous_path, previous_receipt_path = (
-        (first.CATALOGUE, first.RECEIPT)
-        if previous_task == TASKS[0] else FILES[previous_task])
-    previous, observed_digest = task_catalogue.load(
-        previous_path, require_root_owned=True)
-    previous_receipt = _read_locked(previous_receipt_path)
-    if previous_receipt.get("catalogue_sha256") != observed_digest:
-        _deny()
-    successor = TASKS[TASKS.index(previous_task) + 1]
-    next_path, next_receipt_path = FILES[successor]
-    # Preserve any partial write indefinitely. Never automatically delete,
-    # replace, repair or attempt a second predecessor generation.
-    if (next_path.exists() or next_path.is_symlink()
-            or next_receipt_path.exists() or next_receipt_path.is_symlink()):
-        _deny()
-    verified = attest_accepted_predecessor(
-        previous_task, observed_digest, previous["tasks"][previous_task][
-            "arguments"]["selection"])
-    candidate = resolve_successor(
-        policy=policy, previous_task=previous_task,
-        previous_catalogue=previous, previous_receipt=previous_receipt,
-        accepted_generation=verified)
-    _exclusive_write(next_path, candidate["catalogue_bytes"])
-    saved, digest = task_catalogue.load(next_path, require_root_owned=True)
-    if digest != candidate["catalogue_sha256"] or saved != candidate["catalogue"]:
-        _deny()
-    _exclusive_write(next_receipt_path, candidate["receipt_bytes"])
-    receipt = _read_locked(next_receipt_path)
-    if receipt != candidate["receipt"]:
-        _deny()
-    fd = os.open(STORE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    return receipt
+    # Share native worker admission's stable flock across acceptance,
+    # quota reinspection, protected promotion and both directory syncs.
+    from . import fresh_canary_owner as canary, fresh_native_owner as owner
+    with canary.locked(owner):
+        from .fresh_budget_guard import _protected_root
+        _protected_root(STORE)
+        policy = validate_policy(_read_locked(POLICY))
+        if attest_native_owner(policy) is not True:
+            _deny()
+        initial_boot = owner._boot()
+        # Reobserve the same fully backed 30+2 GiB allocation policy as fonts.
+        # The trusted owner must also attest current boot, installed source/pin,
+        # genuine producer acceptance and exclusive idle worker authority.
+        from . import fresh_quota_volume as quota
+        from . import fresh_aggregate_disk as aggregate
+        work = quota.inspect()
+        external = aggregate.inspect_external_pool_native()
+        if (not 0 < work["capacity_bytes"] <= 30 * 1024**3
+                or not 0 < external["limit_bytes"] <= 2 * 1024**3
+                or external.get("mount_verified") is not True
+                or external.get("allocation_verified") is not True
+                or external.get("budget_scope") != aggregate.BUDGET_SCOPE):
+            _deny()
+        previous_path, previous_receipt_path = (
+            (first.CATALOGUE, first.RECEIPT)
+            if previous_task == TASKS[0] else FILES[previous_task])
+        previous, observed_digest = task_catalogue.load(
+            previous_path, require_root_owned=True)
+        previous_receipt = _read_locked(previous_receipt_path)
+        if previous_receipt.get("catalogue_sha256") != observed_digest:
+            _deny()
+        successor = TASKS[TASKS.index(previous_task) + 1]
+        next_path, next_receipt_path = FILES[successor]
+        # Preserve any partial write indefinitely. Never automatically delete,
+        # replace, repair or attempt a second predecessor generation.
+        if (next_path.exists() or next_path.is_symlink()
+                or next_receipt_path.exists() or next_receipt_path.is_symlink()):
+            _deny()
+        verified = attest_accepted_predecessor(
+            previous_task, observed_digest, previous["tasks"][previous_task][
+                "arguments"]["selection"])
+        candidate = resolve_successor(
+            policy=policy, previous_task=previous_task,
+            previous_catalogue=previous, previous_receipt=previous_receipt,
+            accepted_generation=verified)
+        # This is the SAME stable root-only flock used by protected worker claims,
+        # not an unrelated per-filename lock. Recheck Host/boot/idle under lock.
+        if owner._boot() != initial_boot or attest_native_owner(policy) is not True:
+            _deny()
+        _exclusive_write(next_path, candidate["catalogue_bytes"])
+        # Durable first-file crash boundary: an orphan is a permanent HOLD,
+        # never automatically discarded or replaced by a later request.
+        directory_fd = os.open(STORE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        saved, digest = task_catalogue.load(next_path, require_root_owned=True)
+        if digest != candidate["catalogue_sha256"] or saved != candidate["catalogue"]:
+            _deny()
+        _exclusive_write(next_receipt_path, candidate["receipt_bytes"])
+        directory_fd = os.open(STORE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        receipt = _read_locked(next_receipt_path)
+        if receipt != candidate["receipt"]:
+            _deny()
+        fd = os.open(STORE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return receipt
 
 
 def load_installed_step(task, *, policy_sha256):
