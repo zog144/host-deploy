@@ -14,11 +14,8 @@ JOB = "/org/freedesktop/systemd1/job/42"
 
 
 def reply(signature="", body=None):
-    return Message.new_method_return(Message(
-        destination="org.freedesktop.systemd1",
-        path="/org/freedesktop/systemd1",
-        interface="org.freedesktop.systemd1.Manager",
-        member="StartTransientUnit"), signature=signature, body=body or [])
+    return Message(message_type=MessageType.METHOD_RETURN,
+                   reply_serial=1, signature=signature, body=body or [])
 
 
 class Bus:
