@@ -423,3 +423,25 @@ def test_proc_probe_cannot_succeed_after_subprocess_timeout_budget(monkeypatch):
     with pytest.raises(RuntimeError,match="deadline expired"):
         owner._bounded_proc_probe(
             {"kind":"watchdog","pid":2,"cgroup":"/system.slice/fixed"},15.)
+
+def test_blocked_durable_ack_is_interrupted_and_start_is_never_retried():
+    import time
+    bus = Bus(event="before")
+    with pytest.raises(jobs.JobNotProven, match="ack-timeout"):
+        asyncio.run(jobs.start_and_wait(
+            bus, Message(path="/org/freedesktop/systemd1",
+                         member="StartTransientUnit"),
+            UNIT, timeout=0.025, on_ack=lambda _: time.sleep(0.2)))
+    assert bus.calls.count("StartTransientUnit") == 1
+
+
+def test_failed_durable_ack_cannot_claim_job_done_or_replay():
+    bus = Bus(event="before")
+    def failed(_):
+        raise OSError("durable receipt write failed")
+    with pytest.raises(OSError, match="durable receipt write failed"):
+        asyncio.run(jobs.start_and_wait(
+            bus, Message(path="/org/freedesktop/systemd1",
+                         member="StartTransientUnit"),
+            UNIT, timeout=1, on_ack=failed))
+    assert bus.calls.count("StartTransientUnit") == 1
