@@ -209,6 +209,7 @@ def test_one_shot_selected_reconcile_no_watchdog_restart(tmp_path, monkeypatch):
         "plan_sha256": plan["sha256"],
         "attempt_sha256": "sha256:"+"c"*64,
         "job_path": JOB, "job_record_sha256": "sha256:"+"d"*64,
+        "original_job_completion": "unconfirmed",
         "evidence": {"InvocationID": "e"*32, "MainPID": "42"},
         "evidence_sha256": "sha256:"+"f"*64,
         "status": "original-attempt-readback-only", "compiler_authorized": False,
@@ -221,6 +222,7 @@ def test_one_shot_selected_reconcile_no_watchdog_restart(tmp_path, monkeypatch):
         "attempt_sha256": readback["attempt_sha256"],
         "job_path": readback["job_path"],
         "job_record_sha256": readback["job_record_sha256"],
+        "original_job_completion": "unconfirmed",
         "invocation_id": readback["evidence"]["InvocationID"],
         "main_pid": readback["evidence"]["MainPID"],
         "evidence_sha256": readback["evidence_sha256"],
@@ -445,3 +447,37 @@ def test_failed_durable_ack_cannot_claim_job_done_or_replay():
                          member="StartTransientUnit"),
             UNIT, timeout=1, on_ack=failed))
     assert bus.calls.count("StartTransientUnit") == 1
+
+def test_original_job_missing_ack_cannot_be_reconciled(monkeypatch):
+    plan={"sha256":"sha256:"+"a"*64, "host_id":"host-a"}
+    attempt={
+        "schema":"host-deploy-fresh-watchdog-start-attempt-v1",
+        "state":"attempted","plan_sha256":plan["sha256"],
+        "boot_id":"current-boot","host_id":"host-a",
+        "watchdog_spec_sha256":"sha256:"+"b"*64,
+    }
+    monkeypatch.setattr(owner,"_root",lambda:None)
+    monkeypatch.setattr(owner,"_boot",lambda:"current-boot")
+    monkeypatch.setattr(owner.independent_watchdog,"properties",
+                        lambda _: {"dummy":"test"})
+    attempt["watchdog_spec_sha256"]=owner._sha(
+        owner._bytes(owner.independent_watchdog.properties(plan)))
+    def read(path):
+        if path==owner.PLAN_PATH: return plan
+        if path==owner.WATCHDOG_ATTEMPT: return attempt
+        raise FileNotFoundError("original ACK absent")
+    monkeypatch.setattr(owner,"_read_json",read)
+    monkeypatch.setattr(owner,"_wait_exact_watchdog",
+                        lambda _:pytest.fail("no live adoption without ACK"))
+    with pytest.raises(FileNotFoundError, match="ACK absent"):
+        owner.inspect_watchdog_attempt()
+
+
+def test_interrupted_one_shot_reconciliation_is_never_repeated(monkeypatch):
+    import inspect
+    source=inspect.getsource(owner.reconcile_install_approved)
+    assert 'WATCHDOG_RECONCILED.exists()' in source
+    assert '_store(WATCHDOG_RECONCILED' in source
+    assert source.index('_store(WATCHDOG_RECONCILED') < source.index('sidecar.install(')
+    assert 'independent_watchdog.start(' not in source
+    assert '"original_job_completion": review["original_job_completion"]' in source
