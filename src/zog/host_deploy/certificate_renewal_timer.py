@@ -225,18 +225,15 @@ def _approved_selected_broker(policy):
     managed certificate consumer and broker UID pins agree with both split
     issuer inspection policies. This is deliberately behind the native gate.
     """
-    from .certificate_managed_authority import (
-        _read_root_json, _valid_binding, ROOT_CONSUMER_BINDING_PATH,
-    )
     from .certificate_issuer_inspection import read_policy as inspect_policy
     from .certificate_issuer_observer import read_policy as observe_policy
     from .certificate_selected_broker_authority import verify
     from .certificate_issuer_lifecycle import SelectedIssuerController
     inspection = inspect_policy(policy["issuer_inspection_policy_file"])
     observer = observe_policy(policy["issuer_observer_policy_file"])
-    binding = _valid_binding(_read_root_json(
-        ROOT_CONSUMER_BINDING_PATH, mode=0o600, limit=8192))
-    authorized = verify(policy, inspection, observer, binding)
+    # host-install must have separately verified private 0600 consumer binding
+    # and published this root-owned nonsecret 0444 immutable broker projection.
+    authorized = verify(policy, inspection, observer)
     caller_uid = os.geteuid()
     try:
         controller_uid = pwd.getpwnam(policy["controller_user"]).pw_uid
