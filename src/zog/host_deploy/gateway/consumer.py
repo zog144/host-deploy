@@ -121,7 +121,9 @@ class GatewayConsumer:
                  approved_catalogue_identity=None, approved_catalogue_path=None,
                  approved_toolchain_task=None, approved_toolchain_identity=None,
                  approved_toolchain_path=None,
-                 approved_graphical_chain_policy_sha256=None):
+                 approved_graphical_chain_policy_sha256=None,
+                 approved_graphical_export_pin_path=None,
+                 graphical_export_directory=None):
         self.state_directory = Path(state_directory)
         self.client = client
         self.configuration = verify_queue_configuration(
@@ -134,15 +136,22 @@ class GatewayConsumer:
         self.approved_catalogue_identity = approved_catalogue_identity
         self.approved_catalogue_path = approved_catalogue_path
         self.approved_graphical_chain_policy_sha256 = approved_graphical_chain_policy_sha256
+        self.approved_graphical_export_pin_path = approved_graphical_export_pin_path
+        self.graphical_export_directory = graphical_export_directory
         if approved_graphical_chain_policy_sha256 is not None:
-            from .graphics_generation_chain import load_installed_step, TASKS
-            if approved_generic_catalogue is None:
-                raise ValueError("graphical chaining requires reviewed fonts catalogue")
-            first_step, first_digest = load_installed_step(
-                TASKS[0], policy_sha256=approved_graphical_chain_policy_sha256)
+            from .graphics_generation_chain import TASKS
+            from .graphics_chain_export import load_selected_step
+            if (approved_generic_catalogue is None
+                    or not approved_graphical_export_pin_path
+                    or not graphical_export_directory):
+                raise ValueError(
+                    "graphical chain requires approved fonts and signed remote Host export")
+            first_step, first_digest = load_selected_step(
+                graphical_export_directory, approved_graphical_export_pin_path,
+                TASKS[0], approved_graphical_chain_policy_sha256)
             if (first_step != approved_generic_catalogue or
                     first_digest != approved_catalogue_identity):
-                raise ValueError("graphical chain does not match installed fonts catalogue")
+                raise ValueError("remote graphical chain does not match approved fonts")
         if ((approved_toolchain_task is None)
                 != (approved_toolchain_identity is None)):
             raise ValueError("reviewed toolchain task requires exact digest")
@@ -185,10 +194,13 @@ class GatewayConsumer:
             task_name = None
             if policy_sha is not None:
                 task_name = state["request"]["parameters"]["task"]
-                from .graphics_generation_chain import TASKS, load_installed_step
+                from .graphics_generation_chain import TASKS
+                from .graphics_chain_export import load_selected_step
                 if task_name in TASKS:
-                    current_catalogue, current_digest = load_installed_step(
-                        task_name, policy_sha256=policy_sha)
+                    current_catalogue, current_digest = load_selected_step(
+                        self.graphical_export_directory,
+                        self.approved_graphical_export_pin_path,
+                        task_name, policy_sha)
             dispatch = load_dispatch(self.state_directory, request_id)
             if dispatch is None:
                 if policy_sha is not None and task_name in TASKS:
@@ -468,7 +480,15 @@ def main(argv=None):
 
     run.add_argument(
         "--approved-graphical-chain-policy-sha256",
-        help="Exact root-installed graphical chain policy; separate native admission",
+        help="Exact reviewed graphical chain policy; separate native admission",
+    )
+    run.add_argument(
+        "--approved-graphical-export-pin-path",
+        help="Installed 0444 nonsecret compiler Host signing-key/epoch pin",
+    )
+    run.add_argument(
+        "--graphical-export-directory",
+        help="Cache of signed compiler Host step exports; not privileged STATE",
     )
 
     run.add_argument("--advance-reviewed-toolchain", action="store_true",
@@ -583,10 +603,15 @@ def main(argv=None):
         if arguments.approved_graphical_chain_policy_sha256:
             if not arguments.advance_reviewed_generic:
                 parser.error("graphical chaining requires explicit generic opt-in")
-            from .graphics_generation_chain import load_installed_step, TASKS
-            first_chain, first_hash = load_installed_step(
-                TASKS[0],
-                policy_sha256=arguments.approved_graphical_chain_policy_sha256)
+            if not (arguments.approved_graphical_export_pin_path
+                    and arguments.graphical_export_directory):
+                parser.error("graphical chain needs authenticated remote Host export")
+            from .graphics_generation_chain import TASKS
+            from .graphics_chain_export import load_selected_step
+            first_chain, first_hash = load_selected_step(
+                arguments.graphical_export_directory,
+                arguments.approved_graphical_export_pin_path,
+                TASKS[0], arguments.approved_graphical_chain_policy_sha256)
             if first_chain != catalogue or first_hash != digest:
                 parser.error("graphical chain does not match approved fonts")
         if (arguments.approved_toolchain_task or
@@ -615,6 +640,9 @@ def main(argv=None):
             approved_toolchain_path=arguments.approved_toolchain_task,
             approved_graphical_chain_policy_sha256=(
                 arguments.approved_graphical_chain_policy_sha256),
+            approved_graphical_export_pin_path=(
+                arguments.approved_graphical_export_pin_path),
+            graphical_export_directory=arguments.graphical_export_directory,
         )
         if arguments.once:
             with dispatcher_lock(state_directory):
