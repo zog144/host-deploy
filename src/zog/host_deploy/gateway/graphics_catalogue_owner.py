@@ -17,7 +17,7 @@ from . import task_catalogue
 from . import fresh_aggregate_disk as aggregate
 from . import fresh_quota_volume as quota
 
-SOURCE = "efb7110006cafeb170da5c2606dccfeb17b6055b"
+SOURCE = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 REPOSITORY = "zog144/image-build"
 PIN_PATH = "project/pins/2026-10-01/commit-pin.py"
 PIN_SHA256 = "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
