@@ -20,8 +20,7 @@ def test_cron_contains_fixed_watch_and_boot_hooks(monkeypatch):
         "identity": {"python_executable": "/usr/bin/python3"},
         "installed": {"host_deploy_python_root": "/opt/zog/accepted/host-deploy/src"},
     }
-    monkeypatch.setattr(owner, "_read_json", lambda path:
-                        owner.json.loads(saved[path]) if path in saved else plan)
+    monkeypatch.setattr(owner, "_read_json", lambda path: plan)
     contents = owner.schedule_text()
     assert "* * * * * root PYTHONPATH=/opt/zog/accepted/host-deploy/src" in contents
     assert " -B -m zog.host_deploy.gateway.fresh_native_owner watch >>" in contents
@@ -189,7 +188,8 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
         }, "installed": {"legacy_baseline_sha256": "sha256:"+"b"*64,
                          "watchdog_receipt_sha256": owner._sha(b"fixed cron")},
     }
-    monkeypatch.setattr(owner, "_read_json", lambda path: plan)
+    monkeypatch.setattr(owner, "_read_json", lambda path:
+                        owner.json.loads(saved[path]) if path in saved else plan)
     monkeypatch.setattr(sidecar, "review_plan", lambda *_: plan)
     monkeypatch.setattr(owner, "_admission", lambda plan: {
         "available_after_reservations_bytes": budget.ADDITIONAL_DISK_BYTES,
