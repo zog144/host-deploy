@@ -76,7 +76,7 @@ async def start_and_wait(bus, message, unit, *, on_ack=None,
             signature="s", body=["org.freedesktop.systemd1"]))
         if (owner.signature != "s" or len(owner.body) != 1
                 or type(owner.body[0]) is not str
-                or not re.fullmatch(r":[0-9]+(?:\\.[0-9]+)+", owner.body[0])):
+                or not re.fullmatch(r":[0-9]+(?:\.[0-9]+)+", owner.body[0])):
             raise JobNotProven("PID1-unique-sender-unconfirmed")
         trusted_sender = owner.body[0]
         subscribed = await call(Message(
