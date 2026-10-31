@@ -59,6 +59,8 @@ def test_nonzero_socket_access_gid_accepts_root_peer_but_rejects_mismatches(
     This source regression does not replace native Host acceptance.
     """
     server, path = create_listener(tmp_path)
+    # Five successive probes require space for unaccepted pending connections.
+    server.listen(16)
     actual_stat = os.stat
     actual_socket = socket.socket
     access_gid = 24301
