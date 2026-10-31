@@ -987,10 +987,10 @@ def _watchdog_pid1_evidence(plan):
     actual_argv = Path("/proc") / str(pid) / "cmdline"
     actual_env = Path("/proc") / str(pid) / "environ"
     expected = props["ExecStart"]
-    if actual_argv.read_bytes().split(b"\\0")[:-1] != [
+    if actual_argv.read_bytes().split(b"\0")[:-1] != [
             arg.encode("utf-8") for arg in expected]:
         raise RuntimeError("independent watchdog PID argv differs")
-    env_items = actual_env.read_bytes().split(b"\\0")
+    env_items = actual_env.read_bytes().split(b"\0")
     env_items = [entry.decode("utf-8") for entry in env_items if entry]
     actual_map = dict(item.split("=", 1) for item in env_items if "=" in item)
     for item in props["Environment"]:
