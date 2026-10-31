@@ -183,3 +183,125 @@ def test_foreign_signal_cannot_fake_PID1_completion():
             bus, Message(path="/org/freedesktop/systemd1",
                          member="StartTransientUnit"), UNIT, timeout=0.02))
     assert bus.calls.count("StartTransientUnit") == 1
+
+
+def test_one_shot_selected_reconcile_no_watchdog_restart(tmp_path, monkeypatch):
+    """Exact root-approved original job may advance once to sidecar, never twice."""
+    state = tmp_path / "owner-state"
+    state.mkdir(mode=0o700)
+    plan = {"sha256": "sha256:"+"a"*64, "host_id": "fresh-host",
+            "identity": {"controller_uid": 24301},
+            "installed": {"legacy_baseline_sha256": "sha256:"+"b"*64,
+                          "watchdog_receipt_sha256": owner._sha(b"cron")}}
+    readback = {
+        "schema": "host-deploy-fresh-watchdog-reconciliation-review-v1",
+        "host_id": "fresh-host", "boot_id": "fresh-boot",
+        "plan_sha256": plan["sha256"],
+        "attempt_sha256": "sha256:"+"c"*64,
+        "job_path": JOB, "job_record_sha256": "sha256:"+"d"*64,
+        "evidence": {"InvocationID": "e"*32, "MainPID": "42"},
+        "evidence_sha256": "sha256:"+"f"*64,
+        "status": "original-attempt-readback-only", "compiler_authorized": False,
+    }
+    approved = {
+        "schema": "host-deploy-fresh-watchdog-reconcile-approval-v1",
+        "status": "operator-approved", "allow_continue_original": True,
+        "host_id": readback["host_id"], "boot_id": readback["boot_id"],
+        "plan_sha256": readback["plan_sha256"],
+        "attempt_sha256": readback["attempt_sha256"],
+        "job_path": readback["job_path"],
+        "job_record_sha256": readback["job_record_sha256"],
+        "invocation_id": readback["evidence"]["InvocationID"],
+        "main_pid": readback["evidence"]["MainPID"],
+        "evidence_sha256": readback["evidence_sha256"],
+    }
+    monkeypatch.setattr(owner, "STATE", state)
+    monkeypatch.setattr(owner, "PLAN_PATH", state / "plan.json")
+    monkeypatch.setattr(owner, "INSTALL_PATH", state / "sidecar-install.json")
+    monkeypatch.setattr(owner, "WATCHDOG_RECONCILED", state / "reconciled.json")
+    monkeypatch.setattr(owner, "WATCHDOG_RECONCILE_APPROVAL", state / "approval.json")
+    monkeypatch.setattr(owner, "_root", lambda: None)
+    monkeypatch.setattr(owner, "_boot", lambda: "fresh-boot")
+    monkeypatch.setattr(owner, "_read_json", lambda path:
+                        approved if path == owner.WATCHDOG_RECONCILE_APPROVAL
+                        else plan)
+    monkeypatch.setattr(owner, "_file", lambda path: b"protected-approval")
+    monkeypatch.setattr(owner, "_budget_directory_prepared",
+                        lambda *, require_empty: True)
+    monkeypatch.setattr(owner, "schedule_text", lambda: "cron")
+    monkeypatch.setattr(owner, "verify_schedule", lambda: True)
+    monkeypatch.setattr(owner, "inspect_watchdog_attempt", lambda: readback)
+    monkeypatch.setattr(owner.sidecar, "review_plan", lambda *args: plan)
+    monkeypatch.setattr(owner.quota, "inspect",
+                        lambda: {"capacity_bytes": owner.aggregate.BUILD_BYTES})
+    monkeypatch.setattr(owner.project_state, "inspect", lambda uid: True)
+    monkeypatch.setattr(owner.aggregate, "inspect_external_native", lambda: {})
+    monkeypatch.setattr(owner.aggregate, "validate_pre_activation", lambda *a,**kw: True)
+    monkeypatch.setattr(owner.os, "chown", lambda *a: None)
+    monkeypatch.setattr(owner.os, "chmod", lambda *a: None)
+    class Native:
+        def verify_source_and_nss(self, plan): pass
+        def validate_old_baseline(self, digest): pass
+        def is_trusted_native_owner(self): return True
+        def read_unit(self, unit): return None
+        def socket_exists(self, path): return False
+    monkeypatch.setattr(owner, "NativeOwner", Native)
+    calls = []
+    def record(path, item, *, exclusive):
+        calls.append((path, item))
+        if path == owner.WATCHDOG_RECONCILED:
+            assert exclusive
+            path.write_bytes(owner._bytes(item))
+    monkeypatch.setattr(owner, "_store", record)
+    def sidecar_installer(plan, *, host_owner):
+        calls.append(("sidecar", plan))
+        return {"plan_sha256": plan["sha256"], "invocation_id": "new-only"}
+    monkeypatch.setattr(owner.sidecar, "install", sidecar_installer)
+    monkeypatch.setattr(owner.independent_watchdog, "start", lambda *args, **kw:
+                        pytest.fail("reconciliation cannot start watchdog again"))
+    got = owner.reconcile_install_approved()
+    assert got["invocation_id"] == "new-only"
+    assert calls[0][0] == owner.WATCHDOG_RECONCILED
+    assert calls[1][0] == "sidecar"
+    with pytest.raises(RuntimeError, match="prior sidecar installation"):
+        owner.reconcile_install_approved()
+    assert [x for x in calls if x[0] == "sidecar"] == [("sidecar", plan)]
+
+
+def test_wrong_approval_does_not_write_or_start(monkeypatch, tmp_path):
+    # Explicit original-attempt approval must bind actual MainPID, not merely
+    # the right Host and plan. Guard this branch in the full fixture above.
+    import inspect
+    source = inspect.getsource(owner.reconcile_install_approved)
+    assert 'if approved != expected:' in source
+    assert '"main_pid": review["evidence"]["MainPID"]' in source
+    assert '"evidence_sha256": review["evidence_sha256"]' in source
+    assert 'if inspect_watchdog_attempt() != review:' in source
+
+
+@pytest.mark.parametrize("field,value", [
+    ("ActiveState", "activating"), ("NRestarts", "1"),
+    ("ControlGroup", "/system.slice/other.service"),
+    ("Type", "simple"), ("MainPID", "0"),
+    ("InvocationID", ""), ("LogNamespace", "foreign"),
+])
+def test_incorrect_watchdog_pid1_identity_is_rejected_before_proc(
+        monkeypatch, field, value):
+    valid = {
+        "LoadState": "loaded", "ActiveState": "active",
+        "SubState": "running", "MainPID": "42",
+        "InvocationID": "a"*32,
+        "ControlGroup": "/system.slice/" + wd.UNIT,
+        "Type": "exec", "Restart": "always",
+        "NRestarts": "0", "LogNamespace": "zogfreshcrossbootstrapoct25",
+    }
+    valid[field] = value
+    monkeypatch.setattr(owner, "_pid1_fields", lambda _: valid)
+    monkeypatch.setattr(wd, "properties", lambda plan: {
+        "ExecStart": ["/usr/bin/python3", "-B", "-m", "zog.host_deploy.gateway.fresh_native_owner",
+                      "watch-loop"],
+        "Environment": ["PYTHONPATH=/opt/pinned",
+                        "PYTHONDONTWRITEBYTECODE=1"],
+        "LogNamespace": "zogfreshcrossbootstrapoct25"})
+    with pytest.raises(RuntimeError, match="identity not established"):
+        owner._watchdog_pid1_evidence({})
