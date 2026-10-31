@@ -110,7 +110,11 @@ def _previous(policy, previous_task, catalogue, installed_receipt):
             or spec["arguments"]["mode"] != "image"):
         _deny()
     generation = spec["arguments"]["selection"]
+    if generation != policy["first_base_generation_id"]:
+        _deny()
     if previous_task == TASKS[0]:
+        if "graphical_predecessor" in spec["arguments"]:
+            _deny()
         expected = {"schema": first.RECEIPT_SCHEMA,
                     "catalogue_sha256": digest,
                     "accepted_base_generation_id": generation,
@@ -129,9 +133,13 @@ def _previous(policy, previous_task, catalogue, installed_receipt):
                 or generation != policy["first_base_generation_id"]):
             _deny()
     else:
+        predecessor_id = spec["arguments"].get("graphical_predecessor")
+        if not _valid_hex(predecessor_id, EXACT_HEX):
+            _deny()
         expected = {"schema": RECEIPT, "catalogue_sha256": digest,
                     "task": previous_task,
                     "selection_generation_id": generation,
+                    "graphical_predecessor_generation_id": predecessor_id,
                     "source_revision": first.SOURCE,
                     "monthly_pin_identity": policy["monthly_pin_identity"],
                     "host_id": policy["host_id"],
@@ -207,7 +215,8 @@ def resolve_successor(*, policy, previous_task, previous_catalogue,
             {"id": name, "project": project, "recipe": recipe}
             for name, project, recipe in reviewed["entries"]],
         "arguments": {"mode": "image",
-                      "selection": ev["output_generation_id"],
+                      "selection": policy["first_base_generation_id"],
+                      "graphical_predecessor": ev["output_generation_id"],
                       "targets": list(reviewed["targets"])},
     }
     cat = task_catalogue.validate({
@@ -215,7 +224,8 @@ def resolve_successor(*, policy, previous_task, previous_catalogue,
     digest = _hash(cat)
     receipt = {
         "schema": RECEIPT, "task": successor, "catalogue_sha256": digest,
-        "selection_generation_id": ev["output_generation_id"],
+        "selection_generation_id": policy["first_base_generation_id"],
+        "graphical_predecessor_generation_id": ev["output_generation_id"],
         "chain_policy_sha256": _hash(policy),
         "previous_catalogue_sha256": prev_digest,
         "predecessor_evidence_sha256": _hash(ev),
@@ -380,7 +390,8 @@ def load_installed_step(task, *, policy_sha256):
         installed = _read_locked(receipt_path)
         expected_keys = {
             "schema", "task", "catalogue_sha256",
-            "selection_generation_id", "chain_policy_sha256",
+            "selection_generation_id", "graphical_predecessor_generation_id",
+            "chain_policy_sha256",
             "previous_catalogue_sha256", "predecessor_evidence_sha256",
             "predecessor_generation_manifest_sha256",
             "predecessor_acceptance_receipt_sha256",
@@ -398,6 +409,9 @@ def load_installed_step(task, *, policy_sha256):
                 or installed["chain_policy_sha256"] != policy_sha256
                 or installed["selection_generation_id"] !=
                     current["tasks"][successor]["arguments"]["selection"]
+                or installed["graphical_predecessor_generation_id"] !=
+                    current["tasks"][successor]["arguments"]["graphical_predecessor"]
+                or installed["selection_generation_id"] != policy["first_base_generation_id"]
                 or installed["source_revision"] != first.SOURCE
                 or installed["monthly_pin_identity"] !=
                     policy["monthly_pin_identity"]

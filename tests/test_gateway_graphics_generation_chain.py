@@ -29,8 +29,13 @@ def catalogue(task, generation):
         "pin_date": first.PIN_DATE,
         "entries": [{"id": n, "project": p, "recipe": r}
                     for n, p, r in fixed["entries"]],
-        "arguments": {"mode": "image", "selection": generation,
-                      "targets": list(fixed["targets"])},
+        "arguments": {
+            "mode": "image",
+            "selection": BASE,
+            **({"graphical_predecessor": generation}
+               if task != chain.TASKS[0] else {}),
+            "targets": list(fixed["targets"]),
+        },
     }}}
     return task_catalogue.validate(data)
 
@@ -105,7 +110,8 @@ def test_finite_successors_never_rewrite_fonts_or_autosubmit():
     assert xcb["next_task"] == chain.TASKS[1]
     assert xcb["compiler_authorized"] is False
     assert set(xcb["catalogue"]["tasks"]) == {chain.TASKS[1]}
-    assert xcb["catalogue"]["tasks"][chain.TASKS[1]]["arguments"]["selection"] == FONTS
+    assert xcb["catalogue"]["tasks"][chain.TASKS[1]]["arguments"]["selection"] == BASE
+    assert xcb["catalogue"]["tasks"][chain.TASKS[1]]["arguments"]["graphical_predecessor"] == FONTS
     assert xcb["catalogue_sha256"] == chain._hash(xcb["catalogue"])
     assert chain._canonical(original) == original_raw
 
@@ -114,7 +120,8 @@ def test_finite_successors_never_rewrite_fonts_or_autosubmit():
     x11 = promote(p, chain.TASKS[1], xcb["catalogue"],
                   xcb["receipt"], second_proof)
     assert x11["next_task"] == chain.TASKS[2]
-    assert x11["catalogue"]["tasks"][chain.TASKS[2]]["arguments"]["selection"] == XCB
+    assert x11["catalogue"]["tasks"][chain.TASKS[2]]["arguments"]["selection"] == BASE
+    assert x11["catalogue"]["tasks"][chain.TASKS[2]]["arguments"]["graphical_predecessor"] == XCB
     assert x11["receipt"]["previous_catalogue_sha256"] == xcb["catalogue_sha256"]
     assert x11["receipt"]["predecessor_pipeline_id"] == second_proof["pipeline_id"]
     assert set(x11["catalogue"]["tasks"]) == {chain.TASKS[2]}

@@ -173,6 +173,15 @@ def _matching_completed_request(
         or task.get("lane_owner") != policy["lane_owner"]
         or task.get("monthly_pin_identity") != policy["monthly_pin_identity"]
         or task.get("arguments", {}).get("selection") != input_generation_id
+        or (
+            previous_task == chain.TASKS[0]
+            and "graphical_predecessor" in task.get("arguments", {})
+        )
+        or (
+            previous_task == chain.TASKS[1]
+            and not _HEX.fullmatch(task.get("arguments", {}).get(
+                "graphical_predecessor", ""))
+        )
     ):
         _deny("frozen predecessor dispatch differs")
 
@@ -265,6 +274,9 @@ def _attest(
         "pipeline_id": pipeline_id,
         "predecessor_catalogue_sha256": catalogue_sha256,
         "input_generation_id": input_generation_id,
+        **({"graphical_predecessor_id":
+            binding["task"]["arguments"]["graphical_predecessor"]}
+           if previous_task == chain.TASKS[1] else {}),
     }
 
     python = binding["python_executable"]
