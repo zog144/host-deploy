@@ -67,23 +67,20 @@ def message(plan):
     )
 
 
-async def _start(plan, *, connect=None):
-    from dbus_next import BusType, MessageType
+async def _start(plan, *, connect=None, on_ack=None):
+    from dbus_next import BusType
     from dbus_next.aio import MessageBus
+    from . import fresh_pid1_job
     bus = await (MessageBus(bus_type=BusType.SYSTEM).connect()
                  if connect is None else connect())
     try:
-        reply = await bus.call(message(plan))
-        if (reply.message_type == MessageType.ERROR or reply.signature != "o"
-                or len(reply.body) != 1):
-            raise RuntimeError("independent watchdog PID1 activation uncertain")
-        return {"unit": UNIT, "job_path": reply.body[0],
-                "method": "StartTransientUnit", "reload": False}
+        return await fresh_pid1_job.start_and_wait(
+            bus, message(plan), UNIT, on_ack=on_ack)
     finally:
         bus.disconnect()
 
 
-def start(plan, *, connect=None):
+def start(plan, *, connect=None, on_ack=None):
     if os.geteuid() != 0:
         raise PermissionError("independent watchdog requires protected root owner")
-    return asyncio.run(_start(plan, connect=connect))
+    return asyncio.run(_start(plan, connect=connect, on_ack=on_ack))
