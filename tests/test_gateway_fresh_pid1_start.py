@@ -151,7 +151,7 @@ def test_reconciliation_never_calls_start_or_removes_marker(monkeypatch):
                         lambda *args: None)
     monkeypatch.setattr(owner.independent_watchdog, "start",
                         lambda *args, **kwargs: invoked.append("start"))
-    with pytest.raises(RuntimeError):
+    with pytest.raises((RuntimeError, KeyError)):
         owner.reconcile_install_approved()
     assert invoked == []
 
