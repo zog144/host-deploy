@@ -37,10 +37,13 @@ class Bus:
             path="/org/freedesktop/systemd1",
             interface="org.freedesktop.systemd1.Manager",
             member="JobRemoved", message_type=MessageType.SIGNAL,
-            signature="uoss", body=[42, JOB, UNIT, self.result]))
+            signature="uoss", body=[42, JOB, UNIT, self.result],
+            sender=":1.1"))
 
     async def call(self, msg):
         self.calls.append(msg.member)
+        if msg.member == "GetNameOwner":
+            return reply(signature="s", body=[":1.1"])
         if msg.member == "StartTransientUnit":
             if self.fail_reply:
                 raise TimeoutError("lost reply")
@@ -64,7 +67,7 @@ def test_early_or_late_pid1_job_removed_is_correlated(event):
     assert result["job_result"] == "done"
     assert result["job_path"] == JOB
     assert acks == [JOB]
-    assert bus.calls == ["AddMatch", "Subscribe", "StartTransientUnit"]
+    assert bus.calls == ["AddMatch", "GetNameOwner", "Subscribe", "StartTransientUnit"]
 
 
 def test_explicit_failed_job_rejected_but_ack_persisted():
@@ -163,3 +166,20 @@ def test_reconcile_approval_and_no_repeat_watchdog_start_in_source():
     assert "allow_continue_original" in s
     assert "_store(WATCHDOG_RECONCILED" in s
     assert s.index("_store(WATCHDOG_RECONCILED") < s.index("sidecar.install(")
+
+
+def test_foreign_signal_cannot_fake_PID1_completion():
+    class WrongSender(Bus):
+        def signal(self):
+            self.handler(Message(
+                path="/org/freedesktop/systemd1",
+                interface="org.freedesktop.systemd1.Manager",
+                member="JobRemoved", message_type=MessageType.SIGNAL,
+                signature="uoss", body=[42, JOB, UNIT, "done"],
+                sender=":1.999"))
+    bus = WrongSender(event="before")
+    with pytest.raises(jobs.JobNotProven, match="completion-timeout"):
+        asyncio.run(jobs.start_and_wait(
+            bus, Message(path="/org/freedesktop/systemd1",
+                         member="StartTransientUnit"), UNIT, timeout=0.02))
+    assert bus.calls.count("StartTransientUnit") == 1
