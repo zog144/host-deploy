@@ -120,7 +120,8 @@ class GatewayConsumer:
                  client, approved_generic_catalogue=None,
                  approved_catalogue_identity=None, approved_catalogue_path=None,
                  approved_toolchain_task=None, approved_toolchain_identity=None,
-                 approved_toolchain_path=None):
+                 approved_toolchain_path=None,
+                 approved_graphical_chain_policy_sha256=None):
         self.state_directory = Path(state_directory)
         self.client = client
         self.configuration = verify_queue_configuration(
@@ -132,6 +133,16 @@ class GatewayConsumer:
         self.approved_generic_catalogue = approved_generic_catalogue
         self.approved_catalogue_identity = approved_catalogue_identity
         self.approved_catalogue_path = approved_catalogue_path
+        self.approved_graphical_chain_policy_sha256 = approved_graphical_chain_policy_sha256
+        if approved_graphical_chain_policy_sha256 is not None:
+            from .graphics_generation_chain import load_installed_step, TASKS
+            if approved_generic_catalogue is None:
+                raise ValueError("graphical chaining requires reviewed fonts catalogue")
+            first_step, first_digest = load_installed_step(
+                TASKS[0], policy_sha256=approved_graphical_chain_policy_sha256)
+            if (first_step != approved_generic_catalogue or
+                    first_digest != approved_catalogue_identity):
+                raise ValueError("graphical chain does not match installed fonts catalogue")
         if ((approved_toolchain_task is None)
                 != (approved_toolchain_identity is None)):
             raise ValueError("reviewed toolchain task requires exact digest")
@@ -167,16 +178,39 @@ class GatewayConsumer:
             if (state["request"]["operation"] != "build.submit"
                     or state["states"]["admission"] != "admitted"):
                 continue
+            current_catalogue = self.approved_generic_catalogue
+            current_digest = self.approved_catalogue_identity
+            policy_sha = self.approved_graphical_chain_policy_sha256
+            task_name = state["request"]["parameters"]["task"]
+            if policy_sha is not None:
+                from .graphics_generation_chain import TASKS, load_installed_step
+                if task_name in TASKS:
+                    current_catalogue, current_digest = load_installed_step(
+                        task_name, policy_sha256=policy_sha)
             dispatch = load_dispatch(self.state_directory, request_id)
             if dispatch is None:
+                if policy_sha is not None and task_name in TASKS:
+                    # One admitted request per stage, including terminal/
+                    # uncertain history: never manufacture a replacement.
+                    for older in sorted(root.iterdir()):
+                        if older.name == request_id:
+                            continue
+                        prior = load_request(self.state_directory, older.name)
+                        if (prior["request"]["operation"] == "build.submit"
+                                and prior["request"]["parameters"]["task"] == task_name
+                                and prior["request"]["parameters"]["lane"] ==
+                                    state["request"]["parameters"]["lane"]
+                                and prior["states"]["admission"] == "admitted"):
+                            raise RuntimeError(
+                                "graphical task already admitted; no duplicate submission")
                 if not _reserve_reviewed_advance(
                         self.state_directory, request_id,
-                        self.approved_catalogue_identity):
+                        current_digest):
                     return None
                 prepare_image_build_dispatch(
                     self.state_directory, request_id,
-                    task_catalogue=self.approved_generic_catalogue,
-                    task_catalogue_identity=self.approved_catalogue_identity,
+                    task_catalogue=current_catalogue,
+                    task_catalogue_identity=current_digest,
                 )
                 return {"request_id": request_id, "action": "prepared"}
             if dispatch["phase"] != "prepared":
@@ -187,7 +221,7 @@ class GatewayConsumer:
             approved = dispatch.get("binding")
             if (type(approved) is not dict
                     or approved.get("task_catalogue_identity")
-                    != self.approved_catalogue_identity):
+                    != current_digest):
                 raise RuntimeError(
                     "reviewed generic catalogue changed since dispatch preparation; "
                     "manual owner reconciliation required"
@@ -197,7 +231,7 @@ class GatewayConsumer:
                 continue
             if not _reserve_reviewed_advance(
                     self.state_directory, request_id,
-                    self.approved_catalogue_identity):
+                    current_digest):
                 return None
             advance_generic(self.state_directory, request_id)
             return {"request_id": request_id, "action": "advanced"}
@@ -430,6 +464,11 @@ def main(argv=None):
         help="Exact separately reviewed catalogue SHA-256; prevents silent repin on restart",
     )
 
+    run.add_argument(
+        "--approved-graphical-chain-policy-sha256",
+        help="Exact root-installed graphical chain policy; separate native admission",
+    )
+
     run.add_argument("--advance-reviewed-toolchain", action="store_true",
                      help="Explicit owner opt-in to pinned typed toolchain supervisor")
     run.add_argument("--approved-toolchain-task",
@@ -539,6 +578,15 @@ def main(argv=None):
                 arguments.approved_task_catalogue, require_root_owned=True)
             if digest != arguments.approved_task_catalogue_sha256:
                 parser.error("reviewed catalogue digest differs from supervisor policy")
+        if arguments.approved_graphical_chain_policy_sha256:
+            if not arguments.advance_reviewed_generic:
+                parser.error("graphical chaining requires explicit generic opt-in")
+            from .graphics_generation_chain import load_installed_step, TASKS
+            first_chain, first_hash = load_installed_step(
+                TASKS[0],
+                policy_sha256=arguments.approved_graphical_chain_policy_sha256)
+            if first_chain != catalogue or first_hash != digest:
+                parser.error("graphical chain does not match approved fonts")
         if (arguments.approved_toolchain_task or
                 arguments.approved_toolchain_task_sha256) and not arguments.advance_reviewed_toolchain:
             parser.error("typed toolchain definition requires explicit supervisor opt-in")
@@ -563,6 +611,8 @@ def main(argv=None):
             approved_toolchain_task=protected,
             approved_toolchain_identity=protected_identity,
             approved_toolchain_path=arguments.approved_toolchain_task,
+            approved_graphical_chain_policy_sha256=(
+                arguments.approved_graphical_chain_policy_sha256),
         )
         if arguments.once:
             with dispatcher_lock(state_directory):
