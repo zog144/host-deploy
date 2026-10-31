@@ -100,13 +100,10 @@ async def _start(unit, typed_properties, *, connect=None, on_ack=None):
     from dbus_next import BusType
     from dbus_next.aio import MessageBus
     from . import fresh_pid1_job
-    bus = await (MessageBus(bus_type=BusType.SYSTEM).connect()
-                 if connect is None else connect())
-    try:
-        return await fresh_pid1_job.start_and_wait(
-            bus, _message(unit, typed_properties), unit, on_ack=on_ack)
-    finally:
-        bus.disconnect()
+    return await fresh_pid1_job.connect_and_wait(
+        (lambda: MessageBus(bus_type=BusType.SYSTEM).connect())
+        if connect is None else connect,
+        _message(unit, typed_properties), unit, on_ack=on_ack)
 
 
 def start_exact_sidecar(unit, mode, properties, *, connect=None,
