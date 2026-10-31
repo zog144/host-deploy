@@ -86,11 +86,13 @@ def test_fixed_policy_promotes_one_generation_per_stage(protected_chain):
         attest_native_owner=owner,
         attest_accepted_predecessor=previous)
     assert first_step["task"] == chain.TASKS[1]
-    assert first_step["selection_generation_id"] == FONTS
+    assert first_step["selection_generation_id"] == policy["first_base_generation_id"]
+    assert first_step["graphical_predecessor_generation_id"] == FONTS
     snapshot, verified_digest = chain.load_installed_step(
         chain.TASKS[1], policy_sha256=digest)
     assert verified_digest == first_step["catalogue_sha256"]
-    assert snapshot["tasks"][chain.TASKS[1]]["arguments"]["selection"] == FONTS
+    assert snapshot["tasks"][chain.TASKS[1]]["arguments"]["selection"] == policy["first_base_generation_id"]
+    assert snapshot["tasks"][chain.TASKS[1]]["arguments"]["graphical_predecessor"] == FONTS
     with pytest.raises(chain.ChainBlocked):
         chain.install_next_native(
             previous_task=chain.TASKS[0],
@@ -102,7 +104,8 @@ def test_fixed_policy_promotes_one_generation_per_stage(protected_chain):
         attest_native_owner=owner,
         attest_accepted_predecessor=previous)
     assert second_step["task"] == chain.TASKS[2]
-    assert second_step["selection_generation_id"] == XCB
+    assert second_step["selection_generation_id"] == policy["first_base_generation_id"]
+    assert second_step["graphical_predecessor_generation_id"] == XCB
     final, final_digest = chain.load_installed_step(
         chain.TASKS[2], policy_sha256=digest)
     assert final_digest == second_step["catalogue_sha256"]
