@@ -1199,10 +1199,31 @@ def inspect_watchdog_attempt():
                 _sha(_bytes(independent_watchdog.properties(plan)))):
         raise RuntimeError("watchdog attempted marker differs from reviewed installation")
     job = _read_json(WATCHDOG_JOB)
-    if (job.get("plan_sha256") != plan["sha256"]
+    if (job.get("schema") != "host-deploy-fresh-watchdog-job-v1"
+            or job.get("plan_sha256") != plan["sha256"]
             or job.get("boot_id") != _boot()
-            or job.get("attempt_sha256") != _sha(_file(WATCHDOG_ATTEMPT))):
+            or job.get("attempt_sha256") != _sha(_file(WATCHDOG_ATTEMPT))
+            or not isinstance(job.get("job_path"), str)
+            or not re.fullmatch(
+                r"/org/freedesktop/systemd1/job/[1-9][0-9]*",
+                job["job_path"])):
         raise RuntimeError("original watchdog PID1 job record uncertain")
+    # No completion record is NOT retroactive proof of a successful PID1
+    # job. Explicit operator approval may separately adopt the still-live
+    # exact original worker only when original method ACK exists.
+    completed = "unconfirmed"
+    if WATCHDOG_JOB_COMPLETION.exists() or WATCHDOG_JOB_COMPLETION.is_symlink():
+        result = _read_json(WATCHDOG_JOB_COMPLETION)
+        if (result.get("schema") !=
+                "host-deploy-fresh-watchdog-job-completion-v1"
+                or result.get("plan_sha256") != plan["sha256"]
+                or result.get("boot_id") != _boot()
+                or result.get("job_path") != job["job_path"]
+                or result.get("job_result") != "done"
+                or result.get("job_record_sha256") !=
+                    _sha(_file(WATCHDOG_JOB))):
+            raise RuntimeError("original watchdog job completion receipt uncertain")
+        completed = "recorded-done"
     evidence = _wait_exact_watchdog(plan)
     return {
         "schema": "host-deploy-fresh-watchdog-reconciliation-review-v1",
@@ -1211,6 +1232,7 @@ def inspect_watchdog_attempt():
         "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
         "job_path": job["job_path"],
         "job_record_sha256": _sha(_file(WATCHDOG_JOB)),
+        "original_job_completion": completed,
         "evidence": evidence,
         "evidence_sha256": _sha(_bytes(evidence)),
         "status": "original-attempt-readback-only",
@@ -1258,6 +1280,7 @@ def reconcile_install_approved():
         "attempt_sha256": review["attempt_sha256"],
         "job_path": review["job_path"],
         "job_record_sha256": review["job_record_sha256"],
+        "original_job_completion": review["original_job_completion"],
         "invocation_id": review["evidence"]["InvocationID"],
         "main_pid": review["evidence"]["MainPID"],
         "evidence_sha256": review["evidence_sha256"],
