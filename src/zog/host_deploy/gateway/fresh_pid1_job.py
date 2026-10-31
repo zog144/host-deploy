@@ -9,7 +9,7 @@ import asyncio
 import re
 
 MAX_WAIT_SECONDS = 20
-_JOB = re.compile(r"/org/freedesktop/systemd1/job/[1-9][0-9]*\\Z")
+_JOB = re.compile(r"/org/freedesktop/systemd1/job/[1-9][0-9]*\Z")
 
 
 class JobNotProven(RuntimeError):
