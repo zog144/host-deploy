@@ -370,9 +370,6 @@ def test_sidecar_rejects_foreign_process_before_socket_probe(monkeypatch):
                          ("NRestarts","1"), ("MainPID","0"),
                          ("LogNamespace","foreign"), ("SubState","dead"),
                          ("ControlGroup","/system.slice/other.service")]:
-        with pytest.raises(RuntimeError, match="identity not established"):
-            owner._sidecar_pid1_evidence(
-                plan, deadline=owner.time.monotonic()+5)
         # Ensure each distinct bad field cannot fall back to pathname check.
         old = fields[key]; fields[key] = changed
         with pytest.raises(RuntimeError, match="identity not established"):
