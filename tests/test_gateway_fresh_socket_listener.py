@@ -73,3 +73,30 @@ def test_mode_or_gid_drift_fails_even_when_listening(tmp_path):
             probe._verified_listener(path, os.getpid(), os.getuid(), os.getgid())
     finally:
         server.close()
+
+
+def test_procfs_chunked_seqfile_is_read_to_eof_not_first_short_page(monkeypatch):
+    import builtins
+    chunks = [b"earlier-header\\n", b"later-UNIX-listener-row\\n", b""]
+    class ShortReader:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self, count):
+            return chunks.pop(0)
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "open", lambda *args, **kw: ShortReader())
+        assert probe._bytes("/proc/net/unix", 1000) == (
+            b"earlier-header\\nlater-UNIX-listener-row\\n")
+    assert chunks == []
+
+
+def test_oversized_procfs_seqfile_fails_closed(monkeypatch):
+    import builtins
+    class ShortReader:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self, count): return b"x" * count
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "open", lambda *args, **kw: ShortReader())
+        with pytest.raises(RuntimeError, match="identity unverified"):
+            probe._bytes("/proc/net/unix", 10)
