@@ -185,7 +185,7 @@ def test_task_cannot_borrow_another_reviewed_recipe_set():
     value["tasks"]["graphics-fonts-image-v1"]["arguments"]["targets"] = item(
         "graphics-xcb-core-image-v1"
     )["arguments"]["targets"]
-    with pytest.raises(TaskCatalogueError, match="reviewed task selection"):
+    with pytest.raises(TaskCatalogueError, match="reviewed selection"):
         validate(value)
 
 

@@ -12,7 +12,7 @@ SCHEMA = 2
 _REVISION = re.compile(r"[a-f0-9]{40}\Z")
 _GENERATION = re.compile(r"[a-f0-9]{64}\Z")
 _SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
-_PACKAGE = re.compile(r"[a-z0-9][a-z0-9+_.-]{0,127}\Z")
+_PACKAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9+_.-]{0,127}\Z")
 _RECIPE = re.compile(r"(?:[a-zA-Z0-9+_.-]+/)+[a-zA-Z0-9+_.-]+\Z")
 _LANE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MONTH = re.compile(r"\d{4}-\d{2}-01\Z")
@@ -138,7 +138,7 @@ def validate(value):
                 {"id": identifier, "project": project, "recipe": recipe}
                 for identifier, project, recipe in reviewed["entries"]]:
             raise TaskCatalogueError(
-                "generic recipe identities differ from reviewed task selection"
+                "generic recipe identities differ from reviewed selection"
             )
         arguments = item["arguments"]
         if type(arguments) is not dict or arguments.get("mode") not in {
