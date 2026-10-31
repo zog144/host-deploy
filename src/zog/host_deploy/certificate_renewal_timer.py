@@ -218,6 +218,100 @@ def _authenticated_issuer_evidence(policy, *, request_id, started, controller_re
     return observed
 
 
+def _approved_selected_broker(policy):
+    """Read independently installed root Host/issuer/controller identity first.
+
+    No socket is opened and no client is constructed until the root-owned
+    managed certificate consumer and broker UID pins agree with both split
+    issuer inspection policies. This is deliberately behind the native gate.
+    """
+    from .certificate_managed_authority import (
+        _read_root_json, _valid_binding, ROOT_CONSUMER_BINDING_PATH,
+    )
+    from .certificate_issuer_inspection import read_policy as inspect_policy
+    from .certificate_issuer_observer import read_policy as observe_policy
+    from .certificate_selected_broker_authority import verify
+    from .certificate_issuer_lifecycle import SelectedIssuerController
+    inspection = inspect_policy(policy["issuer_inspection_policy_file"])
+    observer = observe_policy(policy["issuer_observer_policy_file"])
+    binding = _valid_binding(_read_root_json(
+        ROOT_CONSUMER_BINDING_PATH, mode=0o600, limit=8192))
+    authorized = verify(policy, inspection, observer, binding)
+    caller_uid = os.geteuid()
+    try:
+        controller_uid = pwd.getpwnam(policy["controller_user"]).pw_uid
+        issuer_uid = pwd.getpwnam(policy["issuer_user"]).pw_uid
+    except KeyError:
+        raise RenewalBlocked("selected-broker-local-identity-missing") from None
+    if (caller_uid == 0 or caller_uid != authorized["caller_uid"]
+            or caller_uid in (authorized["controller_uid"], issuer_uid)
+            or controller_uid != authorized["controller_uid"]
+            or issuer_uid != authorized["issuer_uid"]):
+        raise RenewalBlocked("selected-broker-installed-identity-mismatch")
+    return SelectedIssuerController(
+        authorized["issuer_lifecycle_socket"],
+        controller_uid=authorized["controller_uid"])
+
+
+def _selected_postflight(policy, controller, *, renewal_id, fingerprint,
+                         outcome, renewal_proof):
+    """Require distinct UID-authenticated selected inspect before publication.
+
+    A controller 'satisfied' alone can never cause stage. A missing inspect
+    leaves the original one-shot renewal and inspect IDs retained.
+    """
+    from .certificate_selected_inspection import tick as inspect_tick
+    from .certificate_issuer_inspection import read_policy as read_inspection_policy
+    from .certificate_issuer_observer import read_policy as read_observer_policy
+    from .certificate_renewal import REQUEST_ID
+    if (not isinstance(controller, object)
+            or getattr(controller, "_controller_uid", None) is None
+            or not hasattr(controller, "inspect_issuer_result")
+            or type(renewal_id) is not str
+            or REQUEST_ID.fullmatch(renewal_id) is None
+            or outcome not in ("unchanged", "renewed")
+            or type(fingerprint) is not str
+            or _SHA.fullmatch(fingerprint) is None):
+        raise RenewalBlocked("selected-inspection-broker-not-authenticated")
+    inspection = read_inspection_policy(policy["issuer_inspection_policy_file"])
+    observer = read_observer_policy(policy["issuer_observer_policy_file"])
+    if (inspection["certificate_id"] != policy["certificate_id"]
+            or inspection["policy_sha256"] != policy["policy_sha256"]
+            or observer["certificate_id"] != policy["certificate_id"]
+            or observer["policy_sha256"] != policy["policy_sha256"]
+            or inspection["issuer_uid"] != observer["issuer_uid"]
+            or inspection["caller_uid"] != observer["caller_uid"]
+            or type(renewal_proof) is not dict
+            or renewal_proof.get("status") != "journal-ready"
+            or renewal_proof.get("request_id") != renewal_id
+            or renewal_proof.get("certificate_fingerprint_sha256") != fingerprint
+            or renewal_proof.get("outcome") != outcome
+            or renewal_proof.get("host_policy_digest") != observer["host_policy_digest"]
+            or renewal_proof.get("tls_ready") is not False):
+        raise RenewalBlocked("selected-inspection-renewal-binding-mismatch")
+    scope = {
+        "certificate_id": inspection["certificate_id"],
+        "policy_sha256": inspection["policy_sha256"],
+        "hostnames": inspection["hostnames"],
+        "issuer_uid": inspection["issuer_uid"],
+        "issuer_gid": observer["issuer_gid"],
+        "storage_id": observer["storage_id"],
+        "grant_id": observer["grant_id"],
+    }
+    selected = inspect_tick(
+        policy["journal_directory"], controller, scope,
+        original_renewal_id=renewal_id,
+        trusted_renewal_observation=renewal_proof,
+        host_policy_digest=observer["host_policy_digest"])
+    if selected["phase"] != "verified":
+        return False
+    if (selected["request_id"] == renewal_id
+            or selected["fingerprint"] != fingerprint
+            or selected["outcome"] != outcome):
+        raise RenewalBlocked("selected-inspection-final-result-mismatch")
+    return True
+
+
 def _publication_policy(policy):
     """Independent root-owned authorization of stage and chosen TLS consumer."""
     from zog.certify_manage.security import trusted_policy
@@ -429,7 +523,7 @@ def main(argv=None):
                     or inspection["issuer_uid"] !=
                        pwd.getpwnam(policy["issuer_user"]).pw_uid):
                 raise RenewalBlocked("split-identity-authorization-mismatch")
-            controller = SelectedIssuerController(policy["issuer_lifecycle_socket"])
+            controller = _approved_selected_broker(policy)
         else:
             user = pwd.getpwnam(policy["controller_user"])
             if os.geteuid() != user.pw_uid or os.geteuid() == 0:
