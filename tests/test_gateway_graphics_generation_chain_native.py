@@ -97,7 +97,7 @@ def test_fixed_policy_promotes_one_generation_per_stage(protected_chain):
                         FONTS if task == chain.TASKS[0] else XCB,
                         request_id=("1" if task == chain.TASKS[0] else "6")*32)
 
-    first_step = chain.install_next_native(
+    first_step = chain._install_with_attesters(
         previous_task=chain.TASKS[0],
         attest_native_owner=owner,
         attest_accepted_predecessor=previous)
@@ -110,12 +110,12 @@ def test_fixed_policy_promotes_one_generation_per_stage(protected_chain):
     assert snapshot["tasks"][chain.TASKS[1]]["arguments"]["selection"] == policy["first_base_generation_id"]
     assert snapshot["tasks"][chain.TASKS[1]]["arguments"]["graphical_predecessor"] == FONTS
     with pytest.raises(chain.ChainBlocked):
-        chain.install_next_native(
+        chain._install_with_attesters(
             previous_task=chain.TASKS[0],
             attest_native_owner=owner,
             attest_accepted_predecessor=previous)
 
-    second_step = chain.install_next_native(
+    second_step = chain._install_with_attesters(
         previous_task=chain.TASKS[1],
         attest_native_owner=owner,
         attest_accepted_predecessor=previous)
@@ -142,7 +142,7 @@ def test_partial_next_file_is_not_retried_or_replaced(protected_chain):
     original = dest.read_bytes()
     visited = []
     with pytest.raises(chain.ChainBlocked):
-        chain.install_next_native(
+        chain._install_with_attesters(
             previous_task=chain.TASKS[0],
             attest_native_owner=lambda _: visited.append("owner") or True,
             attest_accepted_predecessor=lambda *args: pytest.fail(
@@ -157,3 +157,13 @@ def test_wrong_policy_hash_denied_before_stage_read(protected_chain):
     with pytest.raises(chain.ChainBlocked):
         chain.load_installed_step(chain.TASKS[0],
                                   policy_sha256="sha256:"+"0"*64)
+
+def test_protected_public_entrypoint_rejects_injected_callbacks():
+    import inspect
+    signature = inspect.signature(chain.install_next_native)
+    assert list(signature.parameters) == ["previous_task"]
+    with pytest.raises(TypeError):
+        chain.install_next_native(
+            previous_task=chain.TASKS[0],
+            attest_native_owner=lambda _: True,
+            attest_accepted_predecessor=lambda *args: {})
