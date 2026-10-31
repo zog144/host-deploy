@@ -943,8 +943,8 @@ def install_approved():
             "job_path": job["job_path"], "job_result": job["job_result"],
             "evidence": evidence, "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
         }, exclusive=True)
-    except Exception:
-        _watchdog_failure_snapshot(plan)
+    except Exception as exc:
+        _watchdog_failure_snapshot(plan, exc)
         raise
     # The top of the quota image is ROOT-owned and not writable by either
     # isolated nonroot UID. Otherwise the build UID could rename the protected
@@ -1061,7 +1061,7 @@ def _wait_exact_sidecar_readiness(owner, unit):
         time.sleep(0.1)
 
 
-def _watchdog_failure_snapshot(plan):
+def _watchdog_failure_snapshot(plan, error=None):
     """Record a fixed, nonsecret post-error observation without masking it."""
     if WATCHDOG_FAILURE.exists() or WATCHDOG_FAILURE.is_symlink():
         return
@@ -1073,9 +1073,13 @@ def _watchdog_failure_snapshot(plan):
         job = _read_json(WATCHDOG_JOB)
     except (OSError, ValueError, KeyError, PermissionError):
         job = {}
+    reason = getattr(error, "status", "readiness-or-receipt-unproven")
+    if type(reason) is not str or not re.fullmatch(r"[a-z0-9-]{1,80}", reason):
+        reason = "unclassified-start-failure"
     try:
         _store(WATCHDOG_FAILURE, {
             "schema": "host-deploy-fresh-watchdog-failure-v1",
+            "pid1_job_outcome": reason,
             "plan_sha256": plan["sha256"], "boot_id": _boot(),
             "attempt_sha256": _sha(_file(WATCHDOG_ATTEMPT)),
             "job_path": job.get("job_path"),
