@@ -32,7 +32,8 @@ class Broker:
 def test_direct_selected_start_and_result_are_bound_to_original_request():
     broker = Broker("/run/zog/certify-lifecycle.sock")
     ctrl = SelectedIssuerController("/run/zog/certify-lifecycle.sock",
-                                    client_factory=lambda path: broker)
+                                    controller_uid=23001,
+                                    client_factory=lambda path, *, controller_uid: broker)
     rid = ctrl.issue_application_request_id()
     assert ctrl.direct_selected_launch is True
     assert ctrl.application_request_result(rid) is None
@@ -49,7 +50,8 @@ def test_direct_selected_start_and_result_are_bound_to_original_request():
 def test_only_exact_selected_programs_are_allowed():
     broker = Broker("/run/zog/certify-lifecycle.sock")
     ctrl = SelectedIssuerController("/run/zog/certify-lifecycle.sock",
-                                    client_factory=lambda _: broker)
+                                    controller_uid=23001,
+                                    client_factory=lambda path, *, controller_uid: broker)
     rid = ctrl.issue_application_request_id()
     for app, program in (
         ("station-access", "renew"), ("certify-manage", "issue"),
@@ -75,7 +77,8 @@ def test_only_exact_selected_programs_are_allowed():
 def test_untrusted_broker_result_fails_closed(invalid):
     broker = Broker("/run/zog/certify-lifecycle.sock")
     ctrl = SelectedIssuerController("/run/zog/certify-lifecycle.sock",
-                                    client_factory=lambda _: broker)
+                                    controller_uid=23001,
+                                    client_factory=lambda path, *, controller_uid: broker)
     rid = ctrl.issue_application_request_id()
     broker.replies[rid] = {**{"request_id": rid, "status": "satisfied",
                                 "program": "renew", "runtime_id": "RUNTIME01"},
@@ -87,7 +90,8 @@ def test_untrusted_broker_result_fails_closed(invalid):
 def test_socket_lost_reply_returns_uncertainty_not_another_id():
     broker = Broker("/run/zog/certify-lifecycle.sock")
     ctrl = SelectedIssuerController("/run/zog/certify-lifecycle.sock",
-                                    client_factory=lambda _: broker)
+                                    controller_uid=23001,
+                                    client_factory=lambda path, *, controller_uid: broker)
     rid = ctrl.issue_application_request_id()
     def lost(*args, **kwargs):
         raise ConnectionResetError("possibly committed")
@@ -96,3 +100,14 @@ def test_socket_lost_reply_returns_uncertainty_not_another_id():
         ctrl.request_application_launch("certify-manage", program_name="renew",
                                         request_id=rid)
     assert broker.issued == 1
+
+def test_selected_broker_never_constructs_unpinned_client():
+    broker = Broker("/run/zog/certify-lifecycle.sock")
+    invoked = []
+    for uid in (None, 0, -1, True, "23001"):
+        with pytest.raises(RenewalBlocked, match="uid-required"):
+            SelectedIssuerController(
+                "/run/zog/certify-lifecycle.sock", controller_uid=uid,
+                client_factory=lambda *a, **kw: invoked.append((a, kw)))
+    assert invoked == []
+
