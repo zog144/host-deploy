@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
+import tempfile
 
 import pytest
 from zog.host_deploy.gateway import graphics_catalogue_owner as g
@@ -15,10 +17,22 @@ from zog.host_deploy.gateway import task_catalogue, fresh_native_owner
 from test_gateway_first_graphics_catalogue import example, accepted_pin_bytes
 
 
+@pytest.fixture
+def protected_tmp():
+    # /tmp is world writable even when the fixture child is root-owned;
+    # _protected_root intentionally rejects that ancestry.
+    root=Path(tempfile.mkdtemp(prefix="zog-test-",dir="/root"))
+    root.chmod(0o700)
+    try:
+        yield root
+    finally:
+        shutil.rmtree(root)
+
+
 @pytest.mark.skipif(os.geteuid()!=0, reason="root-only disposable test")
-def test_root_owned_one_shot_receipt_and_no_replacement(tmp_path, monkeypatch):
+def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypatch):
     a, lane, base, reservation = example()
-    state=tmp_path/"protected-owner-state"
+    state=protected_tmp/"protected-owner-state"
     state.mkdir(mode=0o700)
     state.chmod(0o700)
     pin=accepted_pin_bytes()
@@ -83,9 +97,9 @@ def test_root_owned_one_shot_receipt_and_no_replacement(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.geteuid()!=0, reason="root-only disposable test")
-def test_partial_original_catalogue_cannot_be_repaired(tmp_path,monkeypatch):
+def test_partial_original_catalogue_cannot_be_repaired(protected_tmp,monkeypatch):
     a,_,_,_=example()
-    owner=tmp_path/"state"
+    owner=protected_tmp/"state"
     owner.mkdir(mode=0o700)
     monkeypatch.setattr(g,"STORE",owner)
     monkeypatch.setattr(g,"APPROVAL",owner/"approval")
