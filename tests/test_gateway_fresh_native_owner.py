@@ -210,7 +210,16 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
     monkeypatch.setattr(owner, "WATCHDOG_ATTEMPT",
                         state / "watchdog-attempt.json")
     monkeypatch.setattr(owner.independent_watchdog, "start",
-                        lambda plan: calls.append("pid1-watchdog"))
+                        lambda plan, *, on_ack: (
+                            on_ack("/org/freedesktop/systemd1/job/42"),
+                            calls.append("pid1-watchdog"),
+                            {"job_path": "/org/freedesktop/systemd1/job/42",
+                             "job_result": "done"})[-1])
+    monkeypatch.setattr(owner, "_wait_exact_watchdog", lambda plan: {
+        "LoadState": "loaded", "ActiveState": "active",
+        "MainPID": "123", "InvocationID": "a"*32,
+        "ControlGroup": "/system.slice/" + owner.independent_watchdog.UNIT,
+    })
     monkeypatch.setattr(owner, "_boot", lambda: "test-boot")
     def provision(**kwargs):
         calls.append("kernel-quota")
@@ -234,9 +243,13 @@ def test_storage_preparation_before_installer_and_pid1(tmp_path, monkeypatch):
                         (calls.append("pid1-start") or {
                             "plan_sha256": p["sha256"], "invocation_id": "new-only",
                         }))
-    monkeypatch.setattr(owner, "_store", lambda path, item, *, exclusive:
-                        calls.append("watchdog-attempt" if path == owner.WATCHDOG_ATTEMPT
-                                     else "activation-checkpoint"))
+    saved = {}
+    def store(path, item, *, exclusive):
+        saved[path] = owner._bytes(item)
+        calls.append("watchdog-attempt" if path == owner.WATCHDOG_ATTEMPT
+                     else "activation-checkpoint")
+    monkeypatch.setattr(owner, "_store", store)
+    monkeypatch.setattr(owner, "_file", lambda path: saved[path])
     prepared = owner.prepare_work()
     assert prepared["compiler_authorized"] is False
     result = owner.install_approved()
