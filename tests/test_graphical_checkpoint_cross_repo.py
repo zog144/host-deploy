@@ -100,6 +100,9 @@ def test_exact_root_issuer_host_installer_and_gateway(model):
     assert gateway.require_current(build(owners[1],2))["epoch"]==2
     # Coherent rollback of local public/private files is NOT authority.
     (pubdir/local.PUBLIC_NAME).unlink()
+    # Synthetic rollback replaces the entire file, not an in-place write
+    # through the root-owned 0444 immutable file mode.
+    (pubdir/local.PUBLIC_NAME).unlink()
     (pubdir/local.PUBLIC_NAME).write_bytes(old_pub)
     (pubdir/local.PUBLIC_NAME).chmod(0o444)
     (privdir/local.PRIVATE_JOURNAL).unlink()
