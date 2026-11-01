@@ -42,9 +42,10 @@ def installed(monkeypatch):
                 [path, importer._inventory(path)] for path in roots
             ])).hexdigest(),
         }
-    monkeypatch.setattr(importer, "_read_policy", policy)
+    pinned = policy()  # Freeze expected digests before any mutation test.
+    monkeypatch.setattr(importer, "_read_policy", lambda: pinned)
     try:
-        yield root, policy, roots
+        yield root, pinned, roots
     finally:
         for path in roots:
             Path(path).chmod(0o700)
