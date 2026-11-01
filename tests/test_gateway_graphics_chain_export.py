@@ -24,6 +24,7 @@ def setup():
         "boot_id": "b" * 32, "epoch": 7,
         "chain_policy_sha256": chain._hash(policy),
         "original_catalogue_sha256": chain._hash(cat),
+        "first_base_generation_id": policy["first_base_generation_id"],
         "public_key": base64.b64encode(pub).decode("ascii"),
         "source_revision": cat["tasks"][chain.TASKS[0]]["source_revision"],
         "monthly_pin_identity": cat["tasks"][chain.TASKS[0]]["monthly_pin_identity"],
@@ -89,7 +90,8 @@ def test_pin_revocation_reboot_and_owner_epoch_deny_old_export():
     for change in ({"epoch": pin["epoch"] + 1},
                    {"boot_id": "0" * 32},
                    {"chain_policy_sha256": "sha256:"+"0"*64},
-                   {"source_revision": "f"*40}):
+                   {"source_revision": "f"*40},
+                   {"first_base_generation_id": "0"*64}):
         with pytest.raises(export.GraphicalExportBlocked):
             export.verify(signed(payload), {**pin, **change},
                           task=chain.TASKS[0], now=now)
@@ -117,3 +119,45 @@ def test_gateway_unit_is_unprivileged_and_keeps_private_state_out():
     body = inspect.getsource(consumer.GatewayConsumer._advance_one_reviewed)
     assert "load_selected_step" in body
     assert "load_installed_step" not in body
+
+
+def test_signed_cross_host_xcb_x11_exports_bind_original_toolchain_and_accepted_layers():
+    """The nonroot view must retain the original toolchain, not recast images."""
+    from test_gateway_graphics_generation_chain import evidence, FONTS, XCB
+    policy, fonts, receipt = scenario()
+    pin, payload, signed, _, now = setup()
+    xcb = chain.resolve_successor(
+        policy=policy, previous_task=chain.TASKS[0],
+        previous_catalogue=fonts, previous_receipt=receipt,
+        accepted_generation=evidence(policy, chain.TASKS[0], fonts, FONTS),
+    )
+    x11 = chain.resolve_successor(
+        policy=policy, previous_task=chain.TASKS[1],
+        previous_catalogue=xcb["catalogue"], previous_receipt=xcb["receipt"],
+        accepted_generation=evidence(
+            policy, chain.TASKS[1], xcb["catalogue"], XCB, request_id="6"*32),
+    )
+    for task, candidate, layer in (
+        (chain.TASKS[1], xcb, FONTS),
+        (chain.TASKS[2], x11, XCB),
+    ):
+        envelope = dict(
+            payload, task=task, catalogue=candidate["catalogue"],
+            catalogue_sha256=candidate["catalogue_sha256"],
+            receipt_sha256=chain._hash(candidate["receipt"]),
+        )
+        verified, digest = export.verify(signed(envelope), pin, task=task, now=now)
+        assert digest == candidate["catalogue_sha256"]
+        args = verified["tasks"][task]["arguments"]
+        assert args["selection"] == policy["first_base_generation_id"]
+        assert args["graphical_predecessor"] == layer
+        # Even an authentic signature from this signer cannot change the
+        # independently installed original-toolchain public pin.
+        forged_cat = json.loads(json.dumps(candidate["catalogue"]))
+        forged_cat["tasks"][task]["arguments"]["selection"] = "f"*64
+        forged = dict(
+            envelope, catalogue=forged_cat,
+            catalogue_sha256=chain._hash(forged_cat),
+        )
+        with pytest.raises(export.GraphicalExportBlocked):
+            export.verify(signed(forged), pin, task=task, now=now)
