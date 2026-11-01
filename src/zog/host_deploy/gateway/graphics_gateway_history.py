@@ -19,6 +19,7 @@ SCHEMA = "host-deploy-graphical-gateway-history-grant-v1"
 PIN = "host-deploy-graphical-command-center-history-issuer-v1"
 _SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 _ID = re.compile(r"[a-f0-9]{32}\Z")
+_LANE = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 
 
 class HistoryAuthorityBlocked(RuntimeError):
@@ -94,6 +95,8 @@ def _verify(grant, pin, policy, request_id, request, dispatch, progress):
             or payload["request_id"] != request_id
             or not _ID.fullmatch(request_id)
             or payload["task"] not in chain.TASKS[:2]
+            or type(payload["lane"]) is not str
+            or not _LANE.fullmatch(payload["lane"])
             or payload["task"] != request.get("request", {}).get(
                 "parameters", {}).get("task")
             or payload["pipeline_id"] != progress.get("pipeline_id")
