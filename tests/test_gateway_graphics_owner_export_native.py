@@ -52,6 +52,8 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
         path = store/name
         path.write_bytes(chain._canonical(value))
         path.chmod(0o600)
+    (store/"graphical-export-publications").mkdir(mode=0o700)
+    (store/"graphical-live-nonces").mkdir(mode=0o700)
     raw = exports.issue_native_step_export(
         task=chain.TASKS[0],published_at=start,expires_at=end)
     from test_gateway_graphics_chain_export import setup
@@ -60,6 +62,18 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
                 "public_key":base64.b64encode(pub).decode("ascii")})
     selected,digest=exports.verify(raw,pin,task=chain.TASKS[0],now=now)
     assert selected==cat and digest==chain._hash(cat)
+    import json
+    nonce = "a"*64
+    challenge = exports._canonical({
+        "schema": "host-deploy-graphical-live-request-v1",
+        "nonce": nonce, "task": chain.TASKS[0],
+        "export_sha256": "sha256:"+hashlib.sha256(raw).hexdigest()})
+    live = exports.issue_native_live_epoch_ack(challenge)
+    assert exports.verify_live_ack(
+        live,pin,nonce=nonce,export_digest="sha256:"+hashlib.sha256(raw).hexdigest(),
+        task=chain.TASKS[0])["sequence"] == 1
+    with pytest.raises((FileExistsError,exports.GraphicalExportBlocked)):
+        exports.issue_native_live_epoch_ack(challenge)
     first.RECEIPT.write_bytes(b"tampered")
     with pytest.raises((ValueError,chain.ChainBlocked)):
         exports.issue_native_step_export(
