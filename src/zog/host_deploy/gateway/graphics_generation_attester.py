@@ -228,8 +228,10 @@ def _attest(
     ):
         _deny("producer companion binding differs")
 
-    _verify_checkout(binding["source_root"], first.SOURCE)
-    _verify_checkout(companion["source_root"], companion["revision"])
+    # Root must not run Git or Python from Project source/companions.
+    # Project .git/config may request executable fsmonitor/filter helpers and
+    # a clean Git diff ignores shadowing content and import-time mutations.
+    # The source/companion commit fields remain checked as provenance only.
     if profile.get("controller"):
         controller = binding.get("controller_companion")
         if (
@@ -239,9 +241,10 @@ def _attest(
             or profile.get("controller_source_root") is None
         ):
             _deny("controller companion binding differs")
-        _verify_checkout(
-            profile["controller_source_root"], controller["revision"]
-        )
+    from . import graphics_attester_import as protected_import
+    import_pin = protected_import.verify(
+        source_revision=first.SOURCE,
+        monthly_pin_identity=policy["monthly_pin_identity"])
 
     argv = binding["argv"]
     state_dir = _argv_value(argv, "--state-dir")
@@ -279,13 +282,7 @@ def _attest(
            if previous_task == chain.TASKS[1] else {}),
     }
 
-    python = binding["python_executable"]
-    python_path = argv[1]
-    if not python_path.startswith("PYTHONPATH="):
-        _deny("producer Python path is not frozen")
-    command = [
-        python, "-B", "-s", "-m",
-        "zog.image_build.graphical_generation_acceptance",
+    command = protected_import.command(import_pin, [
         "--repository-root", binding["source_root"],
         "--state-dir", state_dir,
         "--source-repository", first.REPOSITORY,
@@ -294,7 +291,7 @@ def _attest(
         "--provenance-project-id", project_id,
         "--provenance-pin", pin_path,
         "--expected-pin-digest", expected_pin,
-    ]
+    ])
     result = _run(
         command,
         input=_canonical(context),
@@ -308,9 +305,15 @@ def _attest(
             "LC_ALL": "C",
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONNOUSERSITE": "1",
-            "PYTHONPATH": python_path.split("=", 1)[1],
         },
     )
+    # Root-owned protected snapshots cannot change under unprivileged writers.
+    # Reverify the entire inventory after the reader exits to also detect
+    # unexpected in-flight inode replacement or modified ignored files.
+    if protected_import.verify(
+            source_revision=first.SOURCE,
+            monthly_pin_identity=policy["monthly_pin_identity"]) != import_pin:
+        _deny("protected import identity changed during invocation")
     if (
         result.returncode != 0 or result.stderr
         or not isinstance(result.stdout, bytes)
