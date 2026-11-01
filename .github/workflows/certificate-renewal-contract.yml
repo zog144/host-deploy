@@ -2,7 +2,7 @@ name: Certificate renewal controller contract
 
 on:
   push:
-    branches: [unstable]
+    branches: [unstable, regular/certify-broker-integrated-source-pin-20261101]
     paths:
       - 'src/zog/host_deploy/certificate_renewal.py'
       - 'src/zog/host_deploy/certificate_renewal_timer.py'
@@ -87,7 +87,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 Node 24
         with:
           repository: zog144/box-control
-          ref: 9111606eef306292d70fd4d941eeb73f48b33ff1
+          ref: baca7f815974dbf685950c0c7e78f693dd0a96e2
           path: pinned-box-control
           persist-credentials: false
       - name: Install offline test dependency
