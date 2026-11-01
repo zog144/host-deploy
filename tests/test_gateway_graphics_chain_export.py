@@ -242,6 +242,10 @@ def test_receiver_fails_closed_without_fresh_live_host(monkeypatch, tmp_path):
 
 
 def test_old_still_root_owned_pin_cannot_be_selected_after_rotation(monkeypatch, tmp_path):
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    # Isolate key rotation; the separate checkpoint suite signs real responses.
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda _current: True)
     """Old key can mint fresh export/nonce but has no current pin authority."""
     old, payload, signed_old, _, now = setup()
     new_key = Ed25519PrivateKey.generate()
@@ -295,6 +299,10 @@ def test_old_still_root_owned_pin_cannot_be_selected_after_rotation(monkeypatch,
 
 def test_current_rotated_authority_accepts_only_current_export_and_fresh_ack(
         monkeypatch, tmp_path):
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    # Isolate key rotation; the separate checkpoint suite signs real responses.
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda _current: True)
     pin, payload, _, _, now = setup()
     new_key = Ed25519PrivateKey.generate()
     pub = new_key.public_key().public_bytes(
@@ -342,6 +350,10 @@ def test_current_rotated_authority_accepts_only_current_export_and_fresh_ack(
 
 def test_current_authority_rotation_during_live_challenge_denies_old_key(
         monkeypatch, tmp_path):
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    # Isolate key rotation; the separate checkpoint suite signs real responses.
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda _current: True)
     """A fresh reply from the previously current key cannot outlive rotation."""
     old, payload, signed_old, _, _ = setup()
     current = {**old, "epoch": old["epoch"] + 1, "boot_id": "c"*32}
