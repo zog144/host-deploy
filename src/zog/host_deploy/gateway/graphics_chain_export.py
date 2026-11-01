@@ -218,6 +218,24 @@ def verify(raw, pin, *, task, now=None):
     return catalogue, payload["catalogue_sha256"]
 
 
+def _owner_once(path, raw):
+    """No-replace root 0600 write and parent fsync; crash leaves HOLD."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        if os.write(fd, raw) != len(raw):
+            _deny("short native export receipt")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    directory = os.open(Path(path).parent, os.O_RDONLY | os.O_DIRECTORY |
+                        os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def sign_host_export(*args, **kwargs):
     """Retired unsafe arbitrary-payload signer: root callers cannot mint claims."""
     _deny("arbitrary root payload signing is forbidden")
@@ -299,8 +317,26 @@ def issue_native_step_export(*, task, published_at, expires_at):
                 or (_time(expires_at)-_time(published_at)).total_seconds() > 300):
             _deny("protected exporter interval invalid")
         signature = signer.sign(_canonical(payload))
-        return _canonical({"payload": payload,
+        wire = _canonical({"payload": payload,
                            "signature": base64.b64encode(signature).decode("ascii")})
+        # A live epoch issuer may acknowledge ONLY an export which this
+        # protected root owner actually published. No arbitrary relay digest.
+        from .fresh_budget_guard import _protected_root
+        publications = chain.STORE / "graphical-export-publications"
+        _protected_root(publications)
+        digest = hashlib.sha256(wire).hexdigest()
+        _owner_once(publications / (digest + ".json"), _canonical({
+            "schema": "host-deploy-protected-graphical-export-publication-v1",
+            "export_sha256": "sha256:" + digest,
+            "task": task, "host_id": epoch["host_id"],
+            "installation_id": epoch["installation_id"],
+            "boot_id": epoch["boot_id"], "epoch": epoch["epoch"],
+            "chain_policy_sha256": epoch["chain_policy_sha256"],
+            "catalogue_sha256": payload["catalogue_sha256"],
+            "receipt_sha256": payload["receipt_sha256"],
+            "expires_at": expires_at,
+        }))
+        return wire
 
 
 
@@ -410,3 +446,111 @@ def load_selected_step(directory, pin_path, task, policy_sha256):
     live = _query_live_owner(pin, nonce=nonce, digest=digest, task=task)
     verify_live_ack(live, pin, nonce=nonce, export_digest=digest, task=task)
     return selected
+
+
+
+def issue_native_live_epoch_ack(challenge_raw):
+    """Fixed protected Host challenge entrypoint; not a network service.
+
+    Respond only to a fresh nonce for an independently published export.
+    Use native worker lock and durable nonce claims, not caller-provided
+    epoch, source, signer or sequence. A crash retains the nonce HOLD.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("compiler live epoch issuer root only")
+    challenge = _json(challenge_raw)
+    if (type(challenge) is not dict
+            or set(challenge) != {"schema", "nonce", "export_sha256", "task"}
+            or challenge["schema"] != "host-deploy-graphical-live-request-v1"
+            or type(challenge["nonce"]) is not str
+            or not re.fullmatch(r"[a-f0-9]{64}", challenge["nonce"])
+            or type(challenge["export_sha256"]) is not str
+            or not _SHA.fullmatch(challenge["export_sha256"])
+            or challenge["task"] not in TASKS):
+        _deny("untrusted live epoch challenge")
+    from . import graphics_generation_chain as chain
+    from . import fresh_canary_owner as canary
+    from . import fresh_native_owner as owner
+    from .fresh_budget_guard import _protected_root
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+    with canary.locked(owner):
+        policy = chain.validate_policy(chain._read_locked(chain.POLICY))
+        if not chain._verified_native_owner(policy):
+            _deny("native worker epoch owner unavailable")
+        try:
+            epoch = chain._read_locked(chain.STORE / "graphical-export-epoch-v1.json")
+        except (OSError, ValueError):
+            _deny("protected epoch not installed")
+        if (epoch.get("boot_id") != owner._boot()
+                or epoch.get("chain_policy_sha256") != chain._hash(policy)
+                or epoch.get("host_id") != policy["host_id"]
+                or epoch.get("installation_id") != policy["installation_id"]
+                or type(epoch.get("epoch")) is not int
+                or epoch["epoch"] < 1):
+            _deny("revoked compiler Host epoch")
+        published = chain.STORE / "graphical-export-publications"
+        nonces = chain.STORE / "graphical-live-nonces"
+        _protected_root(published)
+        _protected_root(nonces)
+        digest = challenge["export_sha256"]
+        try:
+            receipt = chain._read_locked(
+                published / (digest.split(":", 1)[1] + ".json"))
+        except (OSError, ValueError):
+            _deny("unknown or revoked protected export publication")
+        if (type(receipt) is not dict
+                or receipt.get("schema") !=
+                  "host-deploy-protected-graphical-export-publication-v1"
+                or receipt.get("export_sha256") != digest
+                or receipt.get("task") != challenge["task"]
+                or receipt.get("host_id") != policy["host_id"]
+                or receipt.get("installation_id") != policy["installation_id"]
+                or receipt.get("chain_policy_sha256") != chain._hash(policy)
+                or receipt.get("boot_id") != epoch["boot_id"]
+                or receipt.get("epoch") != epoch["epoch"]
+                or _time(receipt["expires_at"]) <= datetime.now(timezone.utc)):
+            _deny("publication not current in protected boot")
+        try:
+            key = chain._read_locked(
+                chain.STORE / "graphical-export-signing-key-v1.json")
+        except (OSError, ValueError):
+            _deny("live Host signer not installed")
+        if (type(key) is not dict or
+                key.get("schema") != "host-deploy-graphical-export-private-key-v1"):
+            _deny("wrong protected live signing key")
+        private = Ed25519PrivateKey.from_private_bytes(
+            _b64(key.get("private_key"), 32))
+        pub = private.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        if "sha256:" + hashlib.sha256(pub).hexdigest() != epoch["public_key_sha256"]:
+            _deny("live issuer key rotated without epoch")
+        entries = list(nonces.iterdir())
+        if len(entries) >= 10000:
+            _deny("bounded live nonce history exhausted; rotate epoch")
+        for entry in entries:
+            if (entry.is_symlink() or not entry.is_file()
+                    or not re.fullmatch(r"[a-f0-9]{64}\.json", entry.name)):
+                _deny("protected nonce ledger tampered")
+        sequence = len(entries) + 1
+        # Claim nonce before returning; even a lost response cannot replay it.
+        _owner_once(nonces / (challenge["nonce"] + ".json"), _canonical({
+            "schema": "host-deploy-protected-live-nonce-v1",
+            "nonce": challenge["nonce"], "sequence": sequence,
+            "export_sha256": digest, "boot_id": epoch["boot_id"],
+            "epoch": epoch["epoch"]}))
+        now = datetime.now(timezone.utc)
+        proof = {
+            "schema": "host-deploy-graphical-live-epoch-v1",
+            "nonce": challenge["nonce"], "export_sha256": digest,
+            "task": challenge["task"], "host_id": policy["host_id"],
+            "installation_id": policy["installation_id"],
+            "lane": policy["lane"], "lane_owner": policy["lane_owner"],
+            "boot_id": epoch["boot_id"], "epoch": epoch["epoch"],
+            "chain_policy_sha256": chain._hash(policy),
+            "sequence": sequence, "observed_at": now.isoformat(),
+            "expires_at": (now + __import__("datetime").timedelta(seconds=4)).isoformat(),
+        }
+        signature = private.sign(_canonical(proof))
+        return _canonical({"payload": proof,
+                           "signature": base64.b64encode(signature).decode("ascii")})
