@@ -450,6 +450,11 @@ def load_selected_step(directory, pin_path, task, policy_sha256):
     if type(pin_path) is not str or pin_path != CURRENT_AUTHORITY_PATH:
         _deny("caller-selected or obsolete graphical authority")
     pin = _read_public_pin(CURRENT_AUTHORITY_PATH)
+    # Mandatory *independent* current highwater check before treating any
+    # Host key as authority, including when both local files were rolled back.
+    # No caller callback or offline checkpoint can replace this fixed verifier.
+    from . import graphics_external_checkpoint as external
+    external.require_current(pin)
     if pin.get("chain_policy_sha256") != policy_sha256:
         _deny("original owner policy was revoked or changed")
     root = Path(directory)
@@ -478,6 +483,9 @@ def load_selected_step(directory, pin_path, task, policy_sha256):
     # authority rotation; this source check does not claim that atomicity.
     if _read_public_pin(CURRENT_AUTHORITY_PATH) != pin:
         _deny("current signing authority rotated during live proof")
+    # Recheck with a *second* unpredictable nonce after the Host's live
+    # acknowledgement. This fences external CAS racing authority selection.
+    external.require_current(pin)
     return selected
 
 
