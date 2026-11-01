@@ -146,6 +146,10 @@ def test_selected_controller_rejects_substituted_runtime_even_with_custom_client
 ])
 def test_selected_inspection_consumer_rejects_malformed_fake_client(change):
     class Fake(Broker):
+        def __init__(self, path, *, controller_uid):
+            assert controller_uid == 23001
+            super().__init__(path)
+
         def inspect_issuer_result(self, request_id):
             from zog.host_deploy.certificate_authenticated_inspection import TRUSTED
             return {**{
