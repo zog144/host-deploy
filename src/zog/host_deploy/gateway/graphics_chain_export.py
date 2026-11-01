@@ -73,6 +73,16 @@ def _json(raw):
         _deny("malformed export")
 
 
+def _require_no_pending_rotation(directory_fd):
+    """Always deny a partial, final, malformed or symlinked rotation marker."""
+    try:
+        os.stat(ROTATION_PENDING_NAME, dir_fd=directory_fd,
+                follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    _deny("current signing authority rotation pending")
+
+
 def _read_public_pin(path):
     """Root-installed 0444 nonsecret authorization (never root 0600 STATE)."""
     if type(path) is not str or path != CURRENT_AUTHORITY_PATH:
@@ -88,17 +98,8 @@ def _read_public_pin(path):
             info = os.fstat(fd)
             if info.st_uid != 0 or info.st_mode & 0o022:
                 _deny("mutable pin ancestry")
-        # A protected monotonic rotation publishes this denial marker
-        # before advancing the epoch or replacing the fixed current pin.
-        # Partial, symlinked, or malformed markers are all denials.
-        def no_pending():
-            try:
-                os.stat(ROTATION_PENDING_NAME, dir_fd=fd,
-                        follow_symlinks=False)
-            except FileNotFoundError:
-                return
-            _deny("current signing authority rotation pending")
-        no_pending()
+        # Any pending state makes the old public pin unusable.
+        _require_no_pending_rotation(fd)
         leaf = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW |
                        os.O_CLOEXEC, dir_fd=fd)
         try:
@@ -112,7 +113,7 @@ def _read_public_pin(path):
                 _deny("oversized pin")
         finally:
             os.close(leaf)
-        no_pending()
+        _require_no_pending_rotation(fd)
         return _json(raw)
     except OSError:
         _deny("installed pin unreadable")
