@@ -1,8 +1,8 @@
 """Review-gated short-lived selected inspection coordinator.
 
 This code deliberately has NO production CLI and NO host journal reader.
-A controller-owned fixed broker must add 'inspect' and a privileged
-invocation-scoped structured evidence reader before it can be enabled.
+The fixed controller broker now supports 'inspect' and privileged,
+invocation-scoped evidence. Native installation and authority remain gated.
 Its request identity is always distinct from the original renewal ID.
 """
 from __future__ import annotations
@@ -178,7 +178,7 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
 
     trusted_reader, when implemented by controller/root-control, must derive
     evidence from the exact saved request + runtime + systemd invocation.
-    Until that reviewed reader exists, completed inspect remains unverified.
+    If that authenticated reader is absent, inspection stays unverified.
     """
     scope = validate_scope(scope)
     if original_renewal_id is not None and (
@@ -230,8 +230,8 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
         if result is None:
             if current - _timestamp(record["issued_at"]) > timedelta(hours=24):
                 raise RenewalBlocked("inspection-controller-evidence-expired")
-            # Broker does NOT currently permit inspect. This will fail closed,
-            # retaining the exact original ID for a later reviewed implementation.
+            # Submit only the finite selected inspect program; on uncertainty
+            # retain the exact saved request ID for authenticated recovery.
             controller.request_application_launch(
                 "certify-manage", program_name="inspect", request_id=ident
             )
