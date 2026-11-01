@@ -241,7 +241,7 @@ def sign_host_export(*args, **kwargs):
     _deny("arbitrary root payload signing is forbidden")
 
 
-def issue_native_step_export(*, task, published_at, expires_at):
+def issue_native_step_export(*, task):
     """Root only: derive every signed field from native protected files.
 
     Source-only fixed owner entrypoint; a genuine installer must create/rotate
@@ -256,6 +256,11 @@ def issue_native_step_export(*, task, published_at, expires_at):
     from . import fresh_canary_owner as canary
     from . import fresh_native_owner as owner
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    # Root-only entrypoint chooses clock bounds itself; callers choose only
+    # the finite reviewed stage, never a synthetic future lease interval.
+    now = datetime.now(timezone.utc)
+    published_at = now.isoformat()
+    expires_at = (now + timedelta(seconds=60)).isoformat()
     with canary.locked(owner):
         policy = chain.validate_policy(chain._read_locked(chain.POLICY))
         if not chain._verified_native_owner(policy):
