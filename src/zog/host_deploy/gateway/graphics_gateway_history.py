@@ -123,24 +123,9 @@ def verify_history(state_directory, policy, request_id, request, dispatch, progr
                    request_id, request, dispatch, progress)
 
 
-def install_history_grant(state_directory, policy, signed_grant,
-                          request_id, request, dispatch, progress):
-    """Once-only local receiver; trusted issuer never supplied by the request.
-
-    Native installer must separately authenticate transferred request/dispatch
-    bytes before creating the protected history tree. No mutable replacement.
-    """
-    if os.geteuid() != 0:
-        raise PermissionError("graphical history installation root only")
-    from .fresh_budget_guard import _protected_root
-    _protected_root(state_directory)
-    pin = _pin(policy)
-    _verify(signed_grant, pin, policy, request_id, request, dispatch, progress)
-    directory = Path(state_directory) / "grants"
-    _protected_root(directory)
-    dest = directory / (request_id + ".json")
-    raw = _canonical(signed_grant)
-    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+def _once(path, raw):
+    """First writer survives crashes; no replacement or automatic repair."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                  os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         if os.write(fd, raw) != len(raw):
@@ -148,9 +133,53 @@ def install_history_grant(state_directory, policy, signed_grant,
         os.fsync(fd)
     finally:
         os.close(fd)
-    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    directory = os.open(Path(path).parent, os.O_RDONLY | os.O_DIRECTORY |
+                        os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        os.fsync(dfd)
+        os.fsync(directory)
     finally:
-        os.close(dfd)
-    return _hash(signed_grant)
+        os.close(directory)
+
+
+def install_history_grant(state_directory, policy, signed_grant,
+                          request_id, request, dispatch, progress):
+    """Root owner only; same lock as worker admission, one Host stage forever.
+
+    Missing or partial stage/grant is a permanent HOLD for independent
+    reconciliation. A replaced command-center DynamicUser ledger cannot
+    fabricate another original request or overwrite a signed owner claim.
+    """
+    if os.geteuid() != 0:
+        raise PermissionError("graphical history installation root only")
+    from .fresh_budget_guard import _protected_root
+    from . import fresh_canary_owner as canary
+    _protected_root(state_directory)
+    with canary.locked(native):
+        pin = _pin(policy)
+        accepted = _verify(signed_grant, pin, policy,
+                           request_id, request, dispatch, progress)
+        directory = Path(state_directory) / "grants"
+        stages = Path(state_directory) / "stage-once"
+        _protected_root(directory)
+        _protected_root(stages)
+        stage = stages / (accepted["lane"] + "--" + accepted["task"] + ".json")
+        grant = directory / (request_id + ".json")
+        # Existing stale, partial or symlink file: never rewrite or retry.
+        if stage.exists() or stage.is_symlink() or grant.exists() or grant.is_symlink():
+            _deny()
+        stage_record = _canonical({
+            "schema": "host-deploy-protected-graphical-stage-claim-v1",
+            "host_id": accepted["host_id"],
+            "installation_id": accepted["installation_id"],
+            "boot_id": accepted["boot_id"], "epoch": accepted["epoch"],
+            "request_id": request_id, "task": accepted["task"],
+            "lane": accepted["lane"],
+            "grant_sha256": _hash(signed_grant),
+            "dispatch_sha256": accepted["dispatch_sha256"],
+            "sequence": accepted["sequence"],
+        })
+        # Stage marker is committed FIRST. A crash before the grant
+        # permanently blocks a second request; do not make a new marker.
+        _once(stage, stage_record)
+        _once(grant, _canonical(signed_grant))
+        return _hash(signed_grant)
