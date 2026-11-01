@@ -297,6 +297,81 @@ def issue_native_step_export(*, task, published_at, expires_at):
                            "signature": base64.b64encode(signature).decode("ascii")})
 
 
+
+
+def verify_live_ack(raw, pin, *, nonce, export_digest, task, now=None):
+    """Distinct signed online reply; a cached export cannot prove live epoch."""
+    if (type(nonce) is not str or not re.fullmatch(r"[a-f0-9]{64}", nonce)
+            or type(export_digest) is not str or not _SHA.fullmatch(export_digest)
+            or task not in TASKS):
+        _deny("invalid live challenge")
+    body = _json(raw)
+    if type(body) is not dict or set(body) != _ENVELOPE:
+        _deny("live Host proof missing")
+    proof = body["payload"]
+    required = {"schema", "nonce", "export_sha256", "task", "host_id",
+                "installation_id", "lane", "lane_owner", "boot_id", "epoch",
+                "chain_policy_sha256", "sequence", "observed_at", "expires_at"}
+    if type(proof) is not dict or set(proof) != required:
+        _deny("live Host proof incomplete")
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.exceptions import InvalidSignature
+    pub = Ed25519PublicKey.from_public_bytes(_b64(pin["public_key"], 32))
+    try:
+        pub.verify(_b64(body["signature"], 64), _canonical(proof))
+    except InvalidSignature:
+        _deny("wrong live Host signer")
+    if (proof["schema"] != "host-deploy-graphical-live-epoch-v1"
+            or proof["nonce"] != nonce
+            or proof["export_sha256"] != export_digest
+            or proof["task"] != task
+            or type(proof["sequence"]) is not int or proof["sequence"] < 1
+            or any(type(proof.get(k)) is not type(pin[k])
+                   or proof[k] != pin[k] for k in (
+                   "host_id", "installation_id", "lane", "lane_owner",
+                   "boot_id", "epoch", "chain_policy_sha256"))):
+        _deny("live Host boot, epoch or export differs")
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    observed, expiry = _time(proof["observed_at"]), _time(proof["expires_at"])
+    if (observed > now or expiry <= now or
+            not 0 < (expiry - observed).total_seconds() <= 5):
+        _deny("live Host proof stale or revoked")
+    return proof
+
+
+def _query_live_owner(pin, *, nonce, digest, task):
+    """Always ask independent local relay for a *new* Host-signed nonce.
+
+    The relay is transport, never authority. No relay => fail closed.
+    The native root installer must separately install/review the relay and
+    its UID/pin, and remote compiler root must sign only fresh epoch state.
+    """
+    endpoint = "/run/zog/host-deploy/graphical-host-epoch.sock"
+    request = _canonical({"schema": "host-deploy-graphical-live-request-v1",
+                          "nonce": nonce, "export_sha256": digest, "task": task})
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+            peer.settimeout(3)
+            peer.connect(endpoint)
+            credentials = peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+            _, uid, _ = struct.unpack("3i", credentials)
+            if uid != pin["relay_uid"]:
+                _deny("untrusted local epoch relay UID")
+            peer.sendall(request + b"\n")
+            reply = bytearray()
+            while len(reply) <= 8192:
+                data = peer.recv(min(4096, 8193-len(reply)))
+                if not data:
+                    break
+                reply.extend(data)
+            if not 0 < len(reply) <= 8192:
+                _deny("live Host epoch response absent or oversized")
+        return bytes(reply).strip()
+    except (OSError, ValueError):
+        _deny("live Host epoch relay unavailable")
+
+
+
 def load_selected_step(directory, pin_path, task, policy_sha256):
     """Command-center source path: only signed, fresh compiler-Host exports.
 
@@ -321,4 +396,11 @@ def load_selected_step(directory, pin_path, task, policy_sha256):
             raw = source.read(MAX_BYTES + 1)
     except OSError:
         _deny("authenticated Host export missing")
-    return verify(raw, pin, task=task)
+    selected = verify(raw, pin, task=task)
+    # Request a cryptographically new online nonce bound to *these exact*
+    # export bytes. A stale cache or stale public pin is not sufficient.
+    nonce = os.urandom(32).hex()
+    digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+    live = _query_live_owner(pin, nonce=nonce, digest=digest, task=task)
+    verify_live_ack(live, pin, nonce=nonce, export_digest=digest, task=task)
+    return selected
