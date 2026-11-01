@@ -143,6 +143,21 @@ def test_inspection_postflight_requires_distinct_saved_selected_result(monkeypat
             cfg, SimpleNamespace(inspect_issuer_result=lambda _: None),
             renewal_id=rid, fingerprint=fingerprint,
             outcome="renewed", renewal_proof=proof)
+    # A caller's arbitrary truthy pin (including bool) cannot substitute
+    # for an independently approved nonroot controller UID and callable reader.
+    for malicious_uid in (None, True, 0, 999, 2**31, "23001"):
+        with pytest.raises(RenewalBlocked, match="not-authenticated"):
+            timer._selected_postflight(
+                cfg, SimpleNamespace(_controller_uid=malicious_uid,
+                                     inspect_issuer_result=lambda _: None),
+                renewal_id=rid, fingerprint=fingerprint,
+                outcome="renewed", renewal_proof=proof)
+    with pytest.raises(RenewalBlocked, match="not-authenticated"):
+        timer._selected_postflight(
+            cfg, SimpleNamespace(_controller_uid=23001,
+                                 inspect_issuer_result="issuer-supplied-text"),
+            renewal_id=rid, fingerprint=fingerprint,
+            outcome="renewed", renewal_proof=proof)
 
 
 def test_timer_native_selected_gate_stays_disabled():
