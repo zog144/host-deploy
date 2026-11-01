@@ -157,8 +157,20 @@ def validate(value):
                 raise TaskCatalogueError("invalid bootstrap stages")
             names = [v for stage in stages for v in stage]
         else:
-            if set(arguments) != {"mode", "selection", "targets"}:
-                raise TaskCatalogueError("generic mode requires exact targets")
+            graphical = name in (
+                "graphics-xcb-core-image-v1", "graphics-x11-core-image-v1"
+            )
+            expected = {"mode", "selection", "targets"}
+            if graphical:
+                expected.add("graphical_predecessor")
+            if set(arguments) != expected:
+                raise TaskCatalogueError("generic mode requires exact targets and predecessor")
+            if graphical and (
+                type(arguments["graphical_predecessor"]) is not str
+                or not _GENERATION.fullmatch(arguments["graphical_predecessor"])
+                or arguments["graphical_predecessor"] == arguments["selection"]
+            ):
+                raise TaskCatalogueError("graphical predecessor must be a distinct immutable generation")
             names = arguments["targets"]
             if type(names) is not list or not 1 <= len(names) <= 32:
                 raise TaskCatalogueError("invalid generic targets")

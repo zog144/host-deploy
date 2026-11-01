@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Network/SQS-facing command-center actor never runs as compiler root.
+DynamicUser=yes
 EnvironmentFile=-/etc/host-deploy/gateway.env
 ExecStart=/usr/bin/host-deploy-gateway --state-directory /var/lib/host-deploy-gateway run
 Restart=on-failure
