@@ -1,7 +1,7 @@
 name: Bounded graphical generation chaining - source only
 on:
   push:
-    branches: [regular/graphical-generation-chain-20261031]
+    branches: [regular/graphical-generation-chain-20261031, regular/graphical-attester-authority-hardening-20261101]
   pull_request:
     branches: [regular/first-graphics-catalogue-20261031, regular/toolchain-gateway-20261019]
   workflow_dispatch:
