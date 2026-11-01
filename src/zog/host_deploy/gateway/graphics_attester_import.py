@@ -35,40 +35,43 @@ def _canonical(record):
 
 
 def _protected(path, *, directory=False, mode=None):
-    """No-follow the *entire* root-owned, non-writable path, not Path.resolve()."""
+    """No-follow every root-owned ancestor and leaf; return retained FD."""
     if (type(path) is not str or not path.startswith("/") or
-            ".." in Path(path).parts or not path.startswith(("/",))):
+            ".." in Path(path).parts):
         _deny()
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         parts = Path(path).parts[1:]
-        for i, component in enumerate(parts):
-            last = i == len(parts)-1
+        if not parts:
+            _deny()
+        for index, component in enumerate(parts):
+            last = index == len(parts) - 1
             flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
             if not last or directory:
                 flags |= os.O_DIRECTORY
             child = os.open(component, flags, dir_fd=fd)
-            info = os.fstat(child)
-            if (info.st_uid != 0 or info.st_mode & 0o022 or
-                    (not last or directory) != stat.S_ISDIR(info.st_mode)):
+            try:
+                info = os.fstat(child)
+                want_directory = not last or directory
+                if (info.st_uid != 0 or info.st_mode & 0o022
+                        or stat.S_ISDIR(info.st_mode) != want_directory
+                        or last and not want_directory and (
+                            not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
+                        or last and mode is not None and
+                        stat.S_IMODE(info.st_mode) != mode):
+                    _deny()
+            except BaseException:
                 os.close(child)
-                _deny()
-            if last and (info.st_nlink != 1 and not directory or
-                         mode is not None and stat.S_IMODE(info.st_mode) != mode):
-                os.close(child)
-                _deny()
+                raise
             os.close(fd)
             fd = child
-        return fd
+        kept, fd = fd, -1
+        return kept
     except OSError:
         _deny()
     finally:
-        # Caller owns fd only on successful return.
-        if "last" not in locals() or i != len(parts)-1:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
+        if fd >= 0:
+            os.close(fd)
 
 
 def _read_policy():
