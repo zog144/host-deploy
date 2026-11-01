@@ -47,13 +47,13 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          python -m compileall -q src/zog/host_deploy/gateway/graphics_generation_chain.py src/zog/host_deploy/gateway/graphics_generation_attester.py src/zog/host_deploy/gateway/graphics_chain_export.py src/zog/host_deploy/gateway/graphics_stage_once.py
+          python -m compileall -q src/zog/host_deploy/gateway/graphics_generation_chain.py src/zog/host_deploy/gateway/graphics_generation_attester.py src/zog/host_deploy/gateway/graphics_attester_import.py src/zog/host_deploy/gateway/graphics_chain_export.py src/zog/host_deploy/gateway/graphics_stage_once.py
           PYTHONPATH=src python -m pytest -q tests/test_gateway_graphics_generation_chain.py tests/test_gateway_graphics_generation_attester.py tests/test_gateway_graphics_chain_gateway.py tests/test_gateway_graphics_chain_export.py tests/test_gateway_graphics_stage_once.py tests/test_gateway_task_catalogue.py tests/test_gateway_first_graphics_catalogue.py
       - name: Root-owned one-shot step files in ephemeral CI only
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          sudo -E env PYTHONPATH="$PWD/src" "$(command -v python)" -m pytest -q tests/test_gateway_graphics_generation_chain_native.py -rs
+          sudo -E env PYTHONPATH="$PWD/src" "$(command -v python)" -m pytest -q tests/test_gateway_graphics_generation_chain_native.py tests/test_gateway_graphics_attester_import_native.py -rs
       - name: Existing gateway request, dispatch and supervisor compatibility
         env:
           AWS_EC2_METADATA_DISABLED: "true"
