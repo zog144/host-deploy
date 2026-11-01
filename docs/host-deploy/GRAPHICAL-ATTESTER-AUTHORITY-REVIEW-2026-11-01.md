@@ -27,3 +27,51 @@ Source-only CI includes cryptographic negative tests, missing-pin and mutation-a
 Preserve original October digest `d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`, three-task finite allowlist, original accepted stage-two toolchain, 30+2 GiB, 21,600 seconds, no automatic submission, uncertain retry, historical Host mutation or native activation.
 
 **Do not merge or run native compiler based on this source patch.** Root-control Regular must independently re-review the exact current head. Host-install/root-control Work must verify genuine protected signer/public pin, immutable importer snapshot, issuer and signed-history bootstrap, live authenticated relay, current boot/revocation and root-owned one-shot grants. Only later may native systemd252 Worker/containment/quotas/reboot acceptance authorize a compiler test.
+
+## Mandatory external graphical antirollback checkpoint (2026-11-01)
+
+**Source integration, not native authority installation.** Host-deploy
+`graphics_chain_export.load_selected_step` now **always** invokes
+`graphics_external_checkpoint.require_current` before accepting the signed
+Host export and again after checking a fresh Host-issued live nonce and
+reopening the locally selected current key. The online checkpoint response
+must be independently signed with the installed distinct Ed25519 external
+checkpoint issuer, bound to a **fresh random 192-bit nonce**, current Host and
+installation, exact SHA-256 of the canonical current public-key pin, exact
+current epoch and external monotonic sequence. A coherent rollback of both
+local current pin and local 0600 journal cannot authorize the old key when
+the externally retained highwater has advanced.
+
+The verification key and peer identity come exclusively from a protected
+root-owned 0444 installation at
+`/etc/zog/host-deploy/graphical-external-checkpoint-pin-v1.json`, with a
+fixed Unix transport
+`/run/zog/host-deploy/graphical-external-checkpoint.sock`. No caller may
+choose external key material, a checker callback, an endpoint, or an offline
+fallback. The relay is not the signing issuer; it can only carry fresh,
+signed responses and must have the separately pinned Unix peer UID.
+Missing or malformed external pin, an unavailable relay, old-key signature,
+wrong Host/installation/epoch/pin digest, nonce replay or changing external
+highwater causes HOLD before returning an accepted graphical catalogue.
+The second independent checkpoint read catches advancement during the
+remote Host live-epoch exchange, while the separate current-key pin
+reread catches local rotation.
+
+On the companion side, host-install's ordinary `rotate_source` now
+requires its own fixed independently pinned checkpoint transport, performs
+fresh signed read, external compare-and-advance **before** local key
+publication, then fresh signed readback before and after local commit. The
+formerly public uncheckpointed `rotate_source` facade is gone; its basic
+filesystem crash test helper now resides only in `tests/`. The lower-level
+`rotate_checked_source` remains a synthetic callback-driven contract
+harness, and must **not** be selected as a protected native entrypoint.
+
+**Exact source selection:** host-install PR #13
+`adb0a15e3defd4e34b622a3867fe19d6afadeba7`, independent
+root-control source checkpoint issuer `ca8232286b0bd01bd130bb02929a9e8b494c87cf`
+as pinned by the three-owner synthetic workflow. No external issuer, true
+monotonic store, live checkpoint relay, current Host authorization or native
+source/RECORD has been installed or accepted. A fixed root pin plus signed
+source proofs are **not** evidence of genuine issuer independence, linear
+durability or reboot fencing; these remain root-control and host-install
+Work native gates. No compiler jobs or new permissions.
