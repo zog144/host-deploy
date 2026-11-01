@@ -176,6 +176,8 @@ def install_fakes(tmp_path, monkeypatch, *, requests=1, phase="completed"):
         "monthly_pin_identity": "sha256:" + first.PIN_SHA256,
     })
     monkeypatch.setattr(attester.os, "geteuid", lambda: 0)
+    from zog.host_deploy.gateway import graphics_gateway_history as history
+    monkeypatch.setattr(history, "verify_history", lambda *args: True)
     return root, p
 
 
