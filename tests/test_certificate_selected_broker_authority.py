@@ -215,3 +215,83 @@ def test_revocation_checker_cannot_be_bypassed_by_forged_root_reader():
         "/etc/zog/host-deploy/certificate-issuer-broker-revoked.json"
     )
     assert "if path != ROOT_PATH:" in source
+
+
+
+def test_existing_broker_client_rechecks_revocation_before_every_rpc():
+    from zog.host_deploy.certificate_issuer_lifecycle import SelectedIssuerController
+    from types import SimpleNamespace
+
+    touched = []
+    class FakeClient:
+        def issue_application_request_id(self):
+            touched.append("issue")
+        def launch_application(self, *a, **kw):
+            touched.append("launch")
+        def application_request_result(self, rid):
+            touched.append("result")
+        def inspect_issuer_result(self, rid):
+            touched.append("inspect")
+
+    active = [True]
+    controller = SelectedIssuerController(
+        "/run/zog/certify-lifecycle.sock", controller_uid=23001,
+        client_factory=lambda path, *, controller_uid: FakeClient(),
+        authority_guard=lambda: active[0],
+    )
+    active[0] = False  # Revocation after client construction.
+    rid = "r1-1-" + "a"*32 + "-" + "b"*64
+    for call in (
+        lambda: controller.issue_application_request_id(),
+        lambda: controller.request_application_launch(
+            "certify-manage", program_name="renew", request_id=rid,
+        ),
+        lambda: controller.application_request_result(rid),
+        lambda: controller.inspect_issuer_result(rid),
+    ):
+        with pytest.raises(RenewalBlocked, match="root-authority-revoked"):
+            call()
+    assert touched == []
+
+
+def test_timer_selected_broker_wires_original_root_file_rechecker(monkeypatch):
+    from zog.host_deploy import certificate_issuer_lifecycle as issuer
+    from zog.host_deploy import certificate_selected_broker_authority as broker
+    from zog.host_deploy import certificate_issuer_inspection as insp
+    from zog.host_deploy import certificate_issuer_observer as observer
+    from zog.host_deploy import certificate_renewal_timer as timer_mod
+    import pwd
+
+    record, policy, inspection, observed, binding = identities()
+    policy = {
+        **policy, "issuer_inspection_policy_file": "/etc/zog/inspect.json",
+        "issuer_observer_policy_file": "/etc/zog/observer.json",
+        "controller_user": "zog-controller",
+        "issuer_user": "zog-certify",
+    }
+    monkeypatch.setattr(insp, "read_policy", lambda _: inspection)
+    monkeypatch.setattr(observer, "read_policy", lambda _: observed)
+    monkeypatch.setattr(broker, "verify", lambda *a: record)
+    active = [True]
+    def checked_reader():
+        if not active[0]:
+            raise RenewalBlocked("selected-broker-root-authority-unverified")
+        return record
+    monkeypatch.setattr(broker, "_root_file", checked_reader)
+    monkeypatch.setattr(os, "geteuid", lambda: record["caller_uid"])
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: SimpleNamespace(
+        pw_uid=record["controller_uid"] if name == "zog-controller"
+        else record["issuer_uid"]
+    ))
+    captured = []
+    def selected(socket, *, controller_uid, authority_guard):
+        captured.append((socket, controller_uid, authority_guard))
+        return SimpleNamespace()
+    monkeypatch.setattr(issuer, "SelectedIssuerController", selected)
+    timer_mod._approved_selected_broker(policy)
+    assert captured[0][0] == record["issuer_lifecycle_socket"]
+    assert captured[0][1] == record["controller_uid"]
+    assert captured[0][2]() is True
+    active[0] = False
+    with pytest.raises(RenewalBlocked, match="root-authority-unverified"):
+        captured[0][2]()
