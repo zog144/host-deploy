@@ -18,7 +18,7 @@ _RUNTIME_ID = re.compile(r"[A-Za-z0-9-]{1,40}\Z")
 # result reader. It does NOT attest a live installed checkout: Work must
 # independently verify the deployed box-control source and broker UID.
 ISSUER_LIFECYCLE_BOX_CONTROL_REPOSITORY = "zog144/box-control"
-ISSUER_LIFECYCLE_BOX_CONTROL_REVISION = "9111606eef306292d70fd4d941eeb73f48b33ff1"
+ISSUER_LIFECYCLE_BOX_CONTROL_REVISION = "baca7f815974dbf685950c0c7e78f693dd0a96e2"
 ISSUER_LIFECYCLE_CLIENT_MODULE = (
     "box-control/src/zog/box_control/issuer_lifecycle_client.py"
 )
