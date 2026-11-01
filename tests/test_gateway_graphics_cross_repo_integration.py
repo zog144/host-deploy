@@ -75,3 +75,25 @@ def test_strict_original_toolchain_guard_still_in_producer():
     assert 'toolchain.manifest["kind"] != "toolchain"' in source
     assert "ordinary builds require a promoted second-stage toolchain" in source
     assert "graphical_predecessor" in source
+
+
+def test_integrated_nonroot_and_replay_execution_boundaries():
+    _checkout()
+    import inspect
+    from zog.host_deploy.gateway import graphics_stage_once
+    from zog.host_deploy.gateway import image_build_dispatch, generic_pipeline
+    from zog.host_deploy.gateway import consumer
+    base = Path(inspect.getfile(consumer)).parent
+    unit = (base / "host-deploy-gateway.service").read_text()
+    assert "DynamicUser=yes" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "from .graphics_stage_once import reserve" in inspect.getsource(
+        image_build_dispatch.prepare_image_build_dispatch)
+    assert "from .graphics_stage_once import require_record" in inspect.getsource(
+        generic_pipeline._base)
+    assert "load_selected_step" in inspect.getsource(
+        consumer.GatewayConsumer._advance_one_reviewed)
+    assert "load_installed_step" not in inspect.getsource(
+        consumer.GatewayConsumer._advance_one_reviewed)
+    assert "graphical_predecessor" in inspect.getsource(
+        chain.resolve_successor)
