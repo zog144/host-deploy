@@ -224,6 +224,11 @@ def test_receiver_fails_closed_without_fresh_live_host(monkeypatch, tmp_path):
     exports.mkdir()
     (exports / (chain.TASKS[0]+".json")).write_bytes(signed(payload))
     monkeypatch.setattr(selected, "_read_public_pin", lambda path: pin)
+    # This test isolates the relay failure. Independent checkpoint tests
+    # exercise the mandatory live gate with real Ed25519 signatures.
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda current: True)
     monkeypatch.setattr(selected, "_query_live_owner", lambda *a, **k:
         (_ for _ in ()).throw(export.GraphicalExportBlocked("relay offline")))
     with pytest.raises(export.GraphicalExportBlocked, match="relay offline"):
