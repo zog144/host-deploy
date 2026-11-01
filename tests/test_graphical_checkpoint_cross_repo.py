@@ -99,8 +99,10 @@ def test_exact_root_issuer_host_installer_and_gateway(model):
     rotate(2)
     assert gateway.require_current(build(owners[1],2))["epoch"]==2
     # Coherent rollback of local public/private files is NOT authority.
+    (pubdir/local.PUBLIC_NAME).unlink()
     (pubdir/local.PUBLIC_NAME).write_bytes(old_pub)
     (pubdir/local.PUBLIC_NAME).chmod(0o444)
+    (privdir/local.PRIVATE_JOURNAL).unlink()
     (privdir/local.PRIVATE_JOURNAL).write_bytes(old_private)
     (privdir/local.PRIVATE_JOURNAL).chmod(0o600)
     with pytest.raises(gateway.CheckpointBlocked):
