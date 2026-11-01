@@ -82,6 +82,23 @@ def reserve(gateway_root, request_id, binding):
             finally:
                 os.close(fd)
         else:
+            # A pre-existing admitted original stage without a marker is an
+            # uncertain legacy state, not permission to create a new identity.
+            request_directory = root / "requests"
+            if request_directory.is_symlink() or not request_directory.is_dir():
+                _deny()
+            for candidate in request_directory.iterdir():
+                if candidate.is_symlink() or not candidate.is_dir():
+                    _deny()
+                if candidate.name == request_id:
+                    continue
+                old = load_request(gateway_root, candidate.name)
+                old_request = old.get("request", {})
+                if (old_request.get("operation") == "build.submit"
+                        and old.get("states", {}).get("admission") == "admitted"
+                        and old_request.get("parameters", {}).get("task") == task
+                        and old_request.get("parameters", {}).get("lane") == lane):
+                    _deny()
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                          os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
             try:
@@ -99,3 +116,39 @@ def reserve(gateway_root, request_id, binding):
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         os.close(lock)
+
+
+def require_record(gateway_root, request_id, binding):
+    """Submission cannot create admission: require the earlier fsynced marker."""
+    task = binding.get("task")
+    if type(task) is not dict:
+        return
+    request = load_request(gateway_root, request_id)
+    name = request.get("request", {}).get("parameters", {}).get("task")
+    if name not in chain.TASKS:
+        return
+    lane = request.get("request", {}).get("parameters", {}).get("lane")
+    if (type(lane) is not str or not LANE.fullmatch(lane)
+            or type(request_id) is not str or not ID.fullmatch(request_id)):
+        _deny()
+    path = Path(gateway_root) / "graphical-stage-once" / (lane + "--" + name + ".json")
+    if path.is_symlink():
+        _deny()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            st = os.fstat(fd)
+            if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid()
+                    or stat.S_IMODE(st.st_mode) != 0o600 or st.st_nlink != 1
+                    or st.st_size > 2048):
+                _deny()
+            raw = os.read(fd, 2049)
+        finally:
+            os.close(fd)
+        actual = json.loads(raw)
+    except (OSError, UnicodeError, ValueError, TypeError):
+        _deny()
+    if actual != {"schema": SCHEMA, "request_id": request_id,
+                  "task": name, "lane": lane,
+                  "catalogue_sha256": binding.get("task_catalogue_identity")}:
+        _deny()
