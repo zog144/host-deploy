@@ -362,3 +362,38 @@ def test_current_authority_rotation_during_live_challenge_denies_old_key(
             root, export.CURRENT_AUTHORITY_PATH, chain.TASKS[0],
             old["chain_policy_sha256"])
     assert len(reads) == 2
+
+
+
+@pytest.mark.parametrize("kind", ["pending", "partial", "symlink", "directory"])
+def test_current_graphical_rotation_marker_denies_before_and_after_pin(tmp_path, kind):
+    from zog.host_deploy.gateway import graphics_chain_export as g
+    import os
+    from pathlib import Path
+    path = tmp_path / g.ROTATION_PENDING_NAME
+    if kind == "pending":
+        path.write_bytes(b'{"approved":true}')
+    elif kind == "partial":
+        path.write_bytes(b'{"incomplete":')
+    elif kind == "symlink":
+        path.symlink_to(tmp_path / "not-present")
+    else:
+        path.mkdir()
+    fd=os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(g.GraphicalExportBlocked,
+                           match="rotation pending"):
+            g._require_no_pending_rotation(fd)
+    finally:
+        os.close(fd)
+    assert path.exists() or path.is_symlink()
+
+
+def test_current_graphical_pin_reader_checks_rotation_both_sides():
+    from zog.host_deploy.gateway import graphics_chain_export as g
+    import inspect
+    src=inspect.getsource(g._read_public_pin)
+    assert src.count("_require_no_pending_rotation(fd)") == 2
+    assert g.CURRENT_AUTHORITY_PATH == (
+        "/etc/zog/host-deploy/graphical-chain-current-owner-pin-v1.json"
+    )
