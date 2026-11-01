@@ -321,3 +321,44 @@ def test_current_rotated_authority_accepts_only_current_export_and_fresh_ack(
         export_root, export.CURRENT_AUTHORITY_PATH, chain.TASKS[0],
         current["chain_policy_sha256"])
     assert digest == payload["catalogue_sha256"] and selected == payload["catalogue"]
+
+
+def test_current_authority_rotation_during_live_challenge_denies_old_key(
+        monkeypatch, tmp_path):
+    """A fresh reply from the previously current key cannot outlive rotation."""
+    old, payload, signed_old, _, _ = setup()
+    current = {**old, "epoch": old["epoch"] + 1, "boot_id": "c"*32}
+    root = tmp_path / "exports"
+    root.mkdir()
+    raw = signed_old(payload)
+    (root / (chain.TASKS[0] + ".json")).write_bytes(raw)
+    reads = []
+    def installed_current_pin(path):
+        assert path == export.CURRENT_AUTHORITY_PATH
+        reads.append(path)
+        return old if len(reads) == 1 else current
+
+    def live(pin, *, nonce, digest, task):
+        assert pin is old
+        observed = datetime.now(timezone.utc)
+        return signed_old({
+            "schema": "host-deploy-graphical-live-epoch-v1",
+            "nonce": nonce, "export_sha256": digest, "task": task,
+            "host_id": old["host_id"],
+            "installation_id": old["installation_id"],
+            "lane": old["lane"], "lane_owner": old["lane_owner"],
+            "boot_id": old["boot_id"], "epoch": old["epoch"],
+            "chain_policy_sha256": old["chain_policy_sha256"],
+            "sequence": 1,
+            "observed_at": (observed-timedelta(milliseconds=100)).isoformat(),
+            "expires_at": (observed+timedelta(seconds=3)).isoformat(),
+        })
+
+    monkeypatch.setattr(export, "_read_public_pin", installed_current_pin)
+    monkeypatch.setattr(export, "_query_live_owner", live)
+    with pytest.raises(export.GraphicalExportBlocked,
+                       match="rotated during live proof"):
+        export.load_selected_step(
+            root, export.CURRENT_AUTHORITY_PATH, chain.TASKS[0],
+            old["chain_policy_sha256"])
+    assert len(reads) == 2
