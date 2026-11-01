@@ -197,10 +197,123 @@ def _authenticated_issuer_evidence(policy, *, request_id, started, controller_re
     if (approved["certificate_id"] != policy["certificate_id"]
             or approved["policy_sha256"] != policy["policy_sha256"]):
         raise RenewalBlocked("issuer-observer-policy-mismatch")
-    return observe_request(
+    observed = observe_request(
         approved, request_id=request_id, issued_at=started.isoformat(),
         controller_result=controller_result,
     )
+    # The trusted root-control observation is request-bound, but the local
+    # host-deploy timer policy independently owns the certificate policy pin.
+    # Never consume station-access's UID-specific state or use an observed
+    # digest as the local authorization source.
+    if (type(observed) is not dict
+            or observed.get("request_id") != request_id
+            or observed.get("tls_ready") is not False):
+        raise RenewalBlocked("root-observation-request-mismatch")
+    if observed.get("status") == "journal-ready":
+        if (observed.get("policy_sha256") != policy["policy_sha256"]
+                or observed.get("certificate_id") != policy["certificate_id"]
+                or observed.get("host_policy_digest") !=
+                   approved["host_policy_digest"]):
+            raise RenewalBlocked("root-observation-local-policy-mismatch")
+    return observed
+
+
+def _approved_selected_broker(policy):
+    """Read independently installed root Host/issuer/controller identity first.
+
+    No socket is opened and no client is constructed until the root-owned
+    managed certificate consumer and broker UID pins agree with both split
+    issuer inspection policies. This is deliberately behind the native gate.
+    """
+    from .certificate_issuer_inspection import read_policy as inspect_policy
+    from .certificate_issuer_observer import read_policy as observe_policy
+    from .certificate_selected_broker_authority import verify, _root_file
+    from .certificate_issuer_lifecycle import SelectedIssuerController
+    inspection = inspect_policy(policy["issuer_inspection_policy_file"])
+    observer = observe_policy(policy["issuer_observer_policy_file"])
+    # host-install must have separately verified private 0600 consumer binding
+    # and published this root-owned nonsecret 0444 immutable broker projection.
+    authorized = verify(policy, inspection, observer)
+    caller_uid = os.geteuid()
+    try:
+        controller_uid = pwd.getpwnam(policy["controller_user"]).pw_uid
+        issuer_uid = pwd.getpwnam(policy["issuer_user"]).pw_uid
+    except KeyError:
+        raise RenewalBlocked("selected-broker-local-identity-missing") from None
+    if (caller_uid == 0 or caller_uid != authorized["caller_uid"]
+            or caller_uid in (authorized["controller_uid"], issuer_uid)
+            or controller_uid != authorized["controller_uid"]
+            or issuer_uid != authorized["issuer_uid"]):
+        raise RenewalBlocked("selected-broker-installed-identity-mismatch")
+    def current_root_authority():
+        # The timer may retain a SelectedIssuerController after revocation.
+        # Check the immutable root policy and both tombstone names again
+        # immediately before each selected broker RPC, not only at startup.
+        return _root_file() == authorized
+
+    return SelectedIssuerController(
+        authorized["issuer_lifecycle_socket"],
+        controller_uid=authorized["controller_uid"],
+        authority_guard=current_root_authority)
+
+
+def _selected_postflight(policy, controller, *, renewal_id, fingerprint,
+                         outcome, renewal_proof):
+    """Require distinct UID-authenticated selected inspect before publication.
+
+    A controller 'satisfied' alone can never cause stage. A missing inspect
+    leaves the original one-shot renewal and inspect IDs retained.
+    """
+    from .certificate_selected_inspection import tick as inspect_tick
+    from .certificate_issuer_inspection import read_policy as read_inspection_policy
+    from .certificate_issuer_observer import read_policy as read_observer_policy
+    from .certificate_renewal import REQUEST_ID
+    pinned_uid = getattr(controller, "_controller_uid", None)
+    if (type(pinned_uid) is not int or not 1000 <= pinned_uid < 2**31
+            or not callable(getattr(controller, "inspect_issuer_result", None))
+            or type(renewal_id) is not str
+            or REQUEST_ID.fullmatch(renewal_id) is None
+            or outcome not in ("unchanged", "renewed")
+            or type(fingerprint) is not str
+            or _SHA.fullmatch(fingerprint) is None):
+        raise RenewalBlocked("selected-inspection-broker-not-authenticated")
+    inspection = read_inspection_policy(policy["issuer_inspection_policy_file"])
+    observer = read_observer_policy(policy["issuer_observer_policy_file"])
+    if (inspection["certificate_id"] != policy["certificate_id"]
+            or inspection["policy_sha256"] != policy["policy_sha256"]
+            or observer["certificate_id"] != policy["certificate_id"]
+            or observer["policy_sha256"] != policy["policy_sha256"]
+            or inspection["issuer_uid"] != observer["issuer_uid"]
+            or inspection["caller_uid"] != observer["caller_uid"]
+            or type(renewal_proof) is not dict
+            or renewal_proof.get("status") != "journal-ready"
+            or renewal_proof.get("request_id") != renewal_id
+            or renewal_proof.get("certificate_fingerprint_sha256") != fingerprint
+            or renewal_proof.get("outcome") != outcome
+            or renewal_proof.get("host_policy_digest") != observer["host_policy_digest"]
+            or renewal_proof.get("tls_ready") is not False):
+        raise RenewalBlocked("selected-inspection-renewal-binding-mismatch")
+    scope = {
+        "certificate_id": inspection["certificate_id"],
+        "policy_sha256": inspection["policy_sha256"],
+        "hostnames": inspection["hostnames"],
+        "issuer_uid": inspection["issuer_uid"],
+        "issuer_gid": observer["issuer_gid"],
+        "storage_id": observer["storage_id"],
+        "grant_id": observer["grant_id"],
+    }
+    selected = inspect_tick(
+        policy["journal_directory"], controller, scope,
+        original_renewal_id=renewal_id,
+        trusted_renewal_observation=renewal_proof,
+        host_policy_digest=observer["host_policy_digest"])
+    if selected["phase"] != "verified":
+        return False
+    if (selected["request_id"] == renewal_id
+            or selected["fingerprint"] != fingerprint
+            or selected["outcome"] != outcome):
+        raise RenewalBlocked("selected-inspection-final-result-mismatch")
+    return True
 
 
 def _publication_policy(policy):
@@ -277,6 +390,8 @@ def run(policy, *, controller, issuer_checker=None,
             journal_time = journal_time.astimezone(timezone.utc)
             if (trusted["certificate_id"] != policy["certificate_id"]
                     or trusted["policy_sha256"] != policy["policy_sha256"]
+                    or (policy["controller_backend"] == "selected-broker"
+                        and trusted.get("host_policy_digest") is None)
                     or trusted["tls_ready"] is not False
                     or trusted["certificate_fingerprint_sha256"] !=
                        inspected.fingerprint_sha256
@@ -307,6 +422,23 @@ def run(policy, *, controller, issuer_checker=None,
             "fingerprint_sha256": inspected.fingerprint_sha256,
         }
 
+    def require_selected_postflight(request_id, fingerprint, outcome):
+        if policy["controller_backend"] != "selected-broker":
+            return True
+        started = _pending_start(
+            policy["journal_directory"],
+            policy_sha256=policy["policy_sha256"],
+            certificate_id=policy["certificate_id"], request_id=request_id)
+        result = controller.application_request_result(request_id)
+        if result is None:
+            raise RenewalBlocked("selected-inspection-original-result-unavailable")
+        trusted = issuer_observer(
+            policy, request_id=request_id, started=started,
+            controller_result=result)
+        return _selected_postflight(
+            policy, controller, renewal_id=request_id,
+            fingerprint=fingerprint, outcome=outcome, renewal_proof=trusted)
+
     # If a changed renewal was previously verified, it must be delivered
     # before a newer renewal is authorized. Never replace an uncertain key.
     with _locked(policy["journal_directory"]) as fd:
@@ -320,6 +452,14 @@ def run(policy, *, controller, issuer_checker=None,
                     or confirmation["outcome"] != "renewed"
                     or confirmation["fingerprint_sha256"] != previous["fingerprint"]):
                 raise RenewalBlocked("renewal-publication-proof-stale")
+        if not require_selected_postflight(
+                previous["request_id"], previous["fingerprint"], "renewed"):
+            return {
+                "schema": previous["schema"], "phase": "awaiting-inspection",
+                "request_id": previous["request_id"], "outcome": "renewed",
+                "fingerprint": previous["fingerprint"],
+                "publication": "blocked-pending-selected-inspection",
+            }
         if policy["publication_policy_file"] is None:
             raise RenewalBlocked("publication-authorization-required")
         approval = publication_policy_loader(policy)
@@ -364,6 +504,13 @@ def run(policy, *, controller, issuer_checker=None,
     if status is None and response["phase"] in ("idle", "verified"):
         raise RenewalBlocked("issuer-readiness-unproven")
     if response["phase"] == "verified":
+        if not require_selected_postflight(
+                response["request_id"], response["fingerprint"],
+                response["outcome"]):
+            return {
+                **response, "phase": "awaiting-inspection",
+                "publication": "blocked-pending-selected-inspection",
+            }
         if response["outcome"] == "unchanged":
             return {**response, "publication": "unchanged-no-delivery"}
         if response["outcome"] == "renewed":
@@ -378,9 +525,9 @@ def run(policy, *, controller, issuer_checker=None,
 def _require_approved_native_inspection(policy):
     """Fail closed before selected broker or issuer socket opens.
 
-    Controller review 2026-10-16 rejects an unmanaged persistent inspector.
-    This gate may be retired only after the finite selected inspect program
-    and privileged invocation-bound reader have an approved concrete API.
+    The finite selected inspect and InvocationID-bound source APIs now exist.
+    Native activation still requires independent installation/review of the
+    root-owned broker authority, selected-program runtime and receipt chain.
     """
     if policy["controller_backend"] == "selected-broker":
         raise RenewalBlocked("selected-inspection-runtime-not-approved")
@@ -412,7 +559,7 @@ def main(argv=None):
                     or inspection["issuer_uid"] !=
                        pwd.getpwnam(policy["issuer_user"]).pw_uid):
                 raise RenewalBlocked("split-identity-authorization-mismatch")
-            controller = SelectedIssuerController(policy["issuer_lifecycle_socket"])
+            controller = _approved_selected_broker(policy)
         else:
             user = pwd.getpwnam(policy["controller_user"])
             if os.geteuid() != user.pw_uid or os.geteuid() == 0:

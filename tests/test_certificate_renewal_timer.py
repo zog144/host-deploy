@@ -331,15 +331,20 @@ def test_selected_broker_committed_result_uses_authenticated_journal_time(tmp_pa
             "schema": "zog-trusted-issuer-observation-v1",
             "status": "journal-ready", "request_id": request_id,
             "certificate_id": "station-web", "policy_sha256": "a"*64,
+            "host_policy_digest": "sha256:" + "d"*64,
             "certificate_fingerprint_sha256": "e"*64, "outcome": "unchanged",
             "journal_updated_at": shared_completion.isoformat(),
             "tls_ready": False,
         }
-    result = timer.run(config, controller=controller,
-                       issuer_checker=lambda _: issuer(10, completed=shared_completion),
-                       issuer_observer=accepted)
-    assert result["phase"] == "verified"
+    # A matching issuer journal is not a selected inspect InvocationID.
+    with pytest.raises(core.RenewalBlocked, match="broker-not-authenticated"):
+        timer.run(config, controller=controller,
+                  issuer_checker=lambda _: issuer(10, completed=shared_completion),
+                  issuer_observer=accepted)
     assert controller.count == 1
+    saved = json.loads((Path(config["journal_directory"]) / "renewal.json").read_text())
+    assert saved["request_id"] == request_id
+    assert saved["phase"] == "verified"  # retained; not stage-authorized
 
 
 def test_unreviewed_long_running_inspector_blocks_native_selected_broker(tmp_path):
