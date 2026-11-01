@@ -159,3 +159,25 @@ def test_selected_inspect_persists_distinct_id_and_uses_only_saved_reader(tmp_pa
     assert result["fingerprint"] == FP
     assert json.loads((d / "selected-inspection.json").read_text())[
         "request_id"] == ID
+
+
+def test_reboot_clock_rollback_cannot_reuse_cached_selected_inspection(tmp_path):
+    directory = tmp_path / "selected"
+    directory.mkdir(mode=0o700)
+    ctrl = SelectedIssuerController(
+        "/run/zog/certify-lifecycle.sock", controller_uid=23001,
+        client_factory=Broker)
+    now = datetime.now(timezone.utc)
+    issued = selected.tick(directory, ctrl, SCOPE, now=now)
+    assert issued["phase"] == "submitted"
+    accepted = selected.tick(
+        directory, ctrl, SCOPE, host_policy_digest=POLICY,
+        now=now + timedelta(seconds=2))
+    assert accepted["phase"] == "verified"
+    saved = (directory / "selected-inspection.json").read_bytes()
+    # Simulate recovered system clock predating the protected inspection
+    # record. A future-dated cached result is not a new 15-minute lease.
+    with pytest.raises(RenewalBlocked, match="clock-regressed"):
+        selected.tick(directory, ctrl, SCOPE, host_policy_digest=POLICY,
+                      now=now - timedelta(seconds=1))
+    assert (directory / "selected-inspection.json").read_bytes() == saved
