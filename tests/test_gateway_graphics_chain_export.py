@@ -13,7 +13,7 @@ from test_gateway_graphics_generation_chain import scenario
 
 
 def setup():
-    policy, cat, _ = scenario()
+    policy, cat, receipt = scenario()
     private = Ed25519PrivateKey.generate()
     pub = private.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -25,6 +25,8 @@ def setup():
         "chain_policy_sha256": chain._hash(policy),
         "original_catalogue_sha256": chain._hash(cat),
         "first_base_generation_id": policy["first_base_generation_id"],
+        "first_receipt_sha256": chain._hash(receipt),
+        "relay_uid": 23001,
         "public_key": base64.b64encode(pub).decode("ascii"),
         "source_revision": cat["tasks"][chain.TASKS[0]]["source_revision"],
         "monthly_pin_identity": cat["tasks"][chain.TASKS[0]]["monthly_pin_identity"],
@@ -37,7 +39,7 @@ def setup():
         "boot_id": pin["boot_id"], "epoch": pin["epoch"],
         "chain_policy_sha256": pin["chain_policy_sha256"],
         "catalogue": cat, "catalogue_sha256": chain._hash(cat),
-        "receipt_sha256": "sha256:" + "a" * 64,
+        "receipt": receipt, "receipt_sha256": chain._hash(receipt),
         "published_at": (now - timedelta(seconds=1)).isoformat(),
         "expires_at": (now + timedelta(minutes=5)).isoformat(),
     }
@@ -144,6 +146,7 @@ def test_signed_cross_host_xcb_x11_exports_bind_original_toolchain_and_accepted_
         envelope = dict(
             payload, task=task, catalogue=candidate["catalogue"],
             catalogue_sha256=candidate["catalogue_sha256"],
+            receipt=candidate["receipt"],
             receipt_sha256=chain._hash(candidate["receipt"]),
         )
         verified, digest = export.verify(signed(envelope), pin, task=task, now=now)
@@ -161,3 +164,68 @@ def test_signed_cross_host_xcb_x11_exports_bind_original_toolchain_and_accepted_
         )
         with pytest.raises(export.GraphicalExportBlocked):
             export.verify(signed(forged), pin, task=task, now=now)
+
+
+
+def test_signed_export_refuses_receipt_substitution_and_public_arbitrary_signer():
+    pin, payload, sign, cat, now = setup()
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.verify(sign({**payload, "receipt_sha256": "sha256:"+"0"*64}),
+                      pin, task=chain.TASKS[0], now=now)
+    changed = json.loads(json.dumps(payload["receipt"]))
+    changed["accepted_base_generation_id"] = "f"*64
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.verify(sign({**payload, "receipt": changed,
+                            "receipt_sha256": chain._hash(changed)}),
+                      pin, task=chain.TASKS[0], now=now)
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.sign_host_export(payload, b"\0"*32)
+
+
+def test_online_host_nonce_blocks_cached_reboot_and_revocation():
+    pin, payload, signed, cat, now = setup()
+    nonce = "a"*64
+    digest = "sha256:"+"b"*64
+    observed = now - timedelta(seconds=1)
+    proof = {
+        "schema": "host-deploy-graphical-live-epoch-v1",
+        "nonce": nonce, "export_sha256": digest, "task": chain.TASKS[0],
+        "host_id": pin["host_id"], "installation_id": pin["installation_id"],
+        "lane": pin["lane"], "lane_owner": pin["lane_owner"],
+        "boot_id": pin["boot_id"], "epoch": pin["epoch"],
+        "chain_policy_sha256": pin["chain_policy_sha256"],
+        "sequence": 1, "observed_at": observed.isoformat(),
+        "expires_at": (now+timedelta(seconds=2)).isoformat(),
+    }
+    assert export.verify_live_ack(
+        signed(proof), pin, nonce=nonce, export_digest=digest,
+        task=chain.TASKS[0], now=now)["sequence"] == 1
+    for mismatch in (
+        ({"nonce": "0"*64}, pin, nonce),
+        ({"boot_id": "0"*32}, pin, nonce),
+        ({"epoch": 8}, pin, nonce),
+        ({"export_sha256": "sha256:"+"0"*64}, pin, nonce),
+        ({"expires_at": (now+timedelta(seconds=30)).isoformat()}, pin, nonce),
+        ({"sequence": 0}, pin, nonce),
+        ({}, {**pin, "epoch": 8}, nonce),
+        ({}, pin, "f"*64),
+    ):
+        change, selected_pin, selected_nonce = mismatch
+        with pytest.raises(export.GraphicalExportBlocked):
+            export.verify_live_ack(signed({**proof, **change}), selected_pin,
+                nonce=selected_nonce, export_digest=digest,
+                task=chain.TASKS[0], now=now)
+
+
+def test_receiver_fails_closed_without_fresh_live_host(monkeypatch, tmp_path):
+    pin, payload, signed, cat, now = setup()
+    from zog.host_deploy.gateway import graphics_chain_export as selected
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / (chain.TASKS[0]+".json")).write_bytes(signed(payload))
+    monkeypatch.setattr(selected, "_read_public_pin", lambda path: pin)
+    monkeypatch.setattr(selected, "_query_live_owner", lambda *a, **k:
+        (_ for _ in ()).throw(export.GraphicalExportBlocked("relay offline")))
+    with pytest.raises(export.GraphicalExportBlocked, match="relay offline"):
+        selected.load_selected_step(exports, "/etc/zog/owner-pin", chain.TASKS[0],
+                                    pin["chain_policy_sha256"])
