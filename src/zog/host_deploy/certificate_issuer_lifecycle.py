@@ -6,8 +6,13 @@ program. The controller-owned broker accepts exact selected renew/inspect/stage 
 from __future__ import annotations
 
 from types import SimpleNamespace
+import re
 
 from .certificate_renewal import REQUEST_ID, RenewalBlocked
+
+# Match box-control's fixed broker runtime identity contract. In particular
+# do not trust a custom/testing client_factory to sanitize for this consumer.
+_RUNTIME_ID = re.compile(r"[A-Za-z0-9-]{1,40}\Z")
 
 # Source-review compatibility checkpoint for the fixed, one-shot controller
 # result reader. It does NOT attest a live installed checkout: Work must
@@ -66,7 +71,7 @@ class SelectedIssuerController:
         if (getattr(reply, "application", None) != "certify-manage"
                 or getattr(reply, "selected_program", None) != program_name
                 or type(getattr(reply, "runtime_id", None)) is not str
-                or not reply.runtime_id):
+                or _RUNTIME_ID.fullmatch(reply.runtime_id) is None):
             raise RenewalBlocked("issuer-lifecycle-reply-mismatch")
         return reply
 
@@ -91,7 +96,7 @@ class SelectedIssuerController:
             raise RenewalBlocked("issuer-lifecycle-result-scope-mismatch")
         if (reply["runtime_id"] is not None
                 and (type(reply["runtime_id"]) is not str
-                     or not reply["runtime_id"])):
+                     or _RUNTIME_ID.fullmatch(reply["runtime_id"]) is None)):
             raise RenewalBlocked("issuer-lifecycle-runtime-invalid")
         return SimpleNamespace(
             request_id=request_id, application="certify-manage",
@@ -110,9 +115,20 @@ class SelectedIssuerController:
             result = self._client.inspect_issuer_result(request_id)
         except Exception:
             raise RenewalBlocked("issuer-inspection-invocation-unavailable") from None
-        if (type(result) is not dict or
-                result.get("schema") != "zog-trusted-issuer-inspection-v1"
-                or result.get("request_id") != request_id
-                or result.get("program") != "inspect"):
+        # The box-control client sanitizes this; validate the essential
+        # structure again so an alternate injected client cannot bypass it.
+        fields = {"schema", "request_id", "runtime_id", "program", "boot_id",
+                  "invocation_id", "storage_id", "grant_id", "issuer_uid",
+                  "issuer_gid", "host_policy_digest", "inspection",
+                  "status", "tls_ready"}
+        if (type(result) is not dict or set(result) != fields
+                or result["schema"] != "zog-trusted-issuer-inspection-v1"
+                or result["request_id"] != request_id
+                or result["program"] != "inspect"
+                or result["status"] != "verified"
+                or result["tls_ready"] is not False
+                or type(result["runtime_id"]) is not str
+                or _RUNTIME_ID.fullmatch(result["runtime_id"]) is None
+                or type(result["inspection"]) is not dict):
             raise RenewalBlocked("issuer-inspection-invocation-mismatch")
         return result
