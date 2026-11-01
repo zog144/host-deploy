@@ -201,6 +201,10 @@ def tick(directory, controller, scope, *, original_renewal_id=None,
             record = None
         elif record and record["phase"] == "verified":
             elapsed = current - _timestamp(record["issued_at"])
+            # A backward clock step must never extend an old verified
+            # certificate observation's useful life indefinitely.
+            if elapsed < timedelta(0):
+                raise RenewalBlocked("selected-inspection-clock-regressed")
             if elapsed <= timedelta(minutes=15):
                 return dict(record)
             _archive_verified(fd, record)
