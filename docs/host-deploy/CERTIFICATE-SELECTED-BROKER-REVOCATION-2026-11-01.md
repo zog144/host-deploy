@@ -22,3 +22,11 @@ The current source changes do **not** install these files, open a broker,
 activate renewal or clear \`_require_approved_native_inspection\`.
 Actual root installation, independent provenance, verified root receipts,
 rollback and crash/reboot acceptance are Work-only.
+
+**Post-construction revocation:** The protected timer also supplies the
+SelectedIssuerController an immutable-root reader callback which must
+reopen the original root broker projection and the pending/final revocation
+markers before each request-ID issuance, renew/inspect/stage launch,
+controller result and inspect-result RPC. Any mismatch or marker stops
+the call before sending bytes to the broker. Source fixtures cover a
+revocation occurring after the controller is constructed.
