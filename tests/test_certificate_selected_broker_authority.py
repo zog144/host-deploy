@@ -164,3 +164,54 @@ def test_timer_native_selected_gate_stays_disabled():
     with pytest.raises(RenewalBlocked, match="runtime-not-approved"):
         timer._require_approved_native_inspection(
             {"controller_backend": "selected-broker"})
+
+
+
+@pytest.mark.parametrize("name", (
+    authority.REVOCATION_NAME,
+    ".pending." + authority.REVOCATION_NAME,
+))
+@pytest.mark.parametrize("kind", ("complete", "partial", "symlink", "directory"))
+def test_any_revocation_or_interrupted_revocation_denies_broker(
+        tmp_path, name, kind):
+    parent = tmp_path / "root-owned-simulation"
+    parent.mkdir()
+    marker = parent / name
+    if kind == "complete":
+        marker.write_bytes(b'{"schema":"revoked"}')
+    elif kind == "partial":
+        marker.write_bytes(b'{"schema":')
+    elif kind == "symlink":
+        marker.symlink_to(parent / "not-present")
+    else:
+        marker.mkdir()
+    fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(RenewalBlocked, match="root-authority-unverified"):
+            authority._require_not_revoked(fd)
+        # The authority consumer is a read-only observer, never a cleaner.
+        assert marker.is_symlink() or marker.exists()
+    finally:
+        os.close(fd)
+
+
+def test_absent_revocation_allows_only_existing_other_authority_checks(tmp_path):
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        authority._require_not_revoked(fd)
+        (tmp_path / "unrelated-cert.json").write_text("other owner")
+        authority._require_not_revoked(fd)
+    finally:
+        os.close(fd)
+
+
+def test_revocation_checker_cannot_be_bypassed_by_forged_root_reader():
+    # verify(root_reader=...) is deliberately synthetic/test-only. Production
+    # _root_file must retain both pre/post tombstone checks and exact path.
+    import inspect
+    source = inspect.getsource(authority._root_file)
+    assert source.count("_require_not_revoked(descriptor)") == 2
+    assert authority.REVOCATION_PATH == (
+        "/etc/zog/host-deploy/certificate-issuer-broker-revoked.json"
+    )
+    assert "if path != ROOT_PATH:" in source
