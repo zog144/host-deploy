@@ -261,9 +261,9 @@ def _selected_postflight(policy, controller, *, renewal_id, fingerprint,
     from .certificate_issuer_inspection import read_policy as read_inspection_policy
     from .certificate_issuer_observer import read_policy as read_observer_policy
     from .certificate_renewal import REQUEST_ID
-    if (not isinstance(controller, object)
-            or getattr(controller, "_controller_uid", None) is None
-            or not hasattr(controller, "inspect_issuer_result")
+    pinned_uid = getattr(controller, "_controller_uid", None)
+    if (type(pinned_uid) is not int or not 1000 <= pinned_uid < 2**31
+            or not callable(getattr(controller, "inspect_issuer_result", None))
             or type(renewal_id) is not str
             or REQUEST_ID.fullmatch(renewal_id) is None
             or outcome not in ("unchanged", "renewed")
@@ -518,9 +518,9 @@ def run(policy, *, controller, issuer_checker=None,
 def _require_approved_native_inspection(policy):
     """Fail closed before selected broker or issuer socket opens.
 
-    Controller review 2026-10-16 rejects an unmanaged persistent inspector.
-    This gate may be retired only after the finite selected inspect program
-    and privileged invocation-bound reader have an approved concrete API.
+    The finite selected inspect and InvocationID-bound source APIs now exist.
+    Native activation still requires independent installation/review of the
+    root-owned broker authority, selected-program runtime and receipt chain.
     """
     if policy["controller_backend"] == "selected-broker":
         raise RenewalBlocked("selected-inspection-runtime-not-approved")
