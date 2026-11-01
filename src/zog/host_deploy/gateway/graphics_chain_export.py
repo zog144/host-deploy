@@ -242,7 +242,10 @@ def issue_native_step_export(*, task, published_at, expires_at):
         policy = chain.validate_policy(chain._read_locked(chain.POLICY))
         if not chain._verified_native_owner(policy):
             _deny("native worker owner unavailable")
-        epoch = chain._read_locked(chain.STORE / "graphical-export-epoch-v1.json")
+        try:
+            epoch = chain._read_locked(chain.STORE / "graphical-export-epoch-v1.json")
+        except (OSError, ValueError):
+            _deny("protected Host epoch not installed")
         if (type(epoch) is not dict or set(epoch) != {
                 "schema", "host_id", "installation_id", "lane", "lane_owner",
                 "boot_id", "epoch", "chain_policy_sha256", "source_revision",
@@ -267,7 +270,10 @@ def issue_native_step_export(*, task, published_at, expires_at):
                 chain._hash(receipt) != policy["first_receipt_sha256"]):
             _deny("original receipt changed")
         keypath = chain.STORE / "graphical-export-signing-key-v1.json"
-        key = chain._read_locked(keypath)
+        try:
+            key = chain._read_locked(keypath)
+        except (OSError, ValueError):
+            _deny("protected signer not installed")
         if (type(key) is not dict or set(key) != {"schema", "private_key"}
                 or key["schema"] != "host-deploy-graphical-export-private-key-v1"):
             _deny("protected private signer unavailable")
