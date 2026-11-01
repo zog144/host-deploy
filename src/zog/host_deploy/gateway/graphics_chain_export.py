@@ -32,7 +32,7 @@ _FIELDS = {"schema", "task", "host_id", "installation_id", "lane",
 _ENVELOPE = {"payload", "signature"}
 _PIN = {"schema", "host_id", "installation_id", "lane", "lane_owner",
         "boot_id", "chain_policy_sha256", "original_catalogue_sha256",
-        "public_key", "epoch"}
+        "public_key", "epoch", "source_revision", "monthly_pin_identity"}
 MAX_BYTES = 65536
 
 
@@ -136,6 +136,9 @@ def verify(raw, pin, *, task, now=None):
         _deny("unapproved task/Host")
     if (not _SHA.fullmatch(pin["chain_policy_sha256"])
             or not _SHA.fullmatch(pin["original_catalogue_sha256"])
+            or not _SHA.fullmatch(pin["monthly_pin_identity"])
+            or type(pin["source_revision"]) is not str
+            or not re.fullmatch(r"[0-9a-f]{40}", pin["source_revision"])
             or type(pin["epoch"]) is not int or pin["epoch"] < 1
             or not _UUID.fullmatch(pin["boot_id"].replace("-", "").lower())):
         _deny("invalid owner epoch or policy")
@@ -174,6 +177,8 @@ def verify(raw, pin, *, task, now=None):
             or set(catalogue["tasks"]) != {task}
             or catalogue["tasks"][task]["lane"] != pin["lane"]
             or catalogue["tasks"][task]["lane_owner"] != pin["lane_owner"]
+            or catalogue["tasks"][task]["source_revision"] != pin["source_revision"]
+            or catalogue["tasks"][task]["monthly_pin_identity"] != pin["monthly_pin_identity"]
             or (task == TASKS[0] and
                 payload["catalogue_sha256"] != pin["original_catalogue_sha256"])):
         _deny("catalogue differs from signed Host authority")
