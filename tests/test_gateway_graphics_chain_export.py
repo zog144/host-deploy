@@ -25,6 +25,8 @@ def setup():
         "chain_policy_sha256": chain._hash(policy),
         "original_catalogue_sha256": chain._hash(cat),
         "public_key": base64.b64encode(pub).decode("ascii"),
+        "source_revision": cat["tasks"][chain.TASKS[0]]["source_revision"],
+        "monthly_pin_identity": cat["tasks"][chain.TASKS[0]]["monthly_pin_identity"],
     }
     now = datetime.now(timezone.utc)
     payload = {
@@ -86,7 +88,8 @@ def test_pin_revocation_reboot_and_owner_epoch_deny_old_export():
     pin, payload, signed, cat, now = setup()
     for change in ({"epoch": pin["epoch"] + 1},
                    {"boot_id": "0" * 32},
-                   {"chain_policy_sha256": "sha256:"+"0"*64}):
+                   {"chain_policy_sha256": "sha256:"+"0"*64},
+                   {"source_revision": "f"*40}):
         with pytest.raises(export.GraphicalExportBlocked):
             export.verify(signed(payload), {**pin, **change},
                           task=chain.TASKS[0], now=now)
