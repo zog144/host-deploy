@@ -227,7 +227,7 @@ def _approved_selected_broker(policy):
     """
     from .certificate_issuer_inspection import read_policy as inspect_policy
     from .certificate_issuer_observer import read_policy as observe_policy
-    from .certificate_selected_broker_authority import verify
+    from .certificate_selected_broker_authority import verify, _root_file
     from .certificate_issuer_lifecycle import SelectedIssuerController
     inspection = inspect_policy(policy["issuer_inspection_policy_file"])
     observer = observe_policy(policy["issuer_observer_policy_file"])
@@ -245,9 +245,16 @@ def _approved_selected_broker(policy):
             or controller_uid != authorized["controller_uid"]
             or issuer_uid != authorized["issuer_uid"]):
         raise RenewalBlocked("selected-broker-installed-identity-mismatch")
+    def current_root_authority():
+        # The timer may retain a SelectedIssuerController after revocation.
+        # Check the immutable root policy and both tombstone names again
+        # immediately before each selected broker RPC, not only at startup.
+        return _root_file() == authorized
+
     return SelectedIssuerController(
         authorized["issuer_lifecycle_socket"],
-        controller_uid=authorized["controller_uid"])
+        controller_uid=authorized["controller_uid"],
+        authority_guard=current_root_authority)
 
 
 def _selected_postflight(policy, controller, *, renewal_id, fingerprint,
