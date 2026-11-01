@@ -111,3 +111,56 @@ def test_selected_broker_never_constructs_unpinned_client():
                 client_factory=lambda *a, **kw: invoked.append((a, kw)))
     assert invoked == []
 
+
+@pytest.mark.parametrize("runtime", [
+    "../other-runtime", "/run/secret", "RUNTIME_01", "R" * 41, "", True,
+])
+def test_selected_controller_rejects_substituted_runtime_even_with_custom_client(runtime):
+    broker = Broker("/run/zog/certify-lifecycle.sock")
+    ctrl = SelectedIssuerController(
+        "/run/zog/certify-lifecycle.sock", controller_uid=23001,
+        client_factory=lambda path, *, controller_uid: broker)
+    rid = ctrl.issue_application_request_id()
+    broker.launch_application = lambda *a, **k: SimpleNamespace(
+        application="certify-manage", selected_program="inspect",
+        runtime_id=runtime)
+    with pytest.raises(RenewalBlocked, match="reply-mismatch"):
+        ctrl.request_application_launch(
+            "certify-manage", program_name="inspect", request_id=rid)
+    broker.replies[rid] = {"request_id": rid, "status": "satisfied",
+                           "program": "inspect", "runtime_id": runtime}
+    with pytest.raises(RenewalBlocked, match="runtime-invalid"):
+        ctrl.application_request_result(rid)
+
+
+@pytest.mark.parametrize("change", [
+    {"schema": "foreign"},
+    {"request_id": "r1-other"},
+    {"program": "renew"},
+    {"status": "unverified"},
+    {"tls_ready": True},
+    {"runtime_id": "../foreign-runtime"},
+    {"runtime_id": None},
+    {"inspection": "private-issuer-file"},
+    {"unexpected_secret": "not-allowed"},
+])
+def test_selected_inspection_consumer_rejects_malformed_fake_client(change):
+    class Fake(Broker):
+        def inspect_issuer_result(self, request_id):
+            from zog.host_deploy.certificate_authenticated_inspection import TRUSTED
+            return {**{
+                "schema": TRUSTED, "request_id": request_id,
+                "runtime_id": "RUNTIME01", "program": "inspect",
+                "boot_id": "a" * 32, "invocation_id": "b" * 32,
+                "storage_id": "c" * 32, "grant_id": "d" * 32,
+                "issuer_uid": 24001, "issuer_gid": 24002,
+                "host_policy_digest": "sha256:" + "e" * 64,
+                "inspection": {"schema": "zog-certify-inspection-result-v1"},
+                "status": "verified", "tls_ready": False,
+            }, **change}
+    ctrl = SelectedIssuerController(
+        "/run/zog/certify-lifecycle.sock", controller_uid=23001,
+        client_factory=Fake)
+    rid = ctrl.issue_application_request_id()
+    with pytest.raises(RenewalBlocked, match="invocation-mismatch"):
+        ctrl.inspect_issuer_result(rid)
