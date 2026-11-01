@@ -196,6 +196,11 @@ def _matching_completed_request(
         or any(step.get("phase") != "completed" for step in progress["stages"])
     ):
         _deny("predecessor gateway pipeline is not durably completed")
+    # A root-owned directory name is not proof of command-center origin.
+    # Verify the separately signed original request, exact dispatch and
+    # completed pipeline, bound to protected issuer Host/installation/boot.
+    from .graphics_gateway_history import verify_history
+    verify_history(state_directory, policy, request_id, state, dispatch, progress)
     return request_id, pipeline_id, binding
 
 
