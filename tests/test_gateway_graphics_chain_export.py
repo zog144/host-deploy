@@ -223,6 +223,10 @@ def test_receiver_fails_closed_without_fresh_live_host(monkeypatch, tmp_path):
     exports = tmp_path / "exports"
     exports.mkdir()
     (exports / (chain.TASKS[0]+".json")).write_bytes(signed(payload))
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
     monkeypatch.setattr(selected, "_read_public_pin", lambda path: pin)
     # This test isolates the relay failure. Independent checkpoint tests
     # exercise the mandatory live gate with real Ed25519 signatures.
@@ -256,6 +260,10 @@ def test_old_still_root_owned_pin_cannot_be_selected_after_rotation(monkeypatch,
         pin_reads.append(path)
         assert path == export.CURRENT_AUTHORITY_PATH
         return current
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
     monkeypatch.setattr(export, "_read_public_pin", root_pin)
     monkeypatch.setattr(export, "_query_live_owner",
                         lambda *a, **kw: live_calls.append(kw))
@@ -304,6 +312,10 @@ def test_current_rotated_authority_accepts_only_current_export_and_fresh_ack(
     export_root.mkdir()
     raw = sign(signed_payload)
     (export_root / (chain.TASKS[0] + ".json")).write_bytes(raw)
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
     monkeypatch.setattr(export, "_read_public_pin", lambda path: (
         current if path == export.CURRENT_AUTHORITY_PATH
         else pytest.fail("obsolete pin read")))
@@ -359,6 +371,10 @@ def test_current_authority_rotation_during_live_challenge_denies_old_key(
             "expires_at": (observed+timedelta(seconds=3)).isoformat(),
         })
 
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
     monkeypatch.setattr(export, "_read_public_pin", installed_current_pin)
     monkeypatch.setattr(export, "_query_live_owner", live)
     with pytest.raises(export.GraphicalExportBlocked,
