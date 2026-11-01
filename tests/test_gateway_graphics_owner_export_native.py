@@ -30,8 +30,7 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
     start = (now-timedelta(seconds=1)).isoformat()
     end = (now+timedelta(minutes=2)).isoformat()
     with pytest.raises(exports.GraphicalExportBlocked, match="epoch not installed"):
-        exports.issue_native_step_export(task=chain.TASKS[0],
-                                         published_at=start, expires_at=end)
+        exports.issue_native_step_export(task=chain.TASKS[0])
     private = Ed25519PrivateKey.generate()
     key = private.private_bytes(serialization.Encoding.Raw,
         serialization.PrivateFormat.Raw, serialization.NoEncryption())
@@ -54,8 +53,7 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
         path.chmod(0o600)
     (store/"graphical-export-publications").mkdir(mode=0o700)
     (store/"graphical-live-nonces").mkdir(mode=0o700)
-    raw = exports.issue_native_step_export(
-        task=chain.TASKS[0],published_at=start,expires_at=end)
+    raw = exports.issue_native_step_export(task=chain.TASKS[0])
     from test_gateway_graphics_chain_export import setup
     pin,_,_,_,_=setup()
     pin.update({"boot_id":"b"*32,"epoch":2,
@@ -76,8 +74,7 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
         exports.issue_native_live_epoch_ack(challenge)
     first.RECEIPT.write_bytes(b"tampered")
     with pytest.raises((ValueError,chain.ChainBlocked)):
-        exports.issue_native_step_export(
-            task=chain.TASKS[0],published_at=start,expires_at=end)
+        exports.issue_native_step_export(task=chain.TASKS[0])
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="ephemeral root test")
