@@ -53,7 +53,7 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          sudo -E env PYTHONPATH="$PWD/src" "$(command -v python)" -m pytest -q tests/test_gateway_graphics_generation_chain_native.py tests/test_gateway_graphics_attester_import_native.py -rs
+          sudo -E env PYTHONPATH="$PWD/src" "$(command -v python)" -m pytest -q tests/test_gateway_graphics_generation_chain_native.py tests/test_gateway_graphics_attester_import_native.py tests/test_gateway_graphics_owner_export_native.py -rs
       - name: Existing gateway request, dispatch and supervisor compatibility
         env:
           AWS_EC2_METADATA_DISABLED: "true"
