@@ -37,6 +37,9 @@ _PIN = {"schema", "host_id", "installation_id", "lane", "lane_owner",
         "public_key", "epoch", "source_revision", "monthly_pin_identity",
         "first_base_generation_id", "first_receipt_sha256", "relay_uid"}
 MAX_BYTES = 65536
+# The independently installed current authority has ONE protected pathname.
+# Historic generation pins may remain root-owned 0444, but have no selection authority.
+CURRENT_AUTHORITY_PATH = "/etc/zog/host-deploy/graphical-chain-current-owner-pin-v1.json"
 
 
 class GraphicalExportBlocked(ValueError):
@@ -71,9 +74,9 @@ def _json(raw):
 
 def _read_public_pin(path):
     """Root-installed 0444 nonsecret authorization (never root 0600 STATE)."""
-    path = Path(path)
-    if not path.is_absolute() or ".." in path.parts:
-        _deny("pin path unsafe")
+    if type(path) is not str or path != CURRENT_AUTHORITY_PATH:
+        _deny("historic or caller-selected signing authority")
+    path = Path(CURRENT_AUTHORITY_PATH)
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         for part in path.parts[1:-1]:
@@ -428,7 +431,11 @@ def load_selected_step(directory, pin_path, task, policy_sha256):
     """
     if task not in TASKS or not isinstance(policy_sha256, str):
         _deny("unsupported task or missing pinned policy")
-    pin = _read_public_pin(pin_path)
+    # Rejection must precede any network call, cache read, or signature check.
+    # The API retains pin_path for source compatibility but never trusts it.
+    if type(pin_path) is not str or pin_path != CURRENT_AUTHORITY_PATH:
+        _deny("caller-selected or obsolete graphical authority")
+    pin = _read_public_pin(CURRENT_AUTHORITY_PATH)
     if pin.get("chain_policy_sha256") != policy_sha256:
         _deny("original owner policy was revoked or changed")
     root = Path(directory)
