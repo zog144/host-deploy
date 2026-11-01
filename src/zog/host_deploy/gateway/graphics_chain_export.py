@@ -10,7 +10,7 @@ Not a compiler admission or a transport implementation.
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 import os
@@ -549,7 +549,7 @@ def issue_native_live_epoch_ack(challenge_raw):
             "boot_id": epoch["boot_id"], "epoch": epoch["epoch"],
             "chain_policy_sha256": chain._hash(policy),
             "sequence": sequence, "observed_at": now.isoformat(),
-            "expires_at": (now + __import__("datetime").timedelta(seconds=4)).isoformat(),
+            "expires_at": (now + timedelta(seconds=4)).isoformat(),
         }
         signature = private.sign(_canonical(proof))
         return _canonical({"payload": proof,
