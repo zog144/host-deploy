@@ -15,6 +15,8 @@ from .certificate_renewal import RenewalBlocked
 
 SCHEMA = "zog-host-deploy-selected-issuer-broker-authority-v1"
 ROOT_PATH = "/etc/zog/host-deploy/certificate-issuer-broker-authority.json"
+REVOCATION_NAME = "certificate-issuer-broker-revoked.json"
+REVOCATION_PATH = "/etc/zog/host-deploy/" + REVOCATION_NAME
 _HEX = re.compile(r"[a-f0-9]{64}\Z")
 _ID = re.compile(r"[a-z][a-z0-9-]{0,62}\Z")
 _UUID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\Z")
@@ -32,6 +34,25 @@ def _deny():
     raise RenewalBlocked("selected-broker-root-authority-unverified")
 
 
+
+def _require_not_revoked(parent_fd):
+    """Any final OR pending immutable tombstone makes authority unusable.
+
+    The root owner publishes the permanent 0444 marker with no-replacement
+    hard-link staging. An unreadable, malformed or partial tombstone is a
+    STOP, never an invitation to revive a retained authority projection.
+    """
+    for name in (REVOCATION_NAME, ".pending." + REVOCATION_NAME):
+        try:
+            os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _deny()
+        _deny()
+
+
+
 def _root_file(path=ROOT_PATH):
     """Retained O_NOFOLLOW dirfd walk, root-owned readable non-secret 0444 pin."""
     if path != ROOT_PATH:
@@ -47,6 +68,7 @@ def _root_file(path=ROOT_PATH):
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
                     or info.st_mode & 0o022):
                 _deny()
+        _require_not_revoked(descriptor)
         leaf = os.open(Path(path).name, os.O_RDONLY | os.O_NOFOLLOW |
                        os.O_CLOEXEC, dir_fd=descriptor)
         try:
@@ -60,6 +82,9 @@ def _root_file(path=ROOT_PATH):
                 _deny()
         finally:
             os.close(leaf)
+        # A revocation raced with the read: refuse the projection rather
+        # than returning a stale authorized broker identity.
+        _require_not_revoked(descriptor)
     except OSError:
         _deny()
     finally:
