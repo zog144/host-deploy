@@ -457,6 +457,13 @@ def load_selected_step(directory, pin_path, task, policy_sha256):
     digest = "sha256:" + hashlib.sha256(raw).hexdigest()
     live = _query_live_owner(pin, nonce=nonce, digest=digest, task=task)
     verify_live_ack(live, pin, nonce=nonce, export_digest=digest, task=task)
+    # Revocation/rotation may race the remote nonce round trip. A proof
+    # signed by a key that was current when we started is not authorization
+    # if the installed current pin changed before the result was accepted.
+    # The native installer must still serialize final acceptance with
+    # authority rotation; this source check does not claim that atomicity.
+    if _read_public_pin(CURRENT_AUTHORITY_PATH) != pin:
+        _deny("current signing authority rotated during live proof")
     return selected
 
 
