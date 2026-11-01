@@ -29,7 +29,7 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
     now = datetime.now(timezone.utc)
     start = (now-timedelta(seconds=1)).isoformat()
     end = (now+timedelta(minutes=2)).isoformat()
-    with pytest.raises(chain.ChainBlocked):
+    with pytest.raises(exports.GraphicalExportBlocked, match="epoch not installed"):
         exports.issue_native_step_export(task=chain.TASKS[0],
                                          published_at=start, expires_at=end)
     private = Ed25519PrivateKey.generate()
