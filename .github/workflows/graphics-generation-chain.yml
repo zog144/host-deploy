@@ -23,6 +23,13 @@ jobs:
           ref: 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
           path: dependencies/image-build
           persist-credentials: false
+      - name: Checkout exact host-install graphical checkpoint contract
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/host-install
+          ref: 7e0731357c9f82aa6dbe6c7a69369b6b6ef1c7b8
+          path: dependencies/host-install
+          persist-credentials: false
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -47,8 +54,15 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          python -m compileall -q src/zog/host_deploy/gateway/graphics_generation_chain.py src/zog/host_deploy/gateway/graphics_generation_attester.py src/zog/host_deploy/gateway/graphics_attester_import.py src/zog/host_deploy/gateway/graphics_gateway_history.py src/zog/host_deploy/gateway/graphics_chain_export.py src/zog/host_deploy/gateway/graphics_stage_once.py
+          python -m compileall -q src/zog/host_deploy/gateway/graphics_generation_chain.py src/zog/host_deploy/gateway/graphics_generation_attester.py src/zog/host_deploy/gateway/graphics_attester_import.py src/zog/host_deploy/gateway/graphics_gateway_history.py src/zog/host_deploy/gateway/graphics_external_checkpoint.py src/zog/host_deploy/gateway/graphics_chain_export.py src/zog/host_deploy/gateway/graphics_stage_once.py
           PYTHONPATH=src python -m pytest -q tests/test_gateway_graphics_generation_chain.py tests/test_gateway_graphics_generation_attester.py tests/test_gateway_graphics_gateway_history.py tests/test_gateway_graphics_chain_gateway.py tests/test_gateway_graphics_chain_export.py tests/test_gateway_graphics_stage_once.py tests/test_gateway_task_catalogue.py tests/test_gateway_first_graphics_catalogue.py
+      - name: Pinned cross-repository online checkpoint antirollback regressions
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+          ZOG_HOST_INSTALL_CHECKPOINT_SOURCE: dependencies/host-install
+        run: |
+          PYTHONPATH=src:tests:dependencies/host-install/src python -m pytest -q tests/test_gateway_graphics_external_checkpoint.py -rs
+
       - name: Root-owned one-shot step files in ephemeral CI only
         env:
           AWS_EC2_METADATA_DISABLED: "true"
