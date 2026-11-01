@@ -1,9 +1,9 @@
 name: Bounded graphical generation chaining - source only
 on:
   push:
-    branches: [regular/graphical-generation-chain-20261031]
+    branches: [regular/graphical-generation-chain-20261031, regular/graphical-composition-binding-20261031]
   pull_request:
-    branches: [regular/first-graphics-catalogue-20261031, regular/toolchain-gateway-20261019]
+    branches: [regular/graphical-generation-chain-20261031, regular/first-graphics-catalogue-20261031, regular/toolchain-gateway-20261019]
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/image-build
-          ref: efb7110006cafeb170da5c2606dccfeb17b6055b
+          ref: 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
           path: dependencies/image-build
           persist-credentials: false
       - name: Setup Python
@@ -35,7 +35,7 @@ jobs:
           root = Path("dependencies/image-build")
           assert subprocess.check_output(
             ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-          ).strip() == "efb7110006cafeb170da5c2606dccfeb17b6055b"
+          ).strip() == "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
           pin = root / "project/pins/2026-10-01/commit-pin.py"
           assert hashlib.sha256(pin.read_bytes()).hexdigest() == (
             "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
@@ -49,6 +49,13 @@ jobs:
         run: |
           python -m compileall -q src/zog/host_deploy/gateway/graphics_generation_chain.py src/zog/host_deploy/gateway/graphics_generation_attester.py src/zog/host_deploy/gateway/graphics_chain_export.py src/zog/host_deploy/gateway/graphics_stage_once.py
           PYTHONPATH=src python -m pytest -q tests/test_gateway_graphics_generation_chain.py tests/test_gateway_graphics_generation_attester.py tests/test_gateway_graphics_chain_gateway.py tests/test_gateway_graphics_chain_export.py tests/test_gateway_graphics_stage_once.py tests/test_gateway_task_catalogue.py tests/test_gateway_first_graphics_catalogue.py
+      - name: Combined pinned image-build and Host export composition compatibility
+        env:
+          AWS_EC2_METADATA_DISABLED: "true"
+          ZOG_GRAPHICAL_PRODUCER_SOURCE_ROOT: dependencies/image-build
+        run: |
+          PYTHONPATH=src:dependencies/image-build/src python -m pytest -q tests/test_gateway_graphics_cross_repo_integration.py dependencies/image-build/tests/test_graphical_composition.py
+
       - name: Root-owned one-shot step files in ephemeral CI only
         env:
           AWS_EC2_METADATA_DISABLED: "true"

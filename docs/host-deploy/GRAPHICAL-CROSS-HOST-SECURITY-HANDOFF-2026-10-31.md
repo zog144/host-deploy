@@ -23,3 +23,8 @@ The following are **not installed or proven** by PR #8 source CI:
 **root-control Regular**: independently verify the compiler owner trust root, shared lock identity/reboot/worker admission, no caller-supplied attester, root 0600 file/O_EXCL durability, signed cross-Host pin and Native no-replay semantics. **image-build Regular**: recheck producer composition attester and exact source revision. **host-deploy Regular**: correct review findings before returning to Work. Native owner installation and real compiler acceptance are not authorized here.
 
 No EC2/SSM/worker, running Hosts, reserved budgets or production root state were modified by this Regular source-only pass.
+
+
+## Subsequent composition integration (supersedes source-repin gap)
+
+The coordinated draft PR #9 integration selects image-build `1f07e83dbd80dacb9bed0d6494c697375f0e26cd` through the fonts owner source constant, both graphical source workflows and the cross-repository interface tests, preserving the original October pin. The earlier `efb7110...` / `16b6788...` source-repin blocker described above is superseded **for source code only**, not for installed bytes or native authorization. All compiler-Host key installation, authenticated gateway-history transfer, independent root-control review and native systemd252 worker admission remain NO-GO. The command-center must never read compiler root STATE and must verify fresh signed exports before use.
