@@ -1,0 +1,47 @@
+name: Graphical external checkpoint three-owner source interop
+on:
+  push:
+    branches: [regular/graphical-attester-authority-hardening-20261101]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  three-owner:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12','3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/root-control
+          ref: ca8232286b0bd01bd130bb02929a9e8b494c87cf
+          path: companion/root-control
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/host-install
+          ref: 4e98b051caeb3c2d2f970b08a5fca91ed820ba70
+          path: companion/host-install
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Assert immutable source selection
+        run: |
+          test "$(git -C companion/root-control rev-parse HEAD)" = ca8232286b0bd01bd130bb02929a9e8b494c87cf
+          test "$(git -C companion/host-install rev-parse HEAD)" = 4e98b051caeb3c2d2f970b08a5fca91ed820ba70
+      - name: Test monotonic issuer and gateway integration
+        run: |
+          python -m pip install 'pytest>=8,<10' 'cryptography>=44,<49'
+          PYTHONPATH="$PWD/src:$PWD/companion/root-control/src:$PWD/companion/host-install/src" \
+            python -m pytest -q -rs tests/test_graphical_checkpoint_cross_repo.py \
+            companion/root-control/tests/test_graphical_monotonic_issuer.py
+      - name: No native service admitted
+        if: always()
+        run: |
+          echo 'Source-only model: external nonrollbackable storage, independent issuer signer, real Host identity, socket and protected installation remain native NO-GO' >> "$GITHUB_STEP_SUMMARY"
