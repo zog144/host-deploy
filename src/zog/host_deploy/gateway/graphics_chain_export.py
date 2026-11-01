@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import re
 import stat
+import socket
+import struct
 
 from . import task_catalogue
 from .graphics_generation_chain import TASKS, _hash, validate_policy
@@ -27,13 +29,13 @@ _SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 _UUID = re.compile(r"[0-9a-f]{32}\Z")
 _FIELDS = {"schema", "task", "host_id", "installation_id", "lane",
            "lane_owner", "boot_id", "chain_policy_sha256",
-           "catalogue", "catalogue_sha256", "receipt_sha256",
+           "catalogue", "catalogue_sha256", "receipt", "receipt_sha256",
            "published_at", "expires_at", "epoch"}
 _ENVELOPE = {"payload", "signature"}
 _PIN = {"schema", "host_id", "installation_id", "lane", "lane_owner",
         "boot_id", "chain_policy_sha256", "original_catalogue_sha256",
         "public_key", "epoch", "source_revision", "monthly_pin_identity",
-        "first_base_generation_id"}
+        "first_base_generation_id", "first_receipt_sha256", "relay_uid"}
 MAX_BYTES = 65536
 
 
@@ -137,6 +139,9 @@ def verify(raw, pin, *, task, now=None):
         _deny("unapproved task/Host")
     if (not _SHA.fullmatch(pin["chain_policy_sha256"])
             or not _SHA.fullmatch(pin["original_catalogue_sha256"])
+            or not _SHA.fullmatch(pin["first_receipt_sha256"])
+            or type(pin["relay_uid"]) is not int
+            or not 1000 <= pin["relay_uid"] < 2**31
             or not _SHA.fullmatch(pin["monthly_pin_identity"])
             or not re.fullmatch(r"[0-9a-f]{64}", pin["first_base_generation_id"])
             or type(pin["source_revision"]) is not str
@@ -163,8 +168,33 @@ def verify(raw, pin, *, task, now=None):
             _deny("foreign Host or revoked owner epoch")
     if payload["schema"] != CONTRACT or payload["task"] != task:
         _deny("task/schema mismatch")
-    if not _SHA.fullmatch(payload["receipt_sha256"]):
-        _deny("invalid owner receipt")
+    receipt = payload["receipt"]
+    if (type(receipt) is not dict
+            or not _SHA.fullmatch(payload["receipt_sha256"])
+            or _hash(receipt) != payload["receipt_sha256"]
+            or receipt.get("catalogue_sha256") != payload["catalogue_sha256"]
+            or receipt.get("source_revision") != pin["source_revision"]
+            or receipt.get("monthly_pin_identity") != pin["monthly_pin_identity"]
+            or receipt.get("host_id") != pin["host_id"]
+            or receipt.get("installation_id") != pin["installation_id"]
+            or receipt.get("lane") != pin["lane"]
+            or receipt.get("lane_owner") != pin["lane_owner"]
+            or receipt.get("compiler_authorized") is not False):
+        _deny("protected receipt differs from signed catalogue")
+    if task == TASKS[0]:
+        if (payload["receipt_sha256"] != pin["first_receipt_sha256"]
+                or receipt.get("accepted_base_generation_id")
+                    != pin["first_base_generation_id"]):
+            _deny("original fonts receipt differs")
+    elif (receipt.get("schema") != "host-deploy-graphics-chain-step-installed-v1"
+          or receipt.get("task") != task
+          or receipt.get("status") != "installed-not-compiler-admission"
+          or receipt.get("selection_generation_id")
+            != pin["first_base_generation_id"]
+          or receipt.get("graphical_predecessor_generation_id")
+            != payload["catalogue"]["tasks"][task]["arguments"]["graphical_predecessor"]
+          or receipt.get("chain_policy_sha256") != pin["chain_policy_sha256"]):
+        _deny("successor protected receipt differs")
     if not _SHA.fullmatch(payload["catalogue_sha256"]):
         _deny("invalid catalogue hash")
     current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -188,22 +218,83 @@ def verify(raw, pin, *, task, now=None):
     return catalogue, payload["catalogue_sha256"]
 
 
-def sign_host_export(payload, installed_signing_key):
-    """Root-only owner signing primitive; not a gateway- or request-side API."""
+def sign_host_export(*args, **kwargs):
+    """Retired unsafe arbitrary-payload signer: root callers cannot mint claims."""
+    _deny("arbitrary root payload signing is forbidden")
+
+
+def issue_native_step_export(*, task, published_at, expires_at):
+    """Root only: derive every signed field from native protected files.
+
+    Source-only fixed owner entrypoint; a genuine installer must create/rotate
+    root-owned key and epoch state before any native export is possible.
+    """
     if os.geteuid() != 0:
         raise PermissionError("compiler root owner only")
+    if task not in TASKS:
+        _deny("unreviewed compiler task")
+    from . import graphics_generation_chain as chain
+    from . import graphics_catalogue_owner as first
+    from . import fresh_canary_owner as canary
+    from . import fresh_native_owner as owner
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    if type(installed_signing_key) is not bytes or len(installed_signing_key) != 32:
-        _deny("uninstalled private signing key")
-    if type(payload) is not dict or set(payload) != _FIELDS:
-        _deny("invalid owner export")
-    # Signed bytes cannot claim a verified receipt without the *separate*
-    # native reader proving it before this primitive is called.
-    signature = Ed25519PrivateKey.from_private_bytes(
-        installed_signing_key).sign(_canonical(payload))
-    return _canonical({"payload": payload, "signature":
-                       base64.b64encode(signature).decode("ascii")})
-
+    with canary.locked(owner):
+        policy = chain.validate_policy(chain._read_locked(chain.POLICY))
+        if not chain._verified_native_owner(policy):
+            _deny("native worker owner unavailable")
+        epoch = chain._read_locked(chain.STORE / "graphical-export-epoch-v1.json")
+        if (type(epoch) is not dict or set(epoch) != {
+                "schema", "host_id", "installation_id", "lane", "lane_owner",
+                "boot_id", "epoch", "chain_policy_sha256", "source_revision",
+                "monthly_pin_identity", "public_key_sha256"
+            } or epoch["schema"] != "host-deploy-graphical-export-epoch-v1"
+            or any(epoch.get(key) != policy.get(key) for key in (
+                "host_id", "installation_id", "lane", "lane_owner",
+                "source_revision", "monthly_pin_identity"))
+            or epoch["boot_id"] != owner._boot()
+            or epoch["chain_policy_sha256"] != chain._hash(policy)
+            or type(epoch["epoch"]) is not int or epoch["epoch"] < 1):
+            _deny("protected Host epoch unavailable or revoked")
+        catalogue, digest = chain.load_installed_step(
+            task, policy_sha256=chain._hash(policy))
+        receipt_path = (first.RECEIPT if task == TASKS[0]
+                        else chain.FILES[task][1])
+        receipt = chain._read_locked(receipt_path)
+        if (receipt.get("catalogue_sha256") != digest
+                or receipt.get("compiler_authorized") is not False):
+            _deny("protected installed receipt differs")
+        if (task == TASKS[0] and
+                chain._hash(receipt) != policy["first_receipt_sha256"]):
+            _deny("original receipt changed")
+        keypath = chain.STORE / "graphical-export-signing-key-v1.json"
+        key = chain._read_locked(keypath)
+        if (type(key) is not dict or set(key) != {"schema", "private_key"}
+                or key["schema"] != "host-deploy-graphical-export-private-key-v1"):
+            _deny("protected private signer unavailable")
+        private = _b64(key["private_key"], 32)
+        signer = Ed25519PrivateKey.from_private_bytes(private)
+        from cryptography.hazmat.primitives import serialization
+        pub = signer.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        if epoch["public_key_sha256"] != "sha256:" + hashlib.sha256(pub).hexdigest():
+            _deny("issuer key differs from protected Host epoch")
+        payload = {
+            "schema": CONTRACT, "task": task,
+            "host_id": policy["host_id"],
+            "installation_id": policy["installation_id"],
+            "lane": policy["lane"], "lane_owner": policy["lane_owner"],
+            "boot_id": epoch["boot_id"], "epoch": epoch["epoch"],
+            "chain_policy_sha256": chain._hash(policy),
+            "catalogue": catalogue, "catalogue_sha256": digest,
+            "receipt": receipt, "receipt_sha256": chain._hash(receipt),
+            "published_at": published_at, "expires_at": expires_at,
+        }
+        if (_time(expires_at) <= _time(published_at)
+                or (_time(expires_at)-_time(published_at)).total_seconds() > 300):
+            _deny("protected exporter interval invalid")
+        signature = signer.sign(_canonical(payload))
+        return _canonical({"payload": payload,
+                           "signature": base64.b64encode(signature).decode("ascii")})
 
 
 def load_selected_step(directory, pin_path, task, policy_sha256):
