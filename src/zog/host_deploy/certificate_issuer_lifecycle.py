@@ -32,7 +32,8 @@ class SelectedIssuerController:
     """
     direct_selected_launch = True
 
-    def __init__(self, socket_path, *, controller_uid=None, client_factory=None):
+    def __init__(self, socket_path, *, controller_uid=None, client_factory=None,
+                 authority_guard=None):
         # The independently installed root authority, never the RPC response,
         # chooses the expected server UID. Never construct an unpinned client.
         if (type(controller_uid) is not int or
@@ -41,13 +42,30 @@ class SelectedIssuerController:
         if client_factory is None:
             from zog.box_control.issuer_lifecycle_client import IssuerLifecycleClient
             client_factory = IssuerLifecycleClient
+        if authority_guard is not None and not callable(authority_guard):
+            raise RenewalBlocked("issuer-lifecycle-authority-guard-invalid")
         self._controller_uid = controller_uid
+        self._authority_guard = authority_guard
+        self._require_active_authority()
         try:
             self._client = client_factory(socket_path, controller_uid=controller_uid)
         except Exception:
             raise RenewalBlocked("issuer-lifecycle-broker-unavailable") from None
 
+    def _require_active_authority(self):
+        """Reopen the root-owned projection/revocation before every broker RPC."""
+        if self._authority_guard is None:
+            # Only directly constructed source-test clients use no guard.
+            # The protected timer always supplies its root-file rechecker.
+            return
+        try:
+            if self._authority_guard() is not True:
+                raise ValueError("inactive authority")
+        except Exception:
+            raise RenewalBlocked("issuer-lifecycle-root-authority-revoked") from None
+
     def issue_application_request_id(self):
+        self._require_active_authority()
         try:
             request_id = self._client.issue_application_request_id()
         except Exception:
@@ -57,6 +75,7 @@ class SelectedIssuerController:
         return request_id
 
     def request_application_launch(self, application, *, program_name, request_id):
+        self._require_active_authority()
         if (application != "certify-manage" or program_name not in ("renew", "stage", "inspect")
                 or type(request_id) is not str or not REQUEST_ID.fullmatch(request_id)):
             raise RenewalBlocked("issuer-lifecycle-selection-rejected")
@@ -76,6 +95,7 @@ class SelectedIssuerController:
         return reply
 
     def application_request_result(self, request_id):
+        self._require_active_authority()
         if type(request_id) is not str or not REQUEST_ID.fullmatch(request_id):
             raise RenewalBlocked("issuer-lifecycle-request-id-invalid")
         try:
@@ -109,6 +129,7 @@ class SelectedIssuerController:
 
     def inspect_issuer_result(self, request_id):
         """Read only the controller's authenticated saved inspect invocation."""
+        self._require_active_authority()
         if type(request_id) is not str or not REQUEST_ID.fullmatch(request_id):
             raise RenewalBlocked("issuer-lifecycle-request-id-invalid")
         try:
