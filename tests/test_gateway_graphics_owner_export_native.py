@@ -58,7 +58,8 @@ def test_root_export_reads_real_receipt_and_missing_epoch_holds(protected_chain,
     pin,_,_,_,_=setup()
     pin.update({"boot_id":"b"*32,"epoch":2,
                 "public_key":base64.b64encode(pub).decode("ascii")})
-    selected,digest=exports.verify(raw,pin,task=chain.TASKS[0],now=now)
+    selected,digest=exports.verify(
+        raw,pin,task=chain.TASKS[0],now=datetime.now(timezone.utc))
     assert selected==cat and digest==chain._hash(cat)
     import json
     nonce = "a"*64
