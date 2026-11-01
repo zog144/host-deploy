@@ -46,6 +46,10 @@ def _base(root, request_id):
     if (binding.get("task") is None or
             binding.get("task_catalogue_identity") is None):
         raise RuntimeError("generic pipeline task is not frozen")
+    # Historical operator CLI cannot bypass the durable one-stage-per-lane
+    # claim. This is read-only: never fabricate a stage-once receipt at run.
+    from .graphics_stage_once import require_record
+    require_record(root, request_id, binding)
     return state, binding
 
 def _read(directory, binding, gateway_id):
