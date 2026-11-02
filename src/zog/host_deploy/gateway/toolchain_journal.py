@@ -124,6 +124,19 @@ def read(directory, gateway_id, bound):
                              active["ordinal"])
             if active["request"] != original["request"]:
                 raise ValueError("frozen event differs from typed binding")
+            # A caller cannot authorize a novel worker by regenerating a
+            # self-consistent operation_id and SHA for an unreviewed phase.
+            if (active["phase"] not in ("specification", *PHASES, RECOVERY)
+                    or (active["kind"] == "specification"
+                        and (active["phase"] != "specification"
+                             or active["ordinal"] != 0))
+                    or (active["kind"] == "submit"
+                        and (active["phase"] == "specification"
+                             or active["ordinal"] != 0))
+                    or (active["kind"] in ("inspect", "resume")
+                        and (not data["phases"] or active["phase"] !=
+                             data["phases"][-1]["name"]))):
+                raise ValueError("unreviewed toolchain stage selection")
         return data
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise RuntimeError("typed toolchain journal integrity mismatch") from exc
