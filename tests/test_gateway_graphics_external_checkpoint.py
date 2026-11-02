@@ -21,7 +21,7 @@ from zog.host_deploy.gateway import graphics_chain_export as gateway
 from zog.host_deploy.gateway import graphics_generation_chain as chain
 from test_gateway_graphics_chain_export import setup
 
-HOST_INSTALL_SOURCE = "adb0a15e3defd4e34b622a3867fe19d6afadeba7"
+HOST_INSTALL_SOURCE = "7d577adb7455ca8d757a4c0719791e6e2e9f530c"
 
 
 class IndependentIssuer:
