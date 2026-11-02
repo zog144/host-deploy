@@ -336,3 +336,40 @@ def test_recomputed_journal_cannot_dispatch_unreviewed_producer_phase(
     journal.persist(tmp_path, state)
     with pytest.raises(RuntimeError, match="integrity"):
         journal.read(tmp_path, GATEWAY, bound)
+
+
+@pytest.mark.parametrize("bad", ("skip", "duplicate", "recovery-first", "out-of-order"))
+def test_persisted_coherent_phase_chain_must_follow_original_typed_sequence(tmp_path, bad):
+    """A recomputed phase predecessor/op ID is not stage authorization."""
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    names = {
+        "skip": ["final-math"],
+        "duplicate": ["cross-bootstrap", "cross-bootstrap"],
+        "recovery-first": ["final-libc-recover"],
+        "out-of-order": ["cross-bootstrap", "native-transition"],
+    }[bad]
+    predecessor = None
+    for name in names:
+        oid = journal.operation_id(GATEWAY, name, "submit")
+        state["phases"].append({
+            "name": name, "operation_id": oid, "predecessor": predecessor,
+            "status": "completed", "inspect_count": 0, "resume_count": 0,
+            "resume_authorized": False, "evidence": {},
+        })
+        predecessor = oid
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
+
+
+@pytest.mark.parametrize("name", ("final-compiler", "native-transition", "final-libc-recover"))
+def test_forged_first_submit_phase_fails_even_with_authentic_payload_and_digest(tmp_path, name):
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    state["current"] = journal.event(bound, state, "submit", name)
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)

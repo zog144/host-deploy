@@ -79,6 +79,12 @@ def read(directory, gateway_id, bound):
                 or type(data["recovery_authorized"]) is not bool):
             raise ValueError("header")
         previous = None
+        permitted_sequence = list(PHASES)
+        if any(p.get("name") == RECOVERY for p in data["phases"] if isinstance(p, dict)):
+            permitted_sequence.insert(6, RECOVERY)
+        if [p.get("name") for p in data["phases"] if isinstance(p, dict)] != (
+                permitted_sequence[:len(data["phases"])]):
+            raise ValueError("out-of-order or repeated toolchain phase")
         for phase in data["phases"]:
             if (type(phase) is not dict
                     or phase.get("name") not in (*PHASES, RECOVERY)
@@ -124,6 +130,36 @@ def read(directory, gateway_id, bound):
                              active["ordinal"])
             if active["request"] != original["request"]:
                 raise ValueError("frozen event differs from typed binding")
+            # A currently selected request must also be reachable from the
+            # already completed/authorized phase history, not merely name a
+            # generally permitted worker phase.
+            last = data["phases"][-1] if data["phases"] else None
+            if active["kind"] == "specification":
+                if data["specification"] is not None or last is not None:
+                    raise ValueError("duplicate specification event")
+            elif active["kind"] == "submit":
+                if data["specification"] is None:
+                    raise ValueError("submit before approved specification")
+                if last is None:
+                    expected_phase = PHASES[0]
+                elif last["status"] == "failed":
+                    expected_phase = (RECOVERY if
+                        last["name"] == "final-libc-publish" and data["recovery_authorized"]
+                        and "toolchain.submit" in last["evidence"].get("allowed_next_operations", [])
+                        else None)
+                elif last["status"] != "completed" or last["name"] == "final-compiler":
+                    expected_phase = None
+                elif last["name"] == RECOVERY:
+                    expected_phase = "final-math"
+                else:
+                    expected_phase = PHASES[PHASES.index(last["name"]) + 1]
+                if active["phase"] != expected_phase:
+                    raise ValueError("toolchain submit not next authorized phase")
+            elif (last is None or last["status"] != "pending"
+                    or active["ordinal"] != last[
+                        "inspect_count" if active["kind"] == "inspect" else "resume_count"]
+                    or (active["kind"] == "resume" and not last["resume_authorized"])):
+                raise ValueError("toolchain observation not authorized by pending phase")
             # A caller cannot authorize a novel worker by regenerating a
             # self-consistent operation_id and SHA for an unreviewed phase.
             if (active["phase"] not in ("specification", *PHASES, RECOVERY)
