@@ -270,3 +270,55 @@ def test_same_workspace_lane_blocks_competing_toolchain(tmp_path, monkeypatch):
     (directory / journal.FILE).unlink()
     with pytest.raises(RuntimeError, match="earlier"):
         supervisor._guard_lane(tmp_path, "f" * 32, frozen)
+
+
+
+@pytest.mark.parametrize("mutation", ("stale-seed", "wrong-source", "wrong-predecessor"))
+def test_recomputed_event_digest_never_reselects_frozen_toolchain_inputs(
+        tmp_path, mutation):
+    """The event SHA is not an authorization to rewrite original inputs.
+
+    A changed request with a freshly recomputed unkeyed digest must still
+    differ from the typed event that the frozen binding actually authorizes.
+    """
+    import hashlib
+    from zog.host_deploy.gateway.image_build_execution import _canonical
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    state["current"] = journal.event(bound, state, "submit", "cross-bootstrap")
+    assert journal.persist(tmp_path, state)
+    assert journal.read(tmp_path, GATEWAY, bound)["current"] == state["current"]
+    remote = state["current"]["request"]
+    if mutation == "stale-seed":
+        remote["arguments"]["seed_generation"] = "0" * 64
+    elif mutation == "wrong-source":
+        remote["source"]["revision"] = "0" * 40
+    else:
+        remote["predecessor"] = "0" * 32
+    state["current"]["request_sha256"] = hashlib.sha256(
+        _canonical(remote)).hexdigest()
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
+
+
+def test_recovered_uncertain_original_toolchain_event_does_not_submit_again(
+        tmp_path, monkeypatch):
+    """On restart an uncertain submit remains bound to original operation."""
+    host = fixture(tmp_path, monkeypatch)
+    before = walk(tmp_path, host, lambda j: j["current"] is not None
+                  and j["current"]["kind"] == "submit"
+                  and j["current"]["state"] == "prepared")
+    original = dict(before["current"])
+    before["current"]["state"] = "submitting"  # crash after durable fence
+    journal.persist(tmp_path, before)
+    for _ in range(3):
+        state = supervisor.advance(tmp_path, GATEWAY, host_factory=host)
+        assert state["status"] == "uncertain"
+        assert state["current"]["operation_id"] == original["operation_id"]
+        assert state["current"]["request"] == original["request"]
+    assert host.sends >= 1  # specification was previously inspected
+    assert all(p["name"] != "cross-bootstrap" for p in state["phases"])
+    with pytest.raises(RuntimeError):
+        supervisor.authorize_resume(tmp_path, GATEWAY, "cross-bootstrap")
