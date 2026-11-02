@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/host-install
-          ref: adb0a15e3defd4e34b622a3867fe19d6afadeba7
+          ref: 7d577adb7455ca8d757a4c0719791e6e2e9f530c
           path: dependencies/host-install
           persist-credentials: false
       - name: Setup Python
