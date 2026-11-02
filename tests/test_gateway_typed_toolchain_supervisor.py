@@ -322,3 +322,17 @@ def test_recovered_uncertain_original_toolchain_event_does_not_submit_again(
     assert all(p["name"] != "cross-bootstrap" for p in state["phases"])
     with pytest.raises(RuntimeError):
         supervisor.authorize_resume(tmp_path, GATEWAY, "cross-bootstrap")
+
+
+
+@pytest.mark.parametrize("phase", ("run-arbitrary-command", "graphics-fonts-image-v1"))
+def test_recomputed_journal_cannot_dispatch_unreviewed_producer_phase(
+        tmp_path, phase):
+    """A coherent forged stage id and request digest still cannot expand tasks."""
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    state["current"] = journal.event(bound, state, "submit", phase)
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
