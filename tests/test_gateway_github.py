@@ -237,5 +237,6 @@ def test_original_oidc_issue_does_not_dispatch_unreviewed_toolchain_tasks(bad_ta
     candidate = intent()
     candidate["operation"] = "toolchain.submit"
     candidate["parameters"] = {"lane": "compiler", "task": bad_task}
-    with pytest.raises(GitHubDispatchError):
+    from zog.host_deploy.gateway.protocol import RequestProtocolError
+    with pytest.raises(RequestProtocolError, match="unknown reviewed toolchain task"):
         prepare_event(event(candidate), {"zog144"})
