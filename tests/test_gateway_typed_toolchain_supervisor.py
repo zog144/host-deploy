@@ -373,3 +373,27 @@ def test_forged_first_submit_phase_fails_even_with_authentic_payload_and_digest(
     journal.persist(tmp_path, state)
     with pytest.raises(RuntimeError, match="integrity"):
         journal.read(tmp_path, GATEWAY, bound)
+
+
+@pytest.mark.parametrize("authorized", (False, True))
+def test_historical_recovery_phase_requires_failed_publisher_and_explicit_grant(tmp_path, authorized):
+    """Recomputing the predecessor chain cannot invent recovery authority."""
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    predecessor = None
+    for name in (*journal.PHASES[:6], journal.RECOVERY):
+        oid = journal.operation_id(GATEWAY, name, "submit")
+        state["phases"].append({
+            "name": name, "operation_id": oid, "predecessor": predecessor,
+            "status": "failed" if name == "final-libc-publish" else "completed",
+            "inspect_count": 0, "resume_count": 0,
+            "resume_authorized": False, "evidence": {},
+        })
+        predecessor = oid
+    state["recovery_authorized"] = authorized
+    journal.persist(tmp_path, state)
+    # Even a locally asserted authorization bit is insufficient when the
+    # failed producer receipt did not authorize the recovery operation.
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)

@@ -100,6 +100,12 @@ def read(directory, gateway_id, bound):
                     or phase.get("predecessor") != (
                         previous["operation_id"] if previous else None)):
                 raise ValueError("phase")
+            if phase["name"] == RECOVERY and (
+                    previous is None or previous["name"] != "final-libc-publish"
+                    or previous["status"] != "failed"
+                    or not data["recovery_authorized"]
+                    or "toolchain.submit" not in previous["evidence"].get("allowed_next_operations", [])):
+                raise ValueError("unapproved historical recovery")
             if previous and previous["status"] != "completed" and not (
                     phase["name"] == RECOVERY
                     and previous["name"] == "final-libc-publish"
