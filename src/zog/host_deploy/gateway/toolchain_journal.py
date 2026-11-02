@@ -102,8 +102,8 @@ def read(directory, gateway_id, bound):
             previous = phase
         active = data["current"]
         if active is not None:
-            if (type(event) is not dict
-                    or set(event) != {"kind", "phase", "ordinal", "operation_id",
+            if (type(active) is not dict
+                    or set(active) != {"kind", "phase", "ordinal", "operation_id",
                                       "request", "request_sha256", "state", "command_id"}
                     or active["kind"] not in ("specification", "submit", "inspect", "resume")
                     or active["state"] not in ("prepared", "submitting",
