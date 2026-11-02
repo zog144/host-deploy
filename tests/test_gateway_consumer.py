@@ -479,3 +479,71 @@ def test_systemd_service_is_persistent_and_has_no_host_uptime_timer():
     assert "RuntimeMaxSec" not in service
     assert "id-token" not in service
     assert "AWS_ACCESS_KEY_ID" not in service
+
+
+
+def _typed_original(workspace_id):
+    """Valid typed toolchain envelope, not permission to execute it."""
+    row = request(workspace_id)
+    row["operation"] = "toolchain.submit"
+    row["parameters"] = {
+        "lane": "compiler", "task": "self-hosted-c-cxx-toolchain-v1",
+    }
+    row["source"] = {
+        "repository": "zog144/image-build",
+        "commit": "31e6121cdf9fd05336286529666e2c35cdbe0831",
+    }
+    return row
+
+
+def test_typed_original_survives_lost_ack_and_new_consumer_without_reissue(
+        tmp_path, monkeypatch):
+    """A re-delivered SQS request never becomes a second compiler submission."""
+    from zog.host_deploy.gateway import consumer as gateway_module
+    original = _typed_original("fedcba9876543210fedcba9876543210")
+    queue = FakeSQS(fail_delete=1)
+    first = consumer(tmp_path, queue)
+    result = first.handle_message(message(original, message_id="first", receive_count=1))
+    assert result["acknowledgement"] == "delete_uncertain"
+    retained = load_request(tmp_path / "gateway", original["request_id"])
+    assert retained["request"] == original
+    # A source-only transport consumer has NO authority to call SSM. Even if
+    # dispatch modules are replaced by hostile test sentinels, message
+    # admission/recovery must remain confined to original request history.
+    monkeypatch.setattr(gateway_module, "prepare_image_build_dispatch",
+                        lambda *a, **kw: pytest.fail("duplicate prepared dispatch"))
+    monkeypatch.setattr(gateway_module, "advance_toolchain",
+                        lambda *a, **kw: pytest.fail("duplicate compiler operation"))
+    restarted = consumer(tmp_path, FakeSQS())
+    redelivery = restarted.handle_message(
+        message(original, message_id="redelivery", receive_count=2))
+    assert redelivery["duplicate"] is True
+    assert redelivery["acknowledgement"] == "acked"
+    assert load_request(tmp_path / "gateway", original["request_id"])["request"] == original
+    assert len(restarted.client.deleted) == 1
+
+
+@pytest.mark.parametrize("change", ("source", "task", "lane", "origin"))
+def test_duplicate_typed_message_cannot_retarget_original_after_restart(
+        tmp_path, change):
+    original = _typed_original("fedcba9876543210fedcba9876543210")
+    first = consumer(tmp_path, FakeSQS())
+    assert first.handle_message(message(original))["accepted"] is True
+    changed = json.loads(json.dumps(original))
+    if change == "source":
+        changed["source"]["commit"] = "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
+    elif change == "task":
+        changed["parameters"]["task"] = "arbitrary-shell-task"
+    elif change == "lane":
+        changed["parameters"]["lane"] = "other-compiler"
+    else:
+        changed["origin"]["issue_number"] += 1
+    client = FakeSQS()
+    restarted = consumer(tmp_path, client)
+    rejected = restarted.handle_message(
+        message(changed, message_id="different-envelope", receive_count=2))
+    assert rejected["accepted"] is False
+    assert client.deleted == []
+    assert load_request(tmp_path / "gateway", original["request_id"])["request"] == original
+    failure = tmp_path / "gateway/failures/different-envelope"
+    assert len(list(failure.glob("*.json"))) == 1
