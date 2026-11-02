@@ -1,0 +1,65 @@
+name: GitHub FIFO and typed-toolchain restart source regressions
+on:
+  push:
+    branches: [regular/dispatch-restart-regressions-20261102]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-fifo-typed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Checkout exact reviewed image-build typed producer
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/image-build
+          ref: 31e6121cdf9fd05336286529666e2c35cdbe0831
+          path: pinned-image-build
+          persist-credentials: false
+      - name: Verify original source and October monthly pin, no implicit repin
+        run: |
+          python - <<'PY'
+          import hashlib
+          import subprocess
+          from pathlib import Path
+          root = Path('pinned-image-build')
+          assert subprocess.check_output(
+              ['git', '-C', str(root), 'rev-parse', 'HEAD'],
+              text=True).strip() == '31e6121cdf9fd05336286529666e2c35cdbe0831'
+          pin = root / 'project/pins/2026-10-01/commit-pin.py'
+          assert pin.is_file() and not pin.is_symlink()
+          assert hashlib.sha256(pin.read_bytes()).hexdigest() == (
+              'd3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36')
+          assert (root / 'project/pins/current.py').read_text() == (
+              "# Explicit active monthly set.\n{'date': '2026-10-01'}\n")
+          PY
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install public, bounded source-test dependencies
+        run: |
+          python -m pip install 'pytest>=8,<10' 'boto3>=1.34,<2' 'dbus-next==0.2.3'
+          python -m compileall -q src tests
+      - name: Original GitHub event, FIFO, ledger, typed toolchain and generation assertions
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          PYTHONPATH=src python -m pytest -q \
+            tests/test_gateway_workflow_permissions.py \
+            tests/test_gateway_configuration.py \
+            tests/test_gateway_github.py \
+            tests/test_gateway_protocol.py \
+            tests/test_gateway_consumer.py \
+            tests/test_gateway_dispatch.py \
+            tests/test_gateway_toolchain_task.py \
+            tests/test_gateway_typed_toolchain_supervisor.py \
+            tests/test_gateway_fresh_cross_bootstrap.py
+      - name: No external execution was requested
+        if: always()
+        run: |
+          echo 'Offline source tests only: no AWS credentials, SSM submission, compiler job, queue write or infrastructure changes.' >> "$GITHUB_STEP_SUMMARY"

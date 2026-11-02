@@ -79,6 +79,12 @@ def read(directory, gateway_id, bound):
                 or type(data["recovery_authorized"]) is not bool):
             raise ValueError("header")
         previous = None
+        permitted_sequence = list(PHASES)
+        if any(p.get("name") == RECOVERY for p in data["phases"] if isinstance(p, dict)):
+            permitted_sequence.insert(6, RECOVERY)
+        if [p.get("name") for p in data["phases"] if isinstance(p, dict)] != (
+                permitted_sequence[:len(data["phases"])]):
+            raise ValueError("out-of-order or repeated toolchain phase")
         for phase in data["phases"]:
             if (type(phase) is not dict
                     or phase.get("name") not in (*PHASES, RECOVERY)
@@ -94,27 +100,85 @@ def read(directory, gateway_id, bound):
                     or phase.get("predecessor") != (
                         previous["operation_id"] if previous else None)):
                 raise ValueError("phase")
+            if phase["name"] == RECOVERY and (
+                    previous is None or previous["name"] != "final-libc-publish"
+                    or previous["status"] != "failed"
+                    or not data["recovery_authorized"]
+                    or "toolchain.submit" not in previous["evidence"].get("allowed_next_operations", [])):
+                raise ValueError("unapproved historical recovery")
             if previous and previous["status"] != "completed" and not (
                     phase["name"] == RECOVERY
                     and previous["name"] == "final-libc-publish"
                     and previous["status"] == "failed"):
                 raise ValueError("predecessor")
             previous = phase
-        event = data["current"]
-        if event is not None:
-            if (type(event) is not dict
-                    or set(event) != {"kind", "phase", "ordinal", "operation_id",
+        active = data["current"]
+        if active is not None:
+            if (type(active) is not dict
+                    or set(active) != {"kind", "phase", "ordinal", "operation_id",
                                       "request", "request_sha256", "state", "command_id"}
-                    or event["kind"] not in ("specification", "submit", "inspect", "resume")
-                    or event["state"] not in ("prepared", "submitting",
+                    or active["kind"] not in ("specification", "submit", "inspect", "resume")
+                    or active["state"] not in ("prepared", "submitting",
                                            "submitted", "uncertain")
-                    or event["operation_id"] != operation_id(
-                        gateway_id, event["phase"], event["kind"], event["ordinal"])
-                    or event["request"].get("operation_id") != event["operation_id"]
-                    or event["request"].get("source") != bound["source"]
-                    or hashlib.sha256(_canonical(event["request"])).hexdigest()
-                       != event["request_sha256"]):
+                    or active["operation_id"] != operation_id(
+                        gateway_id, active["phase"], active["kind"], active["ordinal"])
+                    or active["request"].get("operation_id") != active["operation_id"]
+                    or active["request"].get("source") != bound["source"]
+                    or hashlib.sha256(_canonical(active["request"])).hexdigest()
+                       != active["request_sha256"]):
                 raise ValueError("event")
+        if active is not None:
+            # The stored request digest is unkeyed; an attacker or stale
+            # recovery snapshot can recompute it. Reconstruct the exact
+            # authorized request from the immutable bound task, generation,
+            # source and predecessor and reject any alternate selection.
+            original = event(bound, data, active["kind"], active["phase"],
+                             active["ordinal"])
+            if active["request"] != original["request"]:
+                raise ValueError("frozen event differs from typed binding")
+            # A currently selected request must also be reachable from the
+            # already completed/authorized phase history, not merely name a
+            # generally permitted worker phase.
+            last = data["phases"][-1] if data["phases"] else None
+            if active["kind"] == "specification":
+                if data["specification"] is not None or last is not None:
+                    raise ValueError("duplicate specification event")
+            elif active["kind"] == "submit":
+                if data["specification"] is None:
+                    raise ValueError("submit before approved specification")
+                if last is None:
+                    expected_phase = PHASES[0]
+                elif last["status"] == "failed":
+                    expected_phase = (RECOVERY if
+                        last["name"] == "final-libc-publish" and data["recovery_authorized"]
+                        and "toolchain.submit" in last["evidence"].get("allowed_next_operations", [])
+                        else None)
+                elif last["status"] != "completed" or last["name"] == "final-compiler":
+                    expected_phase = None
+                elif last["name"] == RECOVERY:
+                    expected_phase = "final-math"
+                else:
+                    expected_phase = PHASES[PHASES.index(last["name"]) + 1]
+                if active["phase"] != expected_phase:
+                    raise ValueError("toolchain submit not next authorized phase")
+            elif (last is None or last["status"] != "pending"
+                    or active["ordinal"] != last[
+                        "inspect_count" if active["kind"] == "inspect" else "resume_count"]
+                    or (active["kind"] == "resume" and not last["resume_authorized"])):
+                raise ValueError("toolchain observation not authorized by pending phase")
+            # A caller cannot authorize a novel worker by regenerating a
+            # self-consistent operation_id and SHA for an unreviewed phase.
+            if (active["phase"] not in ("specification", *PHASES, RECOVERY)
+                    or (active["kind"] == "specification"
+                        and (active["phase"] != "specification"
+                             or active["ordinal"] != 0))
+                    or (active["kind"] == "submit"
+                        and (active["phase"] == "specification"
+                             or active["ordinal"] != 0))
+                    or (active["kind"] in ("inspect", "resume")
+                        and (not data["phases"] or active["phase"] !=
+                             data["phases"][-1]["name"]))):
+                raise ValueError("unreviewed toolchain stage selection")
         return data
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise RuntimeError("typed toolchain journal integrity mismatch") from exc

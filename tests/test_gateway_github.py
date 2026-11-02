@@ -189,3 +189,54 @@ def test_gateway_workflow_does_not_execute_issue_text_or_pull_requests():
     assert "secrets." not in text
     assert "persist-credentials: false" in text
     assert "GITHUB_EVENT_PATH" in text
+
+
+
+def test_fifo_lost_ack_preserves_original_request_identity_without_auto_retry():
+    """SQS might have accepted the send when its acknowledgment disappeared.
+
+    This function is single-shot, has no alternate route, and never chooses a
+    replacement request_id or workspace group on an uncertain response.
+    """
+    class AcceptedButAckLost:
+        def __init__(self):
+            self.calls = []
+
+        def send_message(self, **kwargs):
+            self.calls.append(kwargs)
+            raise ConnectionError("remote accepted, acknowledgment lost")
+
+    original = request()
+    original["operation"] = "toolchain.submit"
+    original["parameters"] = {
+        "lane": "compiler", "task": "self-hosted-c-cxx-toolchain-v1",
+    }
+    original["source"]["commit"] = (
+        "31e6121cdf9fd05336286529666e2c35cdbe0831")
+    queue = "https://sqs.us-east-1.amazonaws.com/123456789012/zog-build-requests.fifo"
+    client = AcceptedButAckLost()
+    with pytest.raises(ConnectionError, match="acknowledgment lost"):
+        submit_request(queue, original, client)
+    assert len(client.calls) == 1
+    attempted = client.calls[0]
+    assert attempted["MessageDeduplicationId"] == original["request_id"]
+    assert attempted["MessageGroupId"] == original["workspace_id"]
+    assert json.loads(attempted["MessageBody"]) == original
+    # Any external, separately authorized recovery must address that exact
+    # original request. No automatic second send is performed by the adapter.
+    original["source"]["commit"] = "53ad8c2166e6b73dffbc722c2e47ccf3593612ec"
+    assert json.loads(attempted["MessageBody"])["source"]["commit"] != (
+        original["source"]["commit"])
+
+
+@pytest.mark.parametrize("bad_task", (
+    "toolchain.run-shell", "self-hosted-c-cxx-toolchain-v2",
+    "graphics-fonts-image-v1",
+))
+def test_original_oidc_issue_does_not_dispatch_unreviewed_toolchain_tasks(bad_task):
+    candidate = intent()
+    candidate["operation"] = "toolchain.submit"
+    candidate["parameters"] = {"lane": "compiler", "task": bad_task}
+    from zog.host_deploy.gateway.protocol import RequestProtocolError
+    with pytest.raises(RequestProtocolError, match="unknown reviewed toolchain task"):
+        prepare_event(event(candidate), {"zog144"})

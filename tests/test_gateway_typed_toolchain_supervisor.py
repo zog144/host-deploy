@@ -270,3 +270,130 @@ def test_same_workspace_lane_blocks_competing_toolchain(tmp_path, monkeypatch):
     (directory / journal.FILE).unlink()
     with pytest.raises(RuntimeError, match="earlier"):
         supervisor._guard_lane(tmp_path, "f" * 32, frozen)
+
+
+
+@pytest.mark.parametrize("mutation", ("stale-seed", "wrong-source", "wrong-predecessor"))
+def test_recomputed_event_digest_never_reselects_frozen_toolchain_inputs(
+        tmp_path, mutation):
+    """The event SHA is not an authorization to rewrite original inputs.
+
+    A changed request with a freshly recomputed unkeyed digest must still
+    differ from the typed event that the frozen binding actually authorizes.
+    """
+    import hashlib
+    from zog.host_deploy.gateway.image_build_execution import _canonical
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    state["current"] = journal.event(bound, state, "submit", "cross-bootstrap")
+    assert journal.persist(tmp_path, state)
+    assert journal.read(tmp_path, GATEWAY, bound)["current"] == state["current"]
+    remote = state["current"]["request"]
+    if mutation == "stale-seed":
+        remote["arguments"]["seed_generation"] = "0" * 64
+    elif mutation == "wrong-source":
+        remote["source"]["revision"] = "0" * 40
+    else:
+        remote["predecessor"] = "0" * 32
+    state["current"]["request_sha256"] = hashlib.sha256(
+        _canonical(remote)).hexdigest()
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
+
+
+def test_recovered_uncertain_original_toolchain_event_does_not_submit_again(
+        tmp_path, monkeypatch):
+    """On restart an uncertain submit remains bound to original operation."""
+    host = fixture(tmp_path, monkeypatch)
+    before = walk(tmp_path, host, lambda j: j["current"] is not None
+                  and j["current"]["kind"] == "submit"
+                  and j["current"]["state"] == "prepared")
+    original = dict(before["current"])
+    before["current"]["state"] = "submitting"  # crash after durable fence
+    journal.persist(tmp_path, before)
+    for _ in range(3):
+        state = supervisor.advance(tmp_path, GATEWAY, host_factory=host)
+        assert state["status"] == "uncertain"
+        assert state["current"]["operation_id"] == original["operation_id"]
+        assert state["current"]["request"] == original["request"]
+    assert host.sends >= 1  # specification was previously inspected
+    assert all(p["name"] != "cross-bootstrap" for p in state["phases"])
+    with pytest.raises(RuntimeError):
+        supervisor.authorize_resume(tmp_path, GATEWAY, "cross-bootstrap")
+
+
+
+@pytest.mark.parametrize("phase", ("run-arbitrary-command", "graphics-fonts-image-v1"))
+def test_recomputed_journal_cannot_dispatch_unreviewed_producer_phase(
+        tmp_path, phase):
+    """A coherent forged stage id and request digest still cannot expand tasks."""
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    state["current"] = journal.event(bound, state, "submit", phase)
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
+
+
+@pytest.mark.parametrize("bad", ("skip", "duplicate", "recovery-first", "out-of-order"))
+def test_persisted_coherent_phase_chain_must_follow_original_typed_sequence(tmp_path, bad):
+    """A recomputed phase predecessor/op ID is not stage authorization."""
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    names = {
+        "skip": ["final-math"],
+        "duplicate": ["cross-bootstrap", "cross-bootstrap"],
+        "recovery-first": ["final-libc-recover"],
+        "out-of-order": ["cross-bootstrap", "native-transition"],
+    }[bad]
+    predecessor = None
+    for name in names:
+        oid = journal.operation_id(GATEWAY, name, "submit")
+        state["phases"].append({
+            "name": name, "operation_id": oid, "predecessor": predecessor,
+            "status": "completed", "inspect_count": 0, "resume_count": 0,
+            "resume_authorized": False, "evidence": {},
+        })
+        predecessor = oid
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
+
+
+@pytest.mark.parametrize("name", ("final-compiler", "native-transition", "final-libc-recover"))
+def test_forged_first_submit_phase_fails_even_with_authentic_payload_and_digest(tmp_path, name):
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    state["current"] = journal.event(bound, state, "submit", name)
+    journal.persist(tmp_path, state)
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
+
+
+@pytest.mark.parametrize("authorized", (False, True))
+def test_historical_recovery_phase_requires_failed_publisher_and_explicit_grant(tmp_path, authorized):
+    """Recomputing the predecessor chain cannot invent recovery authority."""
+    bound = frozen_binding()
+    state = journal.initial(GATEWAY, bound)
+    state["specification"] = SPEC
+    predecessor = None
+    for name in (*journal.PHASES[:6], journal.RECOVERY):
+        oid = journal.operation_id(GATEWAY, name, "submit")
+        state["phases"].append({
+            "name": name, "operation_id": oid, "predecessor": predecessor,
+            "status": "failed" if name == "final-libc-publish" else "completed",
+            "inspect_count": 0, "resume_count": 0,
+            "resume_authorized": False, "evidence": {},
+        })
+        predecessor = oid
+    state["recovery_authorized"] = authorized
+    journal.persist(tmp_path, state)
+    # Even a locally asserted authorization bit is insufficient when the
+    # failed producer receipt did not authorize the recovery operation.
+    with pytest.raises(RuntimeError, match="integrity"):
+        journal.read(tmp_path, GATEWAY, bound)
