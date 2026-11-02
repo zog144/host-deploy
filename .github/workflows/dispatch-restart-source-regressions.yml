@@ -13,6 +13,30 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Checkout exact reviewed image-build typed producer
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/image-build
+          ref: 31e6121cdf9fd05336286529666e2c35cdbe0831
+          path: pinned-image-build
+          persist-credentials: false
+      - name: Verify original source and October monthly pin, no implicit repin
+        run: |
+          python - <<'PY'
+          import hashlib
+          import subprocess
+          from pathlib import Path
+          root = Path('pinned-image-build')
+          assert subprocess.check_output(
+              ['git', '-C', str(root), 'rev-parse', 'HEAD'],
+              text=True).strip() == '31e6121cdf9fd05336286529666e2c35cdbe0831'
+          pin = root / 'project/pins/2026-10-01/commit-pin.py'
+          assert pin.is_file() and not pin.is_symlink()
+          assert hashlib.sha256(pin.read_bytes()).hexdigest() == (
+              'd3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36')
+          assert (root / 'project/pins/current.py').read_text() == (
+              "# Explicit active monthly set.\n{'date': '2026-10-01'}\n")
+          PY
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
