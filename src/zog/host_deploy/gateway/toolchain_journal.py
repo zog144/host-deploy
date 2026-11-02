@@ -100,21 +100,30 @@ def read(directory, gateway_id, bound):
                     and previous["status"] == "failed"):
                 raise ValueError("predecessor")
             previous = phase
-        event = data["current"]
-        if event is not None:
+        active = data["current"]
+        if active is not None:
             if (type(event) is not dict
                     or set(event) != {"kind", "phase", "ordinal", "operation_id",
                                       "request", "request_sha256", "state", "command_id"}
-                    or event["kind"] not in ("specification", "submit", "inspect", "resume")
-                    or event["state"] not in ("prepared", "submitting",
+                    or active["kind"] not in ("specification", "submit", "inspect", "resume")
+                    or active["state"] not in ("prepared", "submitting",
                                            "submitted", "uncertain")
-                    or event["operation_id"] != operation_id(
-                        gateway_id, event["phase"], event["kind"], event["ordinal"])
-                    or event["request"].get("operation_id") != event["operation_id"]
-                    or event["request"].get("source") != bound["source"]
-                    or hashlib.sha256(_canonical(event["request"])).hexdigest()
-                       != event["request_sha256"]):
+                    or active["operation_id"] != operation_id(
+                        gateway_id, active["phase"], active["kind"], active["ordinal"])
+                    or active["request"].get("operation_id") != active["operation_id"]
+                    or active["request"].get("source") != bound["source"]
+                    or hashlib.sha256(_canonical(active["request"])).hexdigest()
+                       != active["request_sha256"]):
                 raise ValueError("event")
+        if active is not None:
+            # The stored request digest is unkeyed; an attacker or stale
+            # recovery snapshot can recompute it. Reconstruct the exact
+            # authorized request from the immutable bound task, generation,
+            # source and predecessor and reject any alternate selection.
+            original = event(bound, data, active["kind"], active["phase"],
+                             active["ordinal"])
+            if active["request"] != original["request"]:
+                raise ValueError("frozen event differs from typed binding")
         return data
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise RuntimeError("typed toolchain journal integrity mismatch") from exc
