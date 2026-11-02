@@ -167,8 +167,17 @@ def install_fakes(tmp_path, monkeypatch, *, requests=1, phase="completed"):
             "stages": [{"phase": "completed"}],
         },
     )
-    monkeypatch.setattr(attester, "_verify_checkout", lambda *args: None)
+    from zog.host_deploy.gateway import graphics_attester_import as import_boundary
+    monkeypatch.setattr(import_boundary, "verify", lambda **kw: {
+        "python": "/usr/bin/python3",
+        "module_roots": ["/usr/lib/zog/graphical-attester/image-build",
+                         "/usr/lib/zog/graphical-attester/build-record"],
+        "source_revision": first.SOURCE,
+        "monthly_pin_identity": "sha256:" + first.PIN_SHA256,
+    })
     monkeypatch.setattr(attester.os, "geteuid", lambda: 0)
+    from zog.host_deploy.gateway import graphics_gateway_history as history
+    monkeypatch.setattr(history, "verify_history", lambda *args: True)
     return root, p
 
 
@@ -217,12 +226,15 @@ def test_exact_completed_gateway_context_invokes_installed_attester(
     assert context["pipeline_id"] == PIPELINE
     assert context["input_generation_id"] == INPUT
     assert "output_generation_id" not in context
-    assert captured["command"][:5] == [
-        "/usr/bin/python3", "-B", "-s", "-m",
-        "zog.image_build.graphical_generation_acceptance",
+    assert captured["command"][:6] == [
+        "/usr/bin/python3", "-I", "-S", "-B", "-c",
+        __import__("zog.host_deploy.gateway.graphics_attester_import",
+                   fromlist=["BOOTSTRAP"]).BOOTSTRAP,
     ]
     assert captured["env"]["PYTHONDONTWRITEBYTECODE"] == "1"
     assert captured["env"]["PYTHONNOUSERSITE"] == "1"
+    assert "PYTHONPATH" not in captured["env"]
+    assert captured["command"][6].startswith("[")
 
 
 def test_ambiguous_or_incomplete_request_never_invokes_producer(
@@ -319,3 +331,42 @@ def test_checkout_verifier_uses_read_only_git_commands(tmp_path, monkeypatch):
     assert any("ls-files --others --exclude-standard -z" in command for command in flat)
     assert all(" status " not in (" " + command + " ") for command in flat)
     assert all("--refresh" not in command for command in flat)
+
+
+
+def test_project_mutation_cannot_become_root_import_and_blocks_race(tmp_path, monkeypatch):
+    root, p = install_fakes(tmp_path, monkeypatch)
+    from zog.host_deploy.gateway import graphics_attester_import as importer
+    pin = {"python": "/usr/bin/python3",
+           "module_roots": ["/usr/lib/zog/graphical-attester/image-build",
+                            "/usr/lib/zog/graphical-attester/build-record"]}
+    calls = []
+    def verify(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 2:
+            raise importer.ImportBoundaryBlocked("changed after first verification")
+        return pin
+    monkeypatch.setattr(importer, "verify", verify)
+    ran = []
+    def run(argv, **kw):
+        ran.append((argv, kw))
+        return SimpleNamespace(returncode=0, stdout=attester._canonical(evidence()),
+                               stderr=b"")
+    monkeypatch.setattr(attester, "_run", run)
+    with pytest.raises(importer.ImportBoundaryBlocked):
+        attester._attest(root, p, chain.TASKS[0], CATALOGUE, INPUT)
+    assert len(ran) == 1
+    assert ran[0][0][:5] == ["/usr/bin/python3", "-I", "-S", "-B", "-c"]
+    assert "PYTHONPATH" not in ran[0][1]["env"]
+    assert len(calls) == 2
+
+
+def test_missing_protected_import_prevents_any_root_exec(tmp_path, monkeypatch):
+    root, p = install_fakes(tmp_path, monkeypatch)
+    from zog.host_deploy.gateway import graphics_attester_import as importer
+    monkeypatch.setattr(importer, "verify", lambda **kw: (
+        (_ for _ in ()).throw(importer.ImportBoundaryBlocked("no installed pin"))))
+    monkeypatch.setattr(attester, "_run", lambda *a, **kw:
+        pytest.fail("never execute mutable Project"))
+    with pytest.raises(importer.ImportBoundaryBlocked):
+        attester._attest(root, p, chain.TASKS[0], CATALOGUE, INPUT)

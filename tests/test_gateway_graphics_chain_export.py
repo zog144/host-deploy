@@ -13,7 +13,7 @@ from test_gateway_graphics_generation_chain import scenario
 
 
 def setup():
-    policy, cat, _ = scenario()
+    policy, cat, receipt = scenario()
     private = Ed25519PrivateKey.generate()
     pub = private.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -25,6 +25,8 @@ def setup():
         "chain_policy_sha256": chain._hash(policy),
         "original_catalogue_sha256": chain._hash(cat),
         "first_base_generation_id": policy["first_base_generation_id"],
+        "first_receipt_sha256": chain._hash(receipt),
+        "relay_uid": 23001,
         "public_key": base64.b64encode(pub).decode("ascii"),
         "source_revision": cat["tasks"][chain.TASKS[0]]["source_revision"],
         "monthly_pin_identity": cat["tasks"][chain.TASKS[0]]["monthly_pin_identity"],
@@ -37,7 +39,7 @@ def setup():
         "boot_id": pin["boot_id"], "epoch": pin["epoch"],
         "chain_policy_sha256": pin["chain_policy_sha256"],
         "catalogue": cat, "catalogue_sha256": chain._hash(cat),
-        "receipt_sha256": "sha256:" + "a" * 64,
+        "receipt": receipt, "receipt_sha256": chain._hash(receipt),
         "published_at": (now - timedelta(seconds=1)).isoformat(),
         "expires_at": (now + timedelta(minutes=5)).isoformat(),
     }
@@ -144,6 +146,7 @@ def test_signed_cross_host_xcb_x11_exports_bind_original_toolchain_and_accepted_
         envelope = dict(
             payload, task=task, catalogue=candidate["catalogue"],
             catalogue_sha256=candidate["catalogue_sha256"],
+            receipt=candidate["receipt"],
             receipt_sha256=chain._hash(candidate["receipt"]),
         )
         verified, digest = export.verify(signed(envelope), pin, task=task, now=now)
@@ -161,3 +164,269 @@ def test_signed_cross_host_xcb_x11_exports_bind_original_toolchain_and_accepted_
         )
         with pytest.raises(export.GraphicalExportBlocked):
             export.verify(signed(forged), pin, task=task, now=now)
+
+
+
+def test_signed_export_refuses_receipt_substitution_and_public_arbitrary_signer():
+    pin, payload, sign, cat, now = setup()
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.verify(sign({**payload, "receipt_sha256": "sha256:"+"0"*64}),
+                      pin, task=chain.TASKS[0], now=now)
+    changed = json.loads(json.dumps(payload["receipt"]))
+    changed["accepted_base_generation_id"] = "f"*64
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.verify(sign({**payload, "receipt": changed,
+                            "receipt_sha256": chain._hash(changed)}),
+                      pin, task=chain.TASKS[0], now=now)
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.sign_host_export(payload, b"\0"*32)
+
+
+def test_online_host_nonce_blocks_cached_reboot_and_revocation():
+    pin, payload, signed, cat, now = setup()
+    nonce = "a"*64
+    digest = "sha256:"+"b"*64
+    observed = now - timedelta(seconds=1)
+    proof = {
+        "schema": "host-deploy-graphical-live-epoch-v1",
+        "nonce": nonce, "export_sha256": digest, "task": chain.TASKS[0],
+        "host_id": pin["host_id"], "installation_id": pin["installation_id"],
+        "lane": pin["lane"], "lane_owner": pin["lane_owner"],
+        "boot_id": pin["boot_id"], "epoch": pin["epoch"],
+        "chain_policy_sha256": pin["chain_policy_sha256"],
+        "sequence": 1, "observed_at": observed.isoformat(),
+        "expires_at": (now+timedelta(seconds=2)).isoformat(),
+    }
+    assert export.verify_live_ack(
+        signed(proof), pin, nonce=nonce, export_digest=digest,
+        task=chain.TASKS[0], now=now)["sequence"] == 1
+    for mismatch in (
+        ({"nonce": "0"*64}, pin, nonce),
+        ({"boot_id": "0"*32}, pin, nonce),
+        ({"epoch": 8}, pin, nonce),
+        ({"export_sha256": "sha256:"+"0"*64}, pin, nonce),
+        ({"expires_at": (now+timedelta(seconds=30)).isoformat()}, pin, nonce),
+        ({"sequence": 0}, pin, nonce),
+        ({}, {**pin, "epoch": 8}, nonce),
+        ({}, pin, "f"*64),
+    ):
+        change, selected_pin, selected_nonce = mismatch
+        with pytest.raises(export.GraphicalExportBlocked):
+            export.verify_live_ack(signed({**proof, **change}), selected_pin,
+                nonce=selected_nonce, export_digest=digest,
+                task=chain.TASKS[0], now=now)
+
+
+def test_receiver_fails_closed_without_fresh_live_host(monkeypatch, tmp_path):
+    pin, payload, signed, cat, now = setup()
+    from zog.host_deploy.gateway import graphics_chain_export as selected
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / (chain.TASKS[0]+".json")).write_bytes(signed(payload))
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
+    monkeypatch.setattr(selected, "_read_public_pin", lambda path: pin)
+    # This test isolates the relay failure. Independent checkpoint tests
+    # exercise the mandatory live gate with real Ed25519 signatures.
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda current: True)
+    monkeypatch.setattr(selected, "_query_live_owner", lambda *a, **k:
+        (_ for _ in ()).throw(export.GraphicalExportBlocked("relay offline")))
+    with pytest.raises(export.GraphicalExportBlocked, match="relay offline"):
+        selected.load_selected_step(exports, export.CURRENT_AUTHORITY_PATH, chain.TASKS[0],
+                                    pin["chain_policy_sha256"])
+
+
+
+def test_old_still_root_owned_pin_cannot_be_selected_after_rotation(monkeypatch, tmp_path):
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    # Isolate key rotation; the separate checkpoint suite signs real responses.
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda _current: True)
+    """Old key can mint fresh export/nonce but has no current pin authority."""
+    old, payload, signed_old, _, now = setup()
+    new_key = Ed25519PrivateKey.generate()
+    new_pub = new_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    current = {**old, "public_key": base64.b64encode(new_pub).decode("ascii"),
+               "epoch": old["epoch"] + 1, "boot_id": "c" * 32}
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    destination = exports / (chain.TASKS[0] + ".json")
+    # A formerly valid pinned key and fresh receipt/nonce are NOT sufficient.
+    old_path = "/etc/zog/host-deploy/graphical-chain-owner-epoch-7.json"
+    destination.write_bytes(signed_old(payload))
+    pin_reads, live_calls = [], []
+    def root_pin(path):
+        pin_reads.append(path)
+        assert path == export.CURRENT_AUTHORITY_PATH
+        return current
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
+    monkeypatch.setattr(export, "_read_public_pin", root_pin)
+    monkeypatch.setattr(export, "_query_live_owner",
+                        lambda *a, **kw: live_calls.append(kw))
+    with pytest.raises(export.GraphicalExportBlocked, match="obsolete"):
+        export.load_selected_step(exports, old_path, chain.TASKS[0],
+                                  old["chain_policy_sha256"])
+    assert pin_reads == [] and live_calls == []
+    with pytest.raises(export.GraphicalExportBlocked, match="signature"):
+        export.load_selected_step(exports, export.CURRENT_AUTHORITY_PATH,
+                                  chain.TASKS[0], old["chain_policy_sha256"])
+    assert pin_reads == [export.CURRENT_AUTHORITY_PATH]
+    assert live_calls == []
+    # Even an online freshly signed challenge from that old key is rejected.
+    nonce, digest = "a" * 64, "sha256:" + "b" * 64
+    proof = {
+        "schema": "host-deploy-graphical-live-epoch-v1",
+        "nonce": nonce, "export_sha256": digest, "task": chain.TASKS[0],
+        "host_id": old["host_id"], "installation_id": old["installation_id"],
+        "lane": old["lane"], "lane_owner": old["lane_owner"],
+        "boot_id": old["boot_id"], "epoch": old["epoch"],
+        "chain_policy_sha256": old["chain_policy_sha256"], "sequence": 1,
+        "observed_at": (now-timedelta(seconds=1)).isoformat(),
+        "expires_at": (now+timedelta(seconds=2)).isoformat(),
+    }
+    with pytest.raises(export.GraphicalExportBlocked):
+        export.verify_live_ack(signed_old(proof), current, nonce=nonce,
+            export_digest=digest, task=chain.TASKS[0], now=now)
+
+
+def test_current_rotated_authority_accepts_only_current_export_and_fresh_ack(
+        monkeypatch, tmp_path):
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    # Isolate key rotation; the separate checkpoint suite signs real responses.
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda _current: True)
+    pin, payload, _, _, now = setup()
+    new_key = Ed25519PrivateKey.generate()
+    pub = new_key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    current = {**pin, "public_key": base64.b64encode(pub).decode("ascii"),
+               "epoch": pin["epoch"] + 1, "boot_id": "c" * 32}
+    signed_payload = {**payload, "epoch": current["epoch"],
+                      "boot_id": current["boot_id"]}
+    def sign(value):
+        return export._canonical({
+            "payload": value, "signature": base64.b64encode(
+                new_key.sign(export._canonical(value))).decode("ascii"),
+        })
+    export_root = tmp_path / "exports"
+    export_root.mkdir()
+    raw = sign(signed_payload)
+    (export_root / (chain.TASKS[0] + ".json")).write_bytes(raw)
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
+    monkeypatch.setattr(export, "_read_public_pin", lambda path: (
+        current if path == export.CURRENT_AUTHORITY_PATH
+        else pytest.fail("obsolete pin read")))
+    def live(pin, *, nonce, digest, task):
+        assert pin is current and task == chain.TASKS[0]
+        assert digest == "sha256:" + __import__("hashlib").sha256(raw).hexdigest()
+        observed = datetime.now(timezone.utc)
+        return sign({
+            "schema": "host-deploy-graphical-live-epoch-v1",
+            "nonce": nonce, "export_sha256": digest, "task": task,
+            "host_id": pin["host_id"], "installation_id": pin["installation_id"],
+            "lane": pin["lane"], "lane_owner": pin["lane_owner"],
+            "boot_id": pin["boot_id"], "epoch": pin["epoch"],
+            "chain_policy_sha256": pin["chain_policy_sha256"], "sequence": 1,
+            "observed_at": (observed-timedelta(milliseconds=100)).isoformat(),
+            "expires_at": (observed+timedelta(seconds=3)).isoformat(),
+        })
+    monkeypatch.setattr(export, "_query_live_owner", live)
+    selected, digest = export.load_selected_step(
+        export_root, export.CURRENT_AUTHORITY_PATH, chain.TASKS[0],
+        current["chain_policy_sha256"])
+    assert digest == payload["catalogue_sha256"] and selected == payload["catalogue"]
+
+
+def test_current_authority_rotation_during_live_challenge_denies_old_key(
+        monkeypatch, tmp_path):
+    from zog.host_deploy.gateway import graphics_external_checkpoint
+    # Isolate key rotation; the separate checkpoint suite signs real responses.
+    monkeypatch.setattr(graphics_external_checkpoint, "require_current",
+                        lambda _current: True)
+    """A fresh reply from the previously current key cannot outlive rotation."""
+    old, payload, signed_old, _, _ = setup()
+    current = {**old, "epoch": old["epoch"] + 1, "boot_id": "c"*32}
+    root = tmp_path / "exports"
+    root.mkdir()
+    raw = signed_old(payload)
+    (root / (chain.TASKS[0] + ".json")).write_bytes(raw)
+    reads = []
+    def installed_current_pin(path):
+        assert path == export.CURRENT_AUTHORITY_PATH
+        reads.append(path)
+        return old if len(reads) == 1 else current
+
+    def live(pin, *, nonce, digest, task):
+        assert pin is old
+        observed = datetime.now(timezone.utc)
+        return signed_old({
+            "schema": "host-deploy-graphical-live-epoch-v1",
+            "nonce": nonce, "export_sha256": digest, "task": task,
+            "host_id": old["host_id"],
+            "installation_id": old["installation_id"],
+            "lane": old["lane"], "lane_owner": old["lane_owner"],
+            "boot_id": old["boot_id"], "epoch": old["epoch"],
+            "chain_policy_sha256": old["chain_policy_sha256"],
+            "sequence": 1,
+            "observed_at": (observed-timedelta(milliseconds=100)).isoformat(),
+            "expires_at": (observed+timedelta(seconds=3)).isoformat(),
+        })
+
+    # Existing legacy source fixture: checkpoint cryptography is exercised
+    # separately, never disabled by a runtime caller.
+    from zog.host_deploy.gateway import graphics_external_checkpoint as external
+    monkeypatch.setattr(external, "require_current", lambda pin: None)
+    monkeypatch.setattr(export, "_read_public_pin", installed_current_pin)
+    monkeypatch.setattr(export, "_query_live_owner", live)
+    with pytest.raises(export.GraphicalExportBlocked,
+                       match="rotated during live proof"):
+        export.load_selected_step(
+            root, export.CURRENT_AUTHORITY_PATH, chain.TASKS[0],
+            old["chain_policy_sha256"])
+    assert len(reads) == 2
+
+
+
+@pytest.mark.parametrize("kind", ["pending", "partial", "symlink", "directory"])
+def test_current_graphical_rotation_marker_denies_before_and_after_pin(tmp_path, kind):
+    from zog.host_deploy.gateway import graphics_chain_export as g
+    import os
+    from pathlib import Path
+    path = tmp_path / g.ROTATION_PENDING_NAME
+    if kind == "pending":
+        path.write_bytes(b'{"approved":true}')
+    elif kind == "partial":
+        path.write_bytes(b'{"incomplete":')
+    elif kind == "symlink":
+        path.symlink_to(tmp_path / "not-present")
+    else:
+        path.mkdir()
+    fd=os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with pytest.raises(g.GraphicalExportBlocked,
+                           match="rotation pending"):
+            g._require_no_pending_rotation(fd)
+    finally:
+        os.close(fd)
+    assert path.exists() or path.is_symlink()
+
+
+def test_current_graphical_pin_reader_checks_rotation_both_sides():
+    from zog.host_deploy.gateway import graphics_chain_export as g
+    import inspect
+    src=inspect.getsource(g._read_public_pin)
+    assert src.count("_require_no_pending_rotation(fd)") == 2
+    assert g.CURRENT_AUTHORITY_PATH == (
+        "/etc/zog/host-deploy/graphical-chain-current-owner-pin-v1.json"
+    )
