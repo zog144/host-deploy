@@ -1,0 +1,217 @@
+{
+  "schema": "zog-held-graphical-extension-proposal-v1",
+  "status": "HELD_NOT_SUBMITTABLE",
+  "purpose": "source-review-only: future LLVM/Mesa/Xvnc/i3/xterm and minimal llvmpipe smoke",
+  "candidate_revision": "2026-11-03",
+  "producer": {
+    "repository": "zog144/image-build",
+    "workspace_pr9_candidate_revision": "a1ad8fd41186d70cc2f7d8f4ebe7b0ae54e4f023",
+    "workspace_pr9_reviewed_input_revision": "db13d73a45f8a3be579226656442c331a9f701ea",
+    "mesa_pr8_candidate_revision": "9cbd652226b863a7b4bb2d6d9539722e1a262508",
+    "current_protected_selected_revision": "1f07e83dbd80dacb9bed0d6494c697375f0e26cd",
+    "current_protected_monthly_pin": "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36",
+    "workspace_handoff_path": "project/graphics-first-workspace/source-to-native-handoff.json",
+    "closure_path": "project/graphics-first-workspace/closure.json",
+    "original_rights_matrix_path": "project/graphics-first-workspace/selected-component-rights-handoff.json",
+    "unresolved_rights_path": "project/graphics-first-workspace/remaining-distribution-evidence-2026-11-03.json"
+  },
+  "authority": {
+    "active_catalogue_unchanged": true,
+    "activation_allowed": false,
+    "build_submission_allowed": false,
+    "installer_selection_allowed": false,
+    "task_allowlist_extension_allowed": false,
+    "canonical_promotion_allowed": false,
+    "installed_authority_epoch": null,
+    "independently_signed_current_checkpoint": null,
+    "protected_operator_approval": null,
+    "protected_installer_receipt": null,
+    "original_request_history": null,
+    "protected_send_once_highwater": null
+  },
+  "required_predecessor_receipts": {
+    "accepted_toolchain": null,
+    "fonts": null,
+    "XCB": null,
+    "X11": null,
+    "zlib_native_environment": null,
+    "ncurses_temporary": null,
+    "LLVM": null,
+    "Mesa": null,
+    "Xvnc": null,
+    "i3": null,
+    "xterm": null,
+    "mesa_demos": null
+  },
+  "rights": {
+    "original_archive_notice_inventory": "SOURCE_HASHES_ONLY_NOT_LICENSE_GRANT",
+    "rights_holder_authorized": false,
+    "compiled_object_mapping_accepted": false,
+    "native_installed_notice_sha256_accepted": false,
+    "evidence_source_revision": "a1ad8fd41186d70cc2f7d8f4ebe7b0ae54e4f023",
+    "independently_approved_rights_receipt": null,
+    "hold_reason": "TurboVNC bundled Xserver/libsha1/zlib-ng and LLVM/Mesa/libdrm/mesa-demos plus desktop component rights require selected-object and notice review."
+  },
+  "execution": {
+    "workers_authorized": false,
+    "lane": null,
+    "lane_owner": null,
+    "host_id": null,
+    "installation_id": null,
+    "state_volume_id": null,
+    "task_catalogue_sha256": null,
+    "monotonic_epoch": null,
+    "reserved_work_bytes": 32212254720,
+    "reserved_external_bytes": 2147483648,
+    "max_cpu_seconds": 21600,
+    "actual_reservation_approved": false,
+    "note": "Budgets are requested planning upper bounds only; not a reservation or a per-stage allowance."
+  },
+  "stage_order": [
+    {
+      "id": "LLVM",
+      "source": "mesa_pr8_candidate_revision",
+      "depends_on": [],
+      "requires_receipts": [
+        "accepted_toolchain",
+        "X11"
+      ],
+      "recipe_path": null,
+      "recipe_status": "SOURCE_PLAN_NOT_CANONICAL",
+      "outputs": [
+        "usr/lib/libLLVM.so",
+        "usr/bin/llvm-tblgen",
+        "usr/bin/llvm-config",
+        "usr/share/licenses/llvm/LICENSE.TXT",
+        "usr/share/licenses/llvm/BLAKE3-LICENSE"
+      ],
+      "accepted_generation_receipt": null
+    },
+    {
+      "id": "Mesa",
+      "source": "mesa_pr8_candidate_revision",
+      "depends_on": [
+        "LLVM"
+      ],
+      "requires_receipts": [
+        "X11",
+        "LLVM",
+        "zlib_native_environment"
+      ],
+      "recipe_path": null,
+      "recipe_status": "SOURCE_PLAN_NOT_CANONICAL",
+      "outputs": [
+        "usr/lib/libGL.so",
+        "usr/lib/dri/swrast_dri.so",
+        "usr/share/licenses/mesa/license.rst",
+        "usr/share/licenses/mesa/glapi-generator-license.py"
+      ],
+      "accepted_generation_receipt": null
+    },
+    {
+      "id": "Xvnc",
+      "source": "workspace_pr9_candidate_revision",
+      "depends_on": [
+        "Mesa"
+      ],
+      "requires_receipts": [
+        "fonts",
+        "XCB",
+        "X11",
+        "Mesa",
+        "zlib_native_environment"
+      ],
+      "recipe_path": "project/graphics-first-workspace/turbovnc-draft/stages/final/dependencies.py",
+      "recipe_status": "DRAFT_NOT_PACKAGE_ADMITTED",
+      "outputs": [
+        "usr/bin/Xvnc",
+        "usr/bin/vncserver",
+        "usr/bin/vncpasswd",
+        "usr/share/licenses/turbovnc/LICENSE.txt",
+        "usr/share/licenses/turbovnc/Xserver-COPYING",
+        "usr/share/licenses/turbovnc/libsha1-COPYING"
+      ],
+      "accepted_generation_receipt": null
+    },
+    {
+      "id": "i3",
+      "source": "workspace_pr9_candidate_revision",
+      "depends_on": [
+        "Xvnc"
+      ],
+      "requires_receipts": [
+        "X11",
+        "XCB",
+        "fonts"
+      ],
+      "recipe_path": "project/package/i3/stages/final/dependencies.py",
+      "recipe_status": "SOURCE_AUTHORED_NATIVE_HELD",
+      "outputs": [
+        "usr/bin/i3",
+        "usr/bin/i3bar",
+        "usr/bin/i3-msg",
+        "usr/bin/i3-nagbar",
+        "usr/share/licenses/i3/LICENSE"
+      ],
+      "accepted_generation_receipt": null
+    },
+    {
+      "id": "xterm",
+      "source": "workspace_pr9_candidate_revision",
+      "depends_on": [
+        "i3"
+      ],
+      "requires_receipts": [
+        "X11",
+        "fonts",
+        "ncurses_temporary"
+      ],
+      "recipe_path": "project/package/xterm/stages/final/dependencies.py",
+      "recipe_status": "SOURCE_AUTHORED_NATIVE_HELD",
+      "outputs": [
+        "usr/bin/xterm",
+        "usr/share/X11/app-defaults/XTerm",
+        "usr/share/terminfo/x/xterm",
+        "usr/share/licenses/xterm/COPYING"
+      ],
+      "accepted_generation_receipt": null
+    },
+    {
+      "id": "mesa-demos-smoke",
+      "source": "mesa_pr8_candidate_revision",
+      "depends_on": [
+        "Mesa",
+        "Xvnc",
+        "i3",
+        "xterm"
+      ],
+      "requires_receipts": [
+        "Mesa",
+        "Xvnc",
+        "i3",
+        "xterm",
+        "mesa_demos"
+      ],
+      "recipe_path": null,
+      "recipe_status": "SOURCE_PLAN_NOT_CANONICAL",
+      "outputs": [
+        "usr/bin/glxgears",
+        "usr/bin/glxinfo",
+        "usr/share/licenses/mesa-demos/glxgears.c",
+        "usr/share/licenses/mesa-demos/glxinfo.c"
+      ],
+      "accepted_generation_receipt": null
+    }
+  ],
+  "smoke": {
+    "type": "NO_FPS_THRESHOLD_SOFTWARE_GLX",
+    "action": "On a separately authorized small CPU-only Workspace, open Zog-built glxgears through Xvnc/noVNC and briefly observe window animation without X server/client crash. Use pinned glxinfo -B if present.",
+    "command_candidate": "/usr/bin/glxgears",
+    "optional_diagnostic_candidate": "/usr/bin/glxinfo -B",
+    "render_mode": "llvmpipe software rendering; no physical iGPU required",
+    "duration_seconds": null,
+    "fps_threshold": null,
+    "run_authorized": false,
+    "result_receipt": null
+  }
+}

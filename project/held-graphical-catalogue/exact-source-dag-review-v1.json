@@ -1,0 +1,261 @@
+{
+  "schema": "zog-held-graphics-source-dag-review-v1",
+  "status": "EXACT_SOURCE_DAG_REVIEW_NATIVE_NO_GO",
+  "image_build_workspace_revision": "a1ad8fd41186d70cc2f7d8f4ebe7b0ae54e4f023",
+  "image_build_mesa_revision": "9cbd652226b863a7b4bb2d6d9539722e1a262508",
+  "active_task_authority_unchanged": true,
+  "source_only": true,
+  "accepted_generation_receipts": null,
+  "toolchain_origin_proof": null,
+  "independent_rights_authorized": false,
+  "native_compilation_authorized": false,
+  "installed_notice_bytes_verified": false,
+  "stages": [
+    {
+      "id": "LLVM",
+      "source": "pr8",
+      "package": "llvm",
+      "stage_root": "project/graphics-drafts/llvm/stages/final",
+      "build_predecessors": [
+        "zlib-native-environment"
+      ],
+      "runtime_predecessors": [
+        "zlib-native-environment"
+      ],
+      "required_installed_outputs": [
+        "usr/bin/llvm-config",
+        "usr/lib/libLLVM.so",
+        "usr/share/licenses/llvm/LICENSE.TXT",
+        "usr/share/licenses/llvm/BLAKE3-LICENSE"
+      ]
+    },
+    {
+      "id": "Mesa",
+      "source": "pr8",
+      "package": "mesa",
+      "stage_root": "project/graphics-drafts/mesa/stages/final",
+      "build_predecessors": [
+        "llvm-final",
+        "libX11-final",
+        "libXext-final",
+        "libxcb-final",
+        "libdrm-final",
+        "expat-final",
+        "zlib-native-environment",
+        "mako-final",
+        "pyyaml-final",
+        "libxshmfence-final",
+        "libXxf86vm-final"
+      ],
+      "runtime_predecessors": [
+        "llvm-final",
+        "libX11-final",
+        "libXext-final",
+        "libxcb-final",
+        "libxshmfence-final",
+        "libXxf86vm-final"
+      ],
+      "required_installed_outputs": [
+        "usr/lib/libGL.so",
+        "usr/lib/dri/swrast_dri.so",
+        "usr/share/licenses/mesa/license.rst",
+        "usr/share/licenses/mesa/glapi-generator-license.py"
+      ]
+    },
+    {
+      "id": "Xvnc",
+      "source": "pr9",
+      "package": "turbovnc",
+      "stage_root": "project/graphics-first-workspace/turbovnc-draft/stages/final",
+      "build_predecessors": [
+        "libjpeg-turbo-final",
+        "pixman-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libXau-final",
+        "libXdmcp-final",
+        "libxkbfile-final",
+        "libXfont2-final",
+        "mesa-final",
+        "openssl-final",
+        "zlib-native-environment",
+        "libXext-final",
+        "libXrender-final",
+        "xorgproto-final",
+        "xkbcomp-final"
+      ],
+      "runtime_predecessors": [
+        "libjpeg-turbo-final",
+        "pixman-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libXau-final",
+        "libXdmcp-final",
+        "libxkbfile-final",
+        "libXfont2-final",
+        "mesa-final",
+        "openssl-final",
+        "zlib-native-environment",
+        "libXext-final",
+        "libXrender-final",
+        "xorgproto-final",
+        "xkbcomp-final"
+      ],
+      "required_installed_outputs": [
+        "usr/bin/Xvnc",
+        "usr/bin/vncserver",
+        "usr/bin/vncpasswd",
+        "usr/share/licenses/turbovnc/LICENSE.txt",
+        "usr/share/licenses/turbovnc/Xserver-COPYING",
+        "usr/share/licenses/turbovnc/libsha1-COPYING"
+      ]
+    },
+    {
+      "id": "i3",
+      "source": "pr9",
+      "package": "i3",
+      "stage_root": "project/package/i3/stages/final",
+      "build_predecessors": [
+        "libev-final",
+        "yajl-final",
+        "startup-notification-final",
+        "libxkbcommon-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libxcb-final",
+        "xcb-util-final",
+        "xcb-util-wm-final",
+        "xcb-util-cursor-final",
+        "xcb-util-keysyms-final",
+        "xcb-util-xrm-final",
+        "glib-final",
+        "cairo-final",
+        "pango-final",
+        "pcre2-final"
+      ],
+      "runtime_predecessors": [
+        "libev-final",
+        "yajl-final",
+        "startup-notification-final",
+        "libxkbcommon-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libxcb-final",
+        "xcb-util-final",
+        "xcb-util-wm-final",
+        "xcb-util-cursor-final",
+        "xcb-util-keysyms-final",
+        "xcb-util-xrm-final",
+        "glib-final",
+        "cairo-final",
+        "pango-final",
+        "pcre2-final"
+      ],
+      "required_installed_outputs": [
+        "usr/bin/i3",
+        "usr/bin/i3bar",
+        "usr/bin/i3-msg",
+        "usr/bin/i3-nagbar",
+        "usr/share/licenses/i3/LICENSE"
+      ]
+    },
+    {
+      "id": "xterm",
+      "source": "pr9",
+      "package": "xterm",
+      "stage_root": "project/package/xterm/stages/final",
+      "build_predecessors": [
+        "libXt-final",
+        "libXaw-final",
+        "libXmu-final",
+        "libXpm-final",
+        "libXft-final",
+        "ncurses-temporary"
+      ],
+      "runtime_predecessors": [
+        "libXt-final",
+        "libXaw-final",
+        "libXmu-final",
+        "libXpm-final",
+        "libXft-final",
+        "ncurses-temporary",
+        "luit-final",
+        "basic-font-final"
+      ],
+      "required_installed_outputs": [
+        "usr/bin/xterm",
+        "usr/share/X11/app-defaults/XTerm",
+        "usr/share/terminfo/x/xterm",
+        "usr/share/licenses/xterm/COPYING"
+      ]
+    },
+    {
+      "id": "mesa-demos-smoke",
+      "source": "pr8",
+      "package": "mesa-demos",
+      "stage_root": "project/graphics-drafts/mesa-demos/stages/final",
+      "build_predecessors": [
+        "mesa-final",
+        "libX11-final",
+        "libXext-final"
+      ],
+      "runtime_predecessors": [
+        "mesa-final",
+        "libX11-final",
+        "libXext-final"
+      ],
+      "required_installed_outputs": [
+        "usr/bin/glxgears",
+        "usr/bin/glxinfo",
+        "usr/share/licenses/mesa-demos/glxgears.c",
+        "usr/share/licenses/mesa-demos/glxinfo.c"
+      ]
+    }
+  ],
+  "required_resources": [
+    {
+      "source": "pr9",
+      "stage_root": "project/package/xkeyboard-config/stages/final",
+      "output": "usr/share/X11/xkb"
+    },
+    {
+      "source": "pr9",
+      "stage_root": "project/package/xkbcomp/stages/final",
+      "output": "usr/bin/xkbcomp"
+    },
+    {
+      "source": "pr9",
+      "stage_root": "project/package/basic-font/stages/final",
+      "output": "usr/share/fonts/X11/misc/6x13.pcf.gz"
+    },
+    {
+      "source": "pr9",
+      "stage_root": "project/package/basic-font/stages/final",
+      "output": "usr/share/fonts/X11/misc/fonts.dir"
+    },
+    {
+      "source": "pr9",
+      "stage_root": "project/package/xterm/stages/final",
+      "output": "usr/share/X11/app-defaults/XTerm"
+    },
+    {
+      "source": "pr9",
+      "stage_root": "project/package/xterm/stages/final",
+      "output": "usr/share/terminfo/x/xterm"
+    }
+  ],
+  "unmanifested_planned_outputs": {
+    "LLVM": [
+      "usr/bin/llvm-tblgen"
+    ]
+  },
+  "review_obligations": [
+    "LLVM proposal lists llvm-tblgen but pinned llvm-final required-output manifest does not; native stage output must be authored and verified before reliance",
+    "Mesa requires nontrivial libdrm, libxshmfence, libXxf86vm, expat, Mako/PyYAML and immutable Python-generation prerequisites beyond the coarse X11 receipt",
+    "Xvnc requires libjpeg-turbo, pixman, OpenSSL, libxkbfile, xkeyboard-config, XKB compiler and zlib predecessor outside coarse Mesa stage",
+    "i3 requires libev, YAJL, startup-notification, XKB, GLib, Cairo and Pango as direct source predecessors, not merely Xvnc ordering",
+    "xterm requires luit, basic font and inherited ncurses-temporary, plus XTerm app-defaults and terminfo bytes",
+    "Native generation must reconcile source manifest notices and component/object selection with unresolved TurboVNC, LLVM, Mesa and mesa-demos rights decisions",
+    "Actual selected build tools, linker origin, installed graphics data and protected receipts require separate authorized native attestation"
+  ]
+}
