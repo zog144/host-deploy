@@ -1,7 +1,7 @@
-name: Independent graphical replay review with unresolved source probes
+name: Graphical SSM send-once and authenticated recipe snapshot source regression
 on:
   push:
-    branches: [review/graphical-replay-independent-audit-20261103]
+    branches: [regular/graphical-operation-fence-snapshot-20261103]
   workflow_dispatch:
 permissions:
   contents: read
@@ -51,6 +51,6 @@ jobs:
       - name: Clearly report that XFAILs block security acceptance
         if: always()
         run: |
-          echo 'Two STRICT XFAIL security probes represent known unclosed replay/history-substitution gaps.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'A green job with XFAIL is NOT security approval or native compiler authorization.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'PASS required for prior whole-journal replay and coherent snapshot-substitution regressions.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Source CI is not native protected monotonic issuer/reboot security acceptance.' >> "$GITHUB_STEP_SUMMARY"
           echo 'No credentials, AWS/SSM operations, compiler submission, or protected Host mutation.' >> "$GITHUB_STEP_SUMMARY"
