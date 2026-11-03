@@ -33,7 +33,9 @@ def data():
     step={"name":"submit","ordinal":0,"operation_id":"e"*32,
           "request":req,"request_sha256":hashlib.sha256(
               json.dumps(req,sort_keys=True,separators=(",",":")).encode()).hexdigest()}
-    protect={"host_id":"1"*64,"installation_id":"2"*64,
+    protect={"host_id":"1"*64,"host_fingerprint":"sha256:"+"a"*64,
+             "registry_id":"b"*32,"controller_id":"c"*32,
+             "installation_id":"2"*64,
              "state_volume_id":"3"*64,
              "task":"graphics-x11-core-image-v1",
              "base_generation_id":"4"*64,
