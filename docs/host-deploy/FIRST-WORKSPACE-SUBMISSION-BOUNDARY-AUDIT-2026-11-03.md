@@ -4,7 +4,7 @@
 
 ## Exact source selection
 
-- image-build PR #9: `54431ea8f5ed69fd120d5e862a2277c5d2a2c46d` (source handoff checkout), **draft**. Its reviewed PR9 *input* identity is still `db13d73a45f8a3be579226656442c331a9f701ea`; later PR9 edits have **not** thereby become independently approved native production source.
+- image-build PR #9: `6b64a7e1b6f9842554bd3b9eee5599e24ca2402c` (source handoff checkout), **draft**. Its reviewed PR9 *input* identity is still `db13d73a45f8a3be579226656442c331a9f701ea`; later PR9 edits have **not** thereby become independently approved native production source.
 - image-build PR #8 Mesa input in handoff: `9cbd652226b863a7b4bb2d6d9539722e1a262508`; **independent native Mesa compilation/rights acceptance is absent**.
 - host-deploy PR #8 bounded chain / PR #11 authority hardening: `7d052b340a026497fd32afb82d0a290d1d6bc60e` as the test candidate base. Existing native catalogue software source remains **`1f07e83dbd80dacb9bed0d6494c697375f0e26cd`**, with original October pinned source SHA; it is NOT automatically rebased onto the PR9 source or the PR8 Mesa draft.
 - The root-installed chain has finite task names `graphics-fonts-image-v1`, `graphics-xcb-core-image-v1`, `graphics-x11-core-image-v1`. The generic `build.submit` protocol and protected task catalogue do not authorize a Mesa, LLVM, Xvnc or arbitrary script task.
@@ -36,3 +36,7 @@
 **Source negative submission boundary: PASS at tested commit, conditional on exact-head workflow. Native graphical build admission: NO-GO.** The source integration cannot make a nonexistent or unaccepted X11 generation into an accepted native generation, cannot select a newer Mesa revision silently, and cannot treat `PREPARED_NOT_SUBMITTABLE` as `build.submit`.
 
 Future positive admission requires a *separate* reviewed task catalogue, exact re-frozen final PR9/PR8 sources and rights, externally authenticated issuer/checkpoint and accepted predecessor receipts, verified source generation provenance, native budget/reservation, 21,600s hard bound, plus SSM/worker recovery acceptance. Do not mutate production pins or launch compiler work in this source-only review.
+
+### Independent source-refreeze (2026-11-03)
+
+The old `54431ea8…` snapshot was a previous source-review input, not the live PR9 head. This independent source suite now checks exact **image-build PR9 `6b64a7e1…`** and refuses any absent or changed checkout identity. host-deploy's existing protected compiler source remains `1f07e83d…`; this is **not** authorization to repin or submit.
