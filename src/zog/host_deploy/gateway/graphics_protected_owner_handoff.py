@@ -93,3 +93,68 @@ def inspect_only_source_boundary(binding, request_id, step, *,
 # operator approvals. The protected native gateway admission operation must
 # select the signed root-control owner with authenticated exact Host/
 # installation/STATE and commit an irrevocable claim BEFORE any SSM call.
+
+
+# Single selected source interface: root-control PR30, stacked on PR29.
+# The older PR28 claim-only envelope below is retained solely for historical
+# source test comparison; it is NEVER a permission to send from the gateway.
+SELECTED_OWNER_SCHEMA = "zog-protected-graphical-operation-request-v1"
+SELECTED_ROOT_OWNER_SOURCE = "2078f0f76c23fed44da0d4f073693786e32a1cc2"
+PROTECTED_SELECTION_FIELDS = frozenset({
+    "host_id", "installation_id", "state_volume_id", "task",
+    "base_generation_id", "predecessor_receipt_sha256",
+    "stage_once_receipt_sha256", "authority_epoch",
+    "authority_pin_sha256", "approval_sha256",
+})
+
+
+def selected_owner_request(binding, request_id, step, *, protected_selection):
+    """Construct PR29/30 original immutable operation request; no send ticket.
+
+    The protected selection is native owner/installer input, NOT from the
+    gateway journal or an HTTP request. Matching source tests never install
+    that independently authenticated selection.
+    """
+    if (type(protected_selection) is not dict
+            or set(protected_selection) != PROTECTED_SELECTION_FIELDS):
+        _hold()
+    selected = gateway_intent._expected(binding, request_id, step)
+    if (type(step.get("request")) is not dict or
+            step["request"].get("operation_id") != selected["operation_id"] or
+            _hash(step["request"]) != selected["remote_request_sha256"] or
+            step["request"].get("source") != selected["source"]):
+        _hold()
+    source = selected["source"]
+    if (type(source) is not dict or set(source) != {"repository", "revision"}
+            or source["repository"] != "zog144/image-build"
+            or type(source["revision"]) is not str
+            or HEX40.fullmatch(source["revision"]) is None):
+        _hold()
+    row = {
+        "schema": SELECTED_OWNER_SCHEMA,
+        "host_id": protected_selection["host_id"],
+        "installation_id": protected_selection["installation_id"],
+        "state_volume_id": protected_selection["state_volume_id"],
+        "lane": selected["lane"],
+        "task": protected_selection["task"],
+        "catalogue_sha256": selected["task_catalogue_sha256"],
+        "source_revision": source["revision"],
+        "monthly_pin_identity": selected["monthly_pin_identity"],
+        "base_generation_id": protected_selection["base_generation_id"],
+        "predecessor_receipt_sha256":
+            protected_selection["predecessor_receipt_sha256"],
+        "request_id": request_id,
+        "original_request_sha256": "sha256:" + _hash(binding),
+        "stage_once_receipt_sha256":
+            protected_selection["stage_once_receipt_sha256"],
+        "operation_id": selected["operation_id"],
+        "stage": selected["stage"],
+        "ordinal": selected["ordinal"],
+        "remote_request_sha256": "sha256:" + selected["remote_request_sha256"],
+        "authority_epoch": protected_selection["authority_epoch"],
+        "authority_pin_sha256": protected_selection["authority_pin_sha256"],
+        "approval_sha256": protected_selection["approval_sha256"],
+    }
+    # A valid shape is not independent approval. PR30 native owner must compare
+    # its preinstalled operation->digest and verify pinned operator signature.
+    return row
