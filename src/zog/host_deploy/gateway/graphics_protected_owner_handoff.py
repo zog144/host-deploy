@@ -99,9 +99,10 @@ def inspect_only_source_boundary(binding, request_id, step, *,
 # The older PR28 claim-only envelope below is retained solely for historical
 # source test comparison; it is NEVER a permission to send from the gateway.
 SELECTED_OWNER_SCHEMA = "zog-protected-graphical-operation-request-v1"
-SELECTED_ROOT_OWNER_SOURCE = "12bcaa70a16ad6e1d9e017a07ca373e511f1e910"
+SELECTED_ROOT_OWNER_SOURCE = "ad5985ee602f24cbb5d45ef259c31d6c5a13e386"
 PROTECTED_SELECTION_FIELDS = frozenset({
-    "host_id", "installation_id", "state_volume_id", "task",
+    "host_id", "host_fingerprint", "registry_id", "controller_id",
+    "installation_id", "state_volume_id", "task",
     "base_generation_id", "predecessor_receipt_sha256",
     "stage_once_receipt_sha256", "authority_epoch",
     "authority_pin_sha256", "approval_sha256",
@@ -133,6 +134,10 @@ def selected_owner_request(binding, request_id, step, *, protected_selection):
     row = {
         "schema": SELECTED_OWNER_SCHEMA,
         "host_id": protected_selection["host_id"],
+        "host_fingerprint": protected_selection["host_fingerprint"],
+        "registry_id": protected_selection["registry_id"],
+        "controller_id": protected_selection["controller_id"],
+        "target_identity_sha256": "sha256:" + _hash(selected["target"]),
         "installation_id": protected_selection["installation_id"],
         "state_volume_id": protected_selection["state_volume_id"],
         "lane": selected["lane"],
