@@ -1,7 +1,7 @@
 name: Held graphical catalogue future extension source review
 on:
   push:
-    branches: [regular/held-graphics-next-catalogue-20261103]
+    branches: [regular/held-graphics-next-catalogue-20261103, review/held-graphical-stage-dag-20261103]
   workflow_dispatch:
 permissions:
   contents: read
