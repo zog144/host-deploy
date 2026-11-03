@@ -79,10 +79,14 @@ def _read(directory, binding, gateway_id):
                 "name", "operation_id", "ordinal", "phase",
                 "request", "request_sha256", "command_id", "result"}
                 or step["name"] not in STAGES
+                or type(step["ordinal"]) is not int or step["ordinal"] < 0
+                or step["ordinal"] != sum(
+                    old["name"] == step["name"] for old in value["stages"][:i])
                 or step["operation_id"] != _operation_id(
                     gateway_id, step["name"], step["ordinal"])
                 or step["phase"] not in ("prepared", "submitting",
                                          "submitted", "completed", "uncertain")
+                or type(step["request"]) is not dict
                 or hashlib.sha256(_canonical(step["request"])).hexdigest()
                     != step["request_sha256"]
                 or step["request"].get("operation_id") != step["operation_id"]
@@ -91,8 +95,50 @@ def _read(directory, binding, gateway_id):
                     (type(step["command_id"]) is not str
                      or not 1 <= len(step["command_id"]) <= 128))):
             raise RuntimeError("generic pipeline stage identity mismatch")
-        if i and value["stages"][i-1]["phase"] != "completed":
-            raise RuntimeError("generic pipeline advanced past incomplete stage")
+        # A locally recomputed unkeyed request digest is NOT authority to
+        # substitute mode, base generation, XCB/X11 predecessor, targets,
+        # recipe snapshot, or even the remote operation. Reconstruct all
+        # fields from the original frozen server-selected task on each read.
+        try:
+            original = _request(binding, step["name"], step["operation_id"], value)
+        except (KeyError, ValueError, TypeError, RuntimeError) as error:
+            raise RuntimeError("generic pipeline frozen request unavailable") from error
+        if step["request"] != original:
+            raise RuntimeError("generic pipeline request differs from frozen task binding")
+        if i == 0:
+            if step["name"] != "capabilities":
+                raise RuntimeError("generic pipeline stage order mismatch")
+        else:
+            previous = value["stages"][i-1]
+            next_stage = {
+                "capabilities": "snapshot",
+                "snapshot": "submit",
+                "submit": "inspect",
+                "inspect": "inspect",
+            }[previous["name"]]
+            if previous["phase"] != "completed" or step["name"] != next_stage:
+                raise RuntimeError("generic pipeline stage order mismatch")
+        # A changed local recipe/pipeline identity must not reselect an older
+        # generation. These values can only originate from the recorded
+        # completed authenticated remote observation, not an arbitrary
+        # request-journal edit with a recomputed checksum.
+        if step["phase"] == "completed" and step["name"] in ("snapshot", "submit"):
+            receipt = step["result"]
+            if (type(receipt) is not dict or
+                    type(receipt.get("result")) is not dict):
+                raise RuntimeError("generic pipeline completed receipt missing")
+            observed = receipt["result"]
+            if step["name"] == "snapshot":
+                snapshot = observed.get("recipe_identity")
+                if (not isinstance(snapshot, str) or not SHA.fullmatch(snapshot)
+                        or snapshot != value["recipe_identity"]
+                        or observed.get("artifacts", {}).get("recipe_snapshot") != snapshot):
+                    raise RuntimeError("generic pipeline snapshot identity mismatch")
+            else:
+                pipeline = observed.get("pipeline_id")
+                if (not isinstance(pipeline, str) or not IDENTITY.fullmatch(pipeline)
+                        or pipeline != value["pipeline_id"]):
+                    raise RuntimeError("generic pipeline submission identity mismatch")
     return value
 
 def _save(directory, value):

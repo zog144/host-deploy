@@ -1,0 +1,63 @@
+name: Independent graphical compiler submission readback review
+on:
+  push:
+    branches: [review/graphical-submission-source-recheck-20261103]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-head:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout reviewed host-deploy head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Checkout exact image-build PR9 source handoff snapshot
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/image-build
+          ref: 6b64a7e1b6f9842554bd3b9eee5599e24ca2402c
+          path: dependencies/image-build-pr9-reviewed
+          persist-credentials: false
+      - name: Verify producer source pin, refuse moving HEAD
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          root = Path('dependencies/image-build-pr9-reviewed')
+          assert subprocess.check_output(
+            ['git','-C',str(root),'rev-parse','HEAD'],text=True
+          ).strip() == '6b64a7e1b6f9842554bd3b9eee5599e24ca2402c'
+          PY
+      - name: Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install offline source test dependencies
+        run: python -m pip install 'pytest>=8,<10' 'boto3>=1.34,<2' 'dbus-next==0.2.3' 'cryptography>=44,<49'
+      - name: Real generic readback, gateway attester and selected catalogue regressions
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
+          AWS_DEFAULT_REGION: us-east-1
+          ZOG_WORKSPACE_HANDOFF_SOURCE: dependencies/image-build-pr9-reviewed
+        run: |
+          python -m compileall -q src/zog/host_deploy/gateway/generic_pipeline.py tests/test_gateway_graphical_submission_journal_review.py
+          PYTHONPATH=src:tests python -m pytest -q \
+            tests/test_gateway_graphical_submission_journal_review.py \
+            tests/test_gateway_workspace_submission_boundary.py \
+            tests/test_gateway_generic_pipeline.py \
+            tests/test_gateway_graphics_generation_chain.py \
+            tests/test_gateway_graphics_generation_attester.py \
+            tests/test_gateway_graphics_gateway_history.py \
+            tests/test_gateway_graphics_chain_gateway.py \
+            tests/test_gateway_graphics_chain_export.py \
+            tests/test_gateway_graphics_stage_once.py \
+            tests/test_gateway_task_catalogue.py \
+            tests/test_gateway_dispatch.py \
+            tests/test_gateway_consumer.py
+      - name: Source denial, not compiler admission
+        if: always()
+        run: |
+          echo 'No AWS credentials, SSM submission, SQS send, compile operation or protected installation.' >> "$GITHUB_STEP_SUMMARY"
