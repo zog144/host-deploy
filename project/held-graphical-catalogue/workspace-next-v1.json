@@ -13,7 +13,12 @@
     "workspace_handoff_path": "project/graphics-first-workspace/source-to-native-handoff.json",
     "closure_path": "project/graphics-first-workspace/closure.json",
     "original_rights_matrix_path": "project/graphics-first-workspace/selected-component-rights-handoff.json",
-    "unresolved_rights_path": "project/graphics-first-workspace/remaining-distribution-evidence-2026-11-03.json"
+    "unresolved_rights_path": "project/graphics-first-workspace/remaining-distribution-evidence-2026-11-03.json",
+    "stage_dependency_sources": {
+      "Xvnc": "project/graphics-first-workspace/turbovnc-draft/stages/final/dependencies.py",
+      "i3": "project/package/i3/stages/final/dependencies.py",
+      "xterm": "project/package/xterm/stages/final/dependencies.py"
+    }
   },
   "authority": {
     "active_catalogue_unchanged": true,
@@ -50,7 +55,18 @@
     "native_installed_notice_sha256_accepted": false,
     "evidence_source_revision": "a1ad8fd41186d70cc2f7d8f4ebe7b0ae54e4f023",
     "independently_approved_rights_receipt": null,
-    "hold_reason": "TurboVNC bundled Xserver/libsha1/zlib-ng and LLVM/Mesa/libdrm/mesa-demos plus desktop component rights require selected-object and notice review."
+    "hold_reason": "TurboVNC bundled Xserver/libsha1/zlib-ng and LLVM/Mesa/libdrm/mesa-demos plus desktop component rights require selected-object and notice review.",
+    "component_rights_receipts": {
+      "turbovnc-xserver": null,
+      "turbovnc-libsha1": null,
+      "turbovnc-zlib-ng-excluded": null,
+      "llvm-generated-blake3": null,
+      "mesa-glapi-generated": null,
+      "mesa-llvmpipe": null,
+      "libdrm-common": null,
+      "mesa-demos-glxgears": null,
+      "mesa-demos-glxinfo": null
+    }
   },
   "execution": {
     "workers_authorized": false,
@@ -85,7 +101,13 @@
         "usr/share/licenses/llvm/LICENSE.TXT",
         "usr/share/licenses/llvm/BLAKE3-LICENSE"
       ],
-      "accepted_generation_receipt": null
+      "accepted_generation_receipt": null,
+      "build_package_stages": [],
+      "runtime_package_stages": [],
+      "required_installed_resources": [
+        "usr/lib/libLLVM.so",
+        "usr/bin/llvm-tblgen"
+      ]
     },
     {
       "id": "Mesa",
@@ -106,7 +128,13 @@
         "usr/share/licenses/mesa/license.rst",
         "usr/share/licenses/mesa/glapi-generator-license.py"
       ],
-      "accepted_generation_receipt": null
+      "accepted_generation_receipt": null,
+      "build_package_stages": [],
+      "runtime_package_stages": [],
+      "required_installed_resources": [
+        "usr/lib/libGL.so",
+        "usr/lib/dri/swrast_dri.so"
+      ]
     },
     {
       "id": "Xvnc",
@@ -131,7 +159,52 @@
         "usr/share/licenses/turbovnc/Xserver-COPYING",
         "usr/share/licenses/turbovnc/libsha1-COPYING"
       ],
-      "accepted_generation_receipt": null
+      "accepted_generation_receipt": null,
+      "build_package_stages": [
+        "libjpeg-turbo-final",
+        "pixman-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libXau-final",
+        "libXdmcp-final",
+        "libxkbfile-final",
+        "libXfont2-final",
+        "mesa-final",
+        "openssl-final",
+        "zlib-native-environment",
+        "libXext-final",
+        "libXrender-final",
+        "xorgproto-final",
+        "xkbcomp-final"
+      ],
+      "runtime_package_stages": [
+        "libjpeg-turbo-final",
+        "pixman-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libXau-final",
+        "libXdmcp-final",
+        "libxkbfile-final",
+        "libXfont2-final",
+        "mesa-final",
+        "openssl-final",
+        "zlib-native-environment",
+        "libXext-final",
+        "libXrender-final",
+        "xorgproto-final",
+        "xkbcomp-final"
+      ],
+      "required_installed_resources": [
+        "usr/bin/Xvnc",
+        "usr/share/X11/xkb",
+        "usr/bin/xkbcomp",
+        "usr/share/fonts/X11/misc/6x13.pcf.gz",
+        "usr/share/fonts/X11/misc/fonts.dir",
+        "usr/lib/libGL.so",
+        "usr/lib/dri/swrast_dri.so",
+        "usr/share/licenses/turbovnc/Xserver-COPYING",
+        "usr/share/licenses/turbovnc/libsha1-COPYING"
+      ]
     },
     {
       "id": "i3",
@@ -153,7 +226,50 @@
         "usr/bin/i3-nagbar",
         "usr/share/licenses/i3/LICENSE"
       ],
-      "accepted_generation_receipt": null
+      "accepted_generation_receipt": null,
+      "build_package_stages": [
+        "libev-final",
+        "yajl-final",
+        "startup-notification-final",
+        "libxkbcommon-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libxcb-final",
+        "xcb-util-final",
+        "xcb-util-wm-final",
+        "xcb-util-cursor-final",
+        "xcb-util-keysyms-final",
+        "xcb-util-xrm-final",
+        "glib-final",
+        "cairo-final",
+        "pango-final",
+        "pcre2-final"
+      ],
+      "runtime_package_stages": [
+        "libev-final",
+        "yajl-final",
+        "startup-notification-final",
+        "libxkbcommon-final",
+        "xkeyboard-config-final",
+        "libX11-final",
+        "libxcb-final",
+        "xcb-util-final",
+        "xcb-util-wm-final",
+        "xcb-util-cursor-final",
+        "xcb-util-keysyms-final",
+        "xcb-util-xrm-final",
+        "glib-final",
+        "cairo-final",
+        "pango-final",
+        "pcre2-final"
+      ],
+      "required_installed_resources": [
+        "usr/bin/i3",
+        "usr/bin/i3bar",
+        "usr/bin/i3-msg",
+        "usr/share/X11/xkb",
+        "usr/share/licenses/i3/LICENSE"
+      ]
     },
     {
       "id": "xterm",
@@ -174,7 +290,33 @@
         "usr/share/terminfo/x/xterm",
         "usr/share/licenses/xterm/COPYING"
       ],
-      "accepted_generation_receipt": null
+      "accepted_generation_receipt": null,
+      "build_package_stages": [
+        "libXt-final",
+        "libXaw-final",
+        "libXmu-final",
+        "libXpm-final",
+        "libXft-final",
+        "ncurses-temporary"
+      ],
+      "runtime_package_stages": [
+        "libXt-final",
+        "libXaw-final",
+        "libXmu-final",
+        "libXpm-final",
+        "libXft-final",
+        "ncurses-temporary",
+        "luit-final",
+        "basic-font-final"
+      ],
+      "required_installed_resources": [
+        "usr/bin/xterm",
+        "usr/bin/luit",
+        "usr/share/terminfo/x/xterm",
+        "usr/share/X11/app-defaults/XTerm",
+        "usr/share/fonts/X11/misc/6x13.pcf.gz",
+        "usr/share/licenses/xterm/COPYING"
+      ]
     },
     {
       "id": "mesa-demos-smoke",
@@ -200,7 +342,14 @@
         "usr/share/licenses/mesa-demos/glxgears.c",
         "usr/share/licenses/mesa-demos/glxinfo.c"
       ],
-      "accepted_generation_receipt": null
+      "accepted_generation_receipt": null,
+      "build_package_stages": [],
+      "runtime_package_stages": [],
+      "required_installed_resources": [
+        "usr/bin/glxgears",
+        "usr/bin/glxinfo",
+        "usr/lib/dri/swrast_dri.so"
+      ]
     }
   ],
   "smoke": {
@@ -213,5 +362,51 @@
     "fps_threshold": null,
     "run_authorized": false,
     "result_receipt": null
+  },
+  "required_package_stage_receipts": {
+    "basic-font-final": null,
+    "cairo-final": null,
+    "glib-final": null,
+    "libX11-final": null,
+    "libXau-final": null,
+    "libXaw-final": null,
+    "libXdmcp-final": null,
+    "libXext-final": null,
+    "libXfont2-final": null,
+    "libXft-final": null,
+    "libXmu-final": null,
+    "libXpm-final": null,
+    "libXrender-final": null,
+    "libXt-final": null,
+    "libev-final": null,
+    "libjpeg-turbo-final": null,
+    "libxcb-final": null,
+    "libxkbcommon-final": null,
+    "libxkbfile-final": null,
+    "luit-final": null,
+    "mesa-final": null,
+    "ncurses-temporary": null,
+    "openssl-final": null,
+    "pango-final": null,
+    "pcre2-final": null,
+    "pixman-final": null,
+    "startup-notification-final": null,
+    "xcb-util-cursor-final": null,
+    "xcb-util-final": null,
+    "xcb-util-keysyms-final": null,
+    "xcb-util-wm-final": null,
+    "xcb-util-xrm-final": null,
+    "xkbcomp-final": null,
+    "xkeyboard-config-final": null,
+    "xorgproto-final": null,
+    "yajl-final": null,
+    "zlib-native-environment": null
+  },
+  "required_tool_provenance_receipts": {
+    "C-C++-linker-ar-objcopy-readelf": null,
+    "meson-ninja-cmake-pkgconf": null,
+    "python-generators": null,
+    "XKB-and-font-tools": null,
+    "build-utilities": null
   }
 }
