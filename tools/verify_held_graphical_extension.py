@@ -4,12 +4,50 @@ This file is a review tool, NOT a gateway loader, issuer, task catalogue
 adapter, or worker. Its only positive result is HELD_NOT_SUBMITTABLE.
 No code path here can construct, install, select, authorize or submit a task.
 """
+import ast
 import json
 from pathlib import Path
 import re
 import subprocess
 
 SCHEMA = "zog-held-graphical-extension-proposal-v1"
+STAGE_DAG_PATHS = {
+    "Xvnc": "project/graphics-first-workspace/turbovnc-draft/stages/final/dependencies.py",
+    "i3": "project/package/i3/stages/final/dependencies.py",
+    "xterm": "project/package/xterm/stages/final/dependencies.py",
+}
+MIN_RESOURCES = {
+    "LLVM": {"usr/lib/libLLVM.so", "usr/bin/llvm-tblgen"},
+    "Mesa": {"usr/lib/libGL.so", "usr/lib/dri/swrast_dri.so"},
+    "Xvnc": {"usr/bin/Xvnc", "usr/share/X11/xkb", "usr/bin/xkbcomp",
+             "usr/share/fonts/X11/misc/6x13.pcf.gz",
+             "usr/share/fonts/X11/misc/fonts.dir",
+             "usr/lib/libGL.so", "usr/lib/dri/swrast_dri.so",
+             "usr/share/licenses/turbovnc/Xserver-COPYING",
+             "usr/share/licenses/turbovnc/libsha1-COPYING"},
+    "i3": {"usr/bin/i3", "usr/bin/i3bar", "usr/bin/i3-msg",
+           "usr/share/X11/xkb", "usr/share/licenses/i3/LICENSE"},
+    "xterm": {"usr/bin/xterm", "usr/bin/luit",
+              "usr/share/terminfo/x/xterm",
+              "usr/share/X11/app-defaults/XTerm",
+              "usr/share/fonts/X11/misc/6x13.pcf.gz",
+              "usr/share/licenses/xterm/COPYING"},
+    "mesa-demos-smoke": {"usr/bin/glxgears", "usr/bin/glxinfo",
+                         "usr/lib/dri/swrast_dri.so"},
+}
+REQUIRED_SOURCE_DEPENDENCIES = {
+    "Xvnc": {"xkbcomp-final", "xkeyboard-config-final", "mesa-final",
+             "openssl-final", "zlib-native-environment", "pixman-final",
+             "libjpeg-turbo-final"},
+    "i3": {"libev-final", "yajl-final", "startup-notification-final",
+           "libxkbcommon-final", "xkeyboard-config-final",
+           "xcb-util-cursor-final", "xcb-util-xrm-final",
+           "glib-final", "cairo-final", "pango-final"},
+    "xterm": {"libXt-final", "libXaw-final", "libXmu-final", "libXpm-final",
+              "libXft-final", "ncurses-temporary", "luit-final",
+              "basic-font-final"},
+}
+
 STATUS = "HELD_NOT_SUBMITTABLE"
 STAGES = ("LLVM", "Mesa", "Xvnc", "i3", "xterm", "mesa-demos-smoke")
 PR9 = "a1ad8fd41186d70cc2f7d8f4ebe7b0ae54e4f023"
@@ -59,7 +97,7 @@ def validate(proposal):
     _exact(proposal, (
         "schema", "status", "purpose", "candidate_revision", "producer",
         "authority", "required_predecessor_receipts", "rights", "execution",
-        "stage_order", "smoke"
+        "stage_order", "smoke", "required_package_stage_receipts"
     ), "proposal")
     if (proposal["schema"] != SCHEMA or proposal["status"] != STATUS
             or proposal["candidate_revision"] != "2026-11-03"):
@@ -70,7 +108,8 @@ def validate(proposal):
         "workspace_pr9_reviewed_input_revision", "mesa_pr8_candidate_revision",
         "current_protected_selected_revision",
         "current_protected_monthly_pin", "workspace_handoff_path",
-        "closure_path", "original_rights_matrix_path", "unresolved_rights_path"
+        "closure_path", "original_rights_matrix_path", "unresolved_rights_path",
+        "stage_dependency_sources"
     ), "producer")
     if p != {
         "repository": "zog144/image-build",
@@ -86,6 +125,7 @@ def validate(proposal):
             "project/graphics-first-workspace/selected-component-rights-handoff.json",
         "unresolved_rights_path":
             "project/graphics-first-workspace/remaining-distribution-evidence-2026-11-03.json",
+        "stage_dependency_sources": STAGE_DAG_PATHS,
     }:
         _deny("revision, source-rights, or live compiler pin substituted")
     if installed.SOURCE != SELECTED_COMPILER or (
@@ -164,6 +204,8 @@ def validate(proposal):
         _exact(stage, (
             "id", "source", "depends_on", "requires_receipts", "recipe_path",
             "recipe_status", "outputs", "accepted_generation_receipt",
+            "build_package_stages", "runtime_package_stages",
+            "required_installed_resources",
         ), "future stage")
         if (stage["source"] != _STAGE_SOURCE[stage["id"]]
                 or stage["accepted_generation_receipt"] is not None
@@ -179,6 +221,32 @@ def validate(proposal):
                 or any(type(v) is not str or
                        not v.startswith("usr/") for v in stage["outputs"])):
             _deny("future stage or prior-generation evidence not held")
+        if (type(stage["build_package_stages"]) is not list
+                or type(stage["runtime_package_stages"]) is not list
+                or type(stage["required_installed_resources"]) is not list
+                or not MIN_RESOURCES[stage["id"]].issubset(
+                    set(stage["required_installed_resources"]))
+                or len(stage["required_installed_resources"]) != len(
+                    set(stage["required_installed_resources"]))
+                or any(type(x) is not str or not x.startswith("usr/")
+                       for x in stage["required_installed_resources"])):
+            _deny("missing native graphical resource or evidence")
+        for dep_list in (stage["build_package_stages"],
+                         stage["runtime_package_stages"]):
+            if (len(dep_list) != len(set(dep_list))
+                    or any(type(x) is not str or not
+                           (x.endswith("-final") or x in (
+                               "zlib-native-environment","ncurses-temporary"))
+                           for x in dep_list)):
+                _deny("unreviewed package-stage graph")
+        if stage["id"] in STAGE_DAG_PATHS:
+            if (stage["recipe_path"] != STAGE_DAG_PATHS[stage["id"]]
+                    or not REQUIRED_SOURCE_DEPENDENCIES[stage["id"]].issubset(
+                        set(stage["build_package_stages"]) |
+                        set(stage["runtime_package_stages"]))):
+                _deny("missing source-package predecessor")
+        elif stage["build_package_stages"] or stage["runtime_package_stages"]:
+            _deny("unaccepted LLVM/Mesa stage represented as compiled")
         if stage["recipe_path"] is not None and (
                 not isinstance(stage["recipe_path"], str)
                 or not stage["recipe_path"].startswith("project/")
@@ -188,6 +256,13 @@ def validate(proposal):
                 "SOURCE_PLAN_NOT_CANONICAL", "DRAFT_NOT_PACKAGE_ADMITTED",
                 "SOURCE_AUTHORED_NATIVE_HELD"):
             _deny("source-only recipe was promoted")
+    package_receipts = proposal["required_package_stage_receipts"]
+    all_package_ids = {d for stage in stages for d in (
+        stage["build_package_stages"] + stage["runtime_package_stages"])}
+    if (type(package_receipts) is not dict or
+            set(package_receipts) != all_package_ids or
+            any(v is not None for v in package_receipts.values())):
+        _deny("missing or fabricated protected package-stage acceptance")
     if (stages[0]["recipe_path"] is not None
             or stages[1]["recipe_path"] is not None
             or stages[-1]["recipe_path"] is not None
@@ -251,6 +326,16 @@ def attest_source_checkouts(proposal, pr9_checkout, mesa_checkout):
             or supplemental.get("redistribution_authorized") is not False):
         _deny("current source/rights handoff does not establish held boundary")
     for stage in proposal["stage_order"]:
+        if stage["id"] in STAGE_DAG_PATHS:
+            dep_path = root / STAGE_DAG_PATHS[stage["id"]]
+            try:
+                deps = ast.literal_eval(dep_path.read_text())
+            except (OSError, ValueError, SyntaxError):
+                _deny("actual source stage DAG missing")
+            if (type(deps) is not dict or set(deps) != {"build", "runtime"}
+                    or deps["build"] != stage["build_package_stages"]
+                    or deps["runtime"] != stage["runtime_package_stages"]):
+                _deny("held package-stage DAG differs from pinned image-build")
         path = stage["recipe_path"]
         if path is not None and not (root / path).is_file():
             _deny("source-pinned recipe draft path missing")
