@@ -19,6 +19,7 @@ from .image_build_execution import (
     producer_runtime_preflight, remote_script,
 )
 from .ledger import load_dispatch, load_request, request_lock, utc_now
+from . import graphics_operation_send_intent as send_intent
 
 SCHEMA = "host-deploy-generic-pipeline-v1"
 FILE = "generic-pipeline.json"
@@ -105,6 +106,11 @@ def _read(directory, binding, gateway_id):
             raise RuntimeError("generic pipeline frozen request unavailable") from error
         if step["request"] != original:
             raise RuntimeError("generic pipeline request differs from frozen task binding")
+        # Once a remote operation was sent, every durable history read must
+        # find its separate exclusive intent. The same unkeyed JSON receipt
+        # cannot manufacture or erase an SSM send.
+        if step["phase"] in ("submitted", "completed"):
+            send_intent.require_command(directory.parents[1], gateway_id, binding, step)
         if i == 0:
             if step["name"] != "capabilities":
                 raise RuntimeError("generic pipeline stage order mismatch")
@@ -263,6 +269,44 @@ def _validate_result(step, receipt, binding, record):
             raise RuntimeError("pipeline observation differs from submitted pipeline")
     return result
 
+def _authenticate_snapshot_before_submit(root, request_id, host, binding, record):
+    """Live readback of *original* SSM snapshot, not local receipt agreement.
+
+    A recomputed mutable record can select any internally consistent
+    recipe_identity. This check instead requires the original snapshot
+    CommandId to return a completed source/request-bound image-build receipt
+    from SSM, under the same frozen source, task and operation binding.
+    The live readback is mandatory for EACH pipeline.submit attempt.
+    """
+    snapshots = [stage for stage in record["stages"]
+                 if stage["name"] == "snapshot"]
+    if len(snapshots) != 1:
+        raise RuntimeError("missing unique original recipe snapshot")
+    snapshot = snapshots[0]
+    if (snapshot["phase"] != "completed" or
+            type(snapshot["command_id"]) is not str
+            or not snapshot["command_id"] or
+            type(snapshot["result"]) is not dict):
+        raise RuntimeError("original snapshot has no completed command identity")
+    send_intent.require_command(root, request_id, binding, snapshot)
+    original_binding = _stage_binding(binding, snapshot)
+    observed = host.inspect_command(snapshot["command_id"])
+    if (type(observed) is not dict or observed.get("Status") != "Success"
+            or observed.get("CommandId") != snapshot["command_id"]):
+        raise RuntimeError("original SSM snapshot observation unavailable")
+    receipt = parse_receipt(observed.get("StandardOutputContent", ""),
+                            original_binding)
+    if (type(receipt) is not dict or
+            type(receipt.get("result")) is not dict
+            or receipt != snapshot["result"]):
+        raise RuntimeError("original snapshot receipt differs from authenticated SSM history")
+    confirmed = copy.deepcopy(record)
+    _validate_result(snapshot, receipt, binding, confirmed)
+    if confirmed["recipe_identity"] != record["recipe_identity"]:
+        raise RuntimeError("selected recipe snapshot changed since authenticated producer result")
+    return receipt
+
+
 def status(root, request_id):
     _, binding = _base(root, request_id)
     with request_lock(root, request_id) as directory:
@@ -314,6 +358,10 @@ def advance(root, request_id, *, host_factory=Host):
             return _save(directory, value)  # durably freeze before SSM action
 
         step = steps[-1]
+        if step["phase"] == "prepared":
+            # Any prior intent (including after a journal-only rollback) is
+            # terminally uncertain, never a second authorization to send.
+            send_intent.refuse_if_claimed(root, request_id, binding, step)
         if step["phase"] in ("submitting", "uncertain"):
             value["phase"] = "uncertain"
             step["phase"] = "uncertain"
@@ -323,9 +371,17 @@ def advance(root, request_id, *, host_factory=Host):
             configuration = verify_current_target(root, binding)
             host = host_factory(configuration)
             producer_runtime_preflight(host, stage_binding)
+            if step["name"] == "submit":
+                _authenticate_snapshot_before_submit(
+                    root, request_id, host, binding, value)
             script = remote_script(stage_binding)
             step["phase"] = "submitting"
             _save(directory, value)  # fsync before AWS mutation
+            # This separate exclusive fsynced identity is committed AFTER
+            # read-only preflight and BEFORE the first external SendCommand.
+            # A restored older prepared journal cannot erase it; no send
+            # occurs if claim exists, is partial or has a changed identity.
+            send_intent.claim(root, request_id, binding, step)
             try:
                 command_id = host.submit_command(
                     script, seconds=CONTROL_TIMEOUT_SECONDS)
@@ -339,6 +395,18 @@ def advance(root, request_id, *, host_factory=Host):
                 step["phase"] = "uncertain"
                 _save(directory, value)
                 raise RuntimeError("SSM submission returned no durable command ID")
+            try:
+                # The original returned CommandId is itself bound to this
+                # exact send intent in a no-replacement fsynced sidecar.
+                # A missing receipt after a crash is HOLD, never permission
+                # to invent or submit a replacement operation.
+                send_intent.record_command(root, request_id, binding, step,
+                                           command_id)
+            except BaseException:
+                value["phase"] = "uncertain"
+                step["phase"] = "uncertain"
+                _save(directory, value)
+                raise
             step["command_id"] = command_id
             step["phase"] = "submitted"
             return _save(directory, value)
