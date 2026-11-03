@@ -1,7 +1,7 @@
 name: Selected graphical owner native-only gateway source denial
 on:
   push:
-    branches: [review/graphical-independent-send-owner-consumer-20261103]
+    branches: [review/graphical-selected-owner-direct-send-denial-20261103]
 permissions:
   contents: read
 jobs:
@@ -32,4 +32,4 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: python -m pytest -q -rs tests/test_graphics_selected_owner_direct_route_denial.py
-      - run: echo 'No protected owner installed or wired to SendCommand. No SSM, AWS, production pin or STATE.' >> "$GITHUB_STEP_SUMMARY"
+      - run: echo 'No protected owner installed. Gateway direct SendCommand denied. No SSM, AWS, production pin or STATE.' >> "$GITHUB_STEP_SUMMARY"
