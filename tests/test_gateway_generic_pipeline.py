@@ -24,6 +24,9 @@ def base():
         "schema":3,
         "request_id":GATEWAY,
         "source":SRC,
+        "lane":"graphical-test-lane",
+        "target":{"instance_id":"i-0123456789abcdef0","region":"us-east-1"},
+        "monthly_pin_identity":"sha256:"+"d"*64,
         "task":{
             "entries":RECIPES,
             "pin_date":"2026-10-01",
