@@ -87,7 +87,8 @@ def mock_environment(monkeypatch, *, wrong_capability=None, lost_reply=False):
             return "command-"+str(len(seen))
         def inspect_command(self,ident):
             seen.append(("inspect",ident))
-            return {"Status":"Success","StandardOutputContent":"fixture"}
+            return {"Status":"Success","CommandId":ident,
+                    "StandardOutputContent":"fixture"}
     def parse(text,binding):
         operation=binding["remote_request"]["operation"]
         if operation=="capabilities.inspect":
