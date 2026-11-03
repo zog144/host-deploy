@@ -158,6 +158,10 @@ def claim(gateway_root, request_id, binding, step):
     expected = _expected(binding, request_id, step)
     fd, filename = _open(gateway_root, request_id, step, create=True)
     try:
+        # A torn or rolled-back intent with a surviving original-CommandId
+        # receipt is an uncertain prior send, never a fresh slot.
+        if _load(fd, filename[:-5] + ".command.json") is not None:
+            _deny()
         try:
             leaf = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                            os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
@@ -200,7 +204,8 @@ def refuse_if_claimed(gateway_root, request_id, binding, step):
     _expected(binding, request_id, step)
     fd, filename = _open(gateway_root, request_id, step, create=True)
     try:
-        if _load(fd, filename) is not None:
+        if (_load(fd, filename) is not None
+                or _load(fd, filename[:-5] + ".command.json") is not None):
             _deny()
     finally:
         os.close(fd)
