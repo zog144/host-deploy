@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/image-build
-          ref: 54431ea8f5ed69fd120d5e862a2277c5d2a2c46d
+          ref: 6b64a7e1b6f9842554bd3b9eee5599e24ca2402c
           path: dependencies/image-build-pr9
           persist-credentials: false
       - name: Setup Python
