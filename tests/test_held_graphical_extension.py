@@ -223,3 +223,33 @@ def test_real_pinned_stage_dags_and_held_output_inventory():
         assert stage["runtime_package_stages"]
     assert value["authority"]["task_allowlist_extension_allowed"] is False
     assert value["authority"]["installed_authority_epoch"] is None
+
+
+
+@pytest.mark.parametrize("tool", held.TOOL_PROVENANCE_KEYS)
+def test_unobserved_tool_provenance_cannot_be_spoofed(tool):
+    row = proposal()
+    row["required_tool_provenance_receipts"][tool] = {
+        "selected": "system-host-compiler", "passed": True,
+    }
+    with pytest.raises(held.HeldProposalRejected, match="tool provenance"):
+        held.validate(row)
+
+
+@pytest.mark.parametrize("component", held.RIGHTS_COMPONENTS)
+def test_original_source_notice_does_not_grant_redistribution(component):
+    row = proposal()
+    row["rights"]["component_rights_receipts"][component] = "sha256:"+"f"*64
+    with pytest.raises(held.HeldProposalRejected, match="component rights"):
+        held.validate(row)
+
+
+def test_missing_tool_or_component_rights_slot_denied():
+    row = proposal()
+    del row["required_tool_provenance_receipts"]["XKB-and-font-tools"]
+    with pytest.raises(held.HeldProposalRejected):
+        held.validate(row)
+    row = proposal()
+    del row["rights"]["component_rights_receipts"]["turbovnc-xserver"]
+    with pytest.raises(held.HeldProposalRejected):
+        held.validate(row)
