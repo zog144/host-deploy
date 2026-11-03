@@ -292,8 +292,7 @@ def _authenticate_snapshot_before_submit(root, request_id, host, binding, record
     original_binding = _stage_binding(binding, snapshot)
     observed = host.inspect_command(snapshot["command_id"])
     if (type(observed) is not dict or observed.get("Status") != "Success"
-            or (observed.get("CommandId") is not None and
-                observed["CommandId"] != snapshot["command_id"])):
+            or observed.get("CommandId") != snapshot["command_id"]):
         raise RuntimeError("original SSM snapshot observation unavailable")
     receipt = parse_receipt(observed.get("StandardOutputContent", ""),
                             original_binding)
