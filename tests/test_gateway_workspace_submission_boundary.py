@@ -23,7 +23,7 @@ from zog.host_deploy.gateway import (
 from test_gateway_graphics_chain_gateway import runner
 from test_gateway_graphics_chain_export import setup as export_fixture
 
-PR9_SOURCE = "54431ea8f5ed69fd120d5e862a2277c5d2a2c46d"
+PR9_SOURCE = "6b64a7e1b6f9842554bd3b9eee5599e24ca2402c"
 MESA_REVIEWED = "9cbd652226b863a7b4bb2d6d9539722e1a262508"
 OLD_MESA = "0" * 40
 X11 = chain.TASKS[2]
