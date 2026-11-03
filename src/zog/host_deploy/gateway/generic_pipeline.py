@@ -110,7 +110,7 @@ def _read(directory, binding, gateway_id):
         # find its separate exclusive intent. The same unkeyed JSON receipt
         # cannot manufacture or erase an SSM send.
         if step["phase"] in ("submitted", "completed"):
-            send_intent.require_claim(directory.parents[1], gateway_id, binding, step)
+            send_intent.require_command(directory.parents[1], gateway_id, binding, step)
         if i == 0:
             if step["name"] != "capabilities":
                 raise RuntimeError("generic pipeline stage order mismatch")
@@ -288,7 +288,7 @@ def _authenticate_snapshot_before_submit(root, request_id, host, binding, record
             or not snapshot["command_id"] or
             type(snapshot["result"]) is not dict):
         raise RuntimeError("original snapshot has no completed command identity")
-    send_intent.require_claim(root, request_id, binding, snapshot)
+    send_intent.require_command(root, request_id, binding, snapshot)
     original_binding = _stage_binding(binding, snapshot)
     observed = host.inspect_command(snapshot["command_id"])
     if (type(observed) is not dict or observed.get("Status") != "Success"
@@ -396,6 +396,18 @@ def advance(root, request_id, *, host_factory=Host):
                 step["phase"] = "uncertain"
                 _save(directory, value)
                 raise RuntimeError("SSM submission returned no durable command ID")
+            try:
+                # The original returned CommandId is itself bound to this
+                # exact send intent in a no-replacement fsynced sidecar.
+                # A missing receipt after a crash is HOLD, never permission
+                # to invent or submit a replacement operation.
+                send_intent.record_command(root, request_id, binding, step,
+                                           command_id)
+            except BaseException:
+                value["phase"] = "uncertain"
+                step["phase"] = "uncertain"
+                _save(directory, value)
+                raise
             step["command_id"] = command_id
             step["phase"] = "submitted"
             return _save(directory, value)
