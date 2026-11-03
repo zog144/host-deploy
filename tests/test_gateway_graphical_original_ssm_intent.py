@@ -45,8 +45,8 @@ def test_operation_and_original_command_are_separate_exclusive_records(
     assert original.stat().st_mode & 0o777 == 0o600
     # Not a new send authority even with the original exact bytes.
     with pytest.raises(intent.SendIntentBlocked):
-        intent.claim(tmp_path, GATEWAY, pipeline.base_for_tests if False
-                     else pipeline._base(tmp_path, GATEWAY)[1], step)
+        intent.claim(tmp_path, GATEWAY,
+                     pipeline._base(tmp_path, GATEWAY)[1], step)
 
 
 def test_lost_ack_plus_prepared_journal_replay_never_sends_twice(
@@ -127,3 +127,59 @@ def test_original_snapshot_ssm_readback_unavailable_holds_before_submit(
     # A transient inspection outage does not mint an SSM send intent.
     submit = state["stages"][-1]
     assert not _sidecar(tmp_path, submit, ".json").exists()
+
+
+
+def test_surviving_command_receipt_with_missing_intent_never_reissues(
+        tmp_path, monkeypatch):
+    Host, calls = mock_environment(monkeypatch)
+    prepared = pipeline.advance(tmp_path, GATEWAY, host_factory=Host)
+    original = tmp_path/"requests"/GATEWAY/pipeline.FILE
+    previous = original.read_bytes()
+    sent = pipeline.advance(tmp_path, GATEWAY, host_factory=Host)
+    step = sent["stages"][0]
+    intent_path = _sidecar(tmp_path, step, ".json")
+    command_path = _sidecar(tmp_path, step, ".command.json")
+    assert intent_path.exists() and command_path.exists()
+    intent_path.unlink()
+    original.write_bytes(previous)
+    with pytest.raises(intent.SendIntentBlocked):
+        pipeline.advance(tmp_path, GATEWAY, host_factory=Host)
+    assert len([v for v in calls if v[0] == "submit"]) == 1
+
+
+@pytest.mark.parametrize("observation", ("foreign-command-id", "missing-command-id",
+                                          "failed-status", "stale-result"))
+def test_external_snapshot_readback_requires_original_ssm_identity_and_result(
+        tmp_path, monkeypatch, observation):
+    Host, calls, path, prepared = _at_stage(tmp_path, monkeypatch, "submit")
+    original = next(s for s in prepared["stages"] if s["name"] == "snapshot")
+    count = _count_submit(calls)
+    inspect = Host.inspect_command
+
+    def changed(self, command_id):
+        if command_id != original["command_id"]:
+            return inspect(self, command_id)
+        found = inspect(self, command_id)
+        if observation == "foreign-command-id":
+            found["CommandId"] = "another-ssm-invocation"
+        elif observation == "missing-command-id":
+            found.pop("CommandId")
+        elif observation == "failed-status":
+            found["Status"] = "Failed"
+        return found
+
+    monkeypatch.setattr(Host, "inspect_command", changed)
+    if observation == "stale-result":
+        old_parser = pipeline.parse_receipt
+
+        def forged(text, binding):
+            value = old_parser(text, binding)
+            if binding["remote_request"]["operation"] == "recipes.snapshot":
+                value["result"]["recipe_identity"] = "sha256:" + "0"*64
+            return value
+
+        monkeypatch.setattr(pipeline, "parse_receipt", forged)
+    with pytest.raises(RuntimeError):
+        pipeline.advance(tmp_path, GATEWAY, host_factory=Host)
+    assert _count_submit(calls) == count
