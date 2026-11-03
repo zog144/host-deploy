@@ -204,3 +204,77 @@ def test_existing_native_x11_submission_requires_distinct_future_acceptance(
     assert ["X11", "Mesa"] in plan["producer_edges"]
     assert ["LLVM", "Mesa"] in plan["producer_edges"]
     assert plan["rights_gate"].startswith("HOLD:")
+
+
+
+def test_selected_graphical_task_source_revision_is_bound_to_native_catalogue():
+    # A 40-hex SHA is syntactically plausible, but not the protected lane pin.
+    from test_gateway_graphics_generation_chain import scenario, evidence, FONTS
+    policy, first_catalogue, first_receipt = scenario()
+    successor = chain.resolve_successor(
+        policy=policy, previous_task=chain.TASKS[0],
+        previous_catalogue=first_catalogue, previous_receipt=first_receipt,
+        accepted_generation=evidence(policy, chain.TASKS[0], first_catalogue, FONTS))
+    selected = successor["catalogue"]
+    assert task_catalogue.select(selected, chain.TASKS[1],
+        repository=chain.first.REPOSITORY, revision=chain.first.SOURCE,
+        lane=policy["lane"], monthly_pin_identity=policy["monthly_pin_identity"])
+    for invalid in (PR9_SOURCE, "f"*40):
+        with pytest.raises(task_catalogue.TaskCatalogueError,
+                           match="source/lane/pin differs"):
+            task_catalogue.select(selected, chain.TASKS[1],
+                repository=chain.first.REPOSITORY, revision=invalid,
+                lane=policy["lane"],
+                monthly_pin_identity=policy["monthly_pin_identity"])
+
+
+def test_catalogue_relabel_or_fabricated_mesa_task_is_not_a_selected_job():
+    from test_gateway_graphics_generation_chain import scenario, evidence, FONTS
+    policy, first_catalogue, first_receipt = scenario()
+    successor = chain.resolve_successor(
+        policy=policy, previous_task=chain.TASKS[0],
+        previous_catalogue=first_catalogue, previous_receipt=first_receipt,
+        accepted_generation=evidence(policy, chain.TASKS[0], first_catalogue, FONTS))
+    catalogue = copy.deepcopy(successor["catalogue"])
+    spec = catalogue["tasks"].pop(chain.TASKS[1])
+    catalogue["tasks"][chain.TASKS[2]] = spec
+    with pytest.raises(task_catalogue.TaskCatalogueError):
+        task_catalogue.validate(catalogue)
+    catalogue["tasks"] = {MESA_TASK: spec}
+    with pytest.raises(task_catalogue.TaskCatalogueError):
+        task_catalogue.validate(catalogue)
+
+
+def test_signed_looking_local_export_cannot_overwrite_selected_source(
+        tmp_path, monkeypatch):
+    pin, payload, signed, _, _ = export_fixture()
+    copied = copy.deepcopy(payload)
+    catalogue = copied["catalogue"]
+    selected = catalogue["tasks"][copied["task"]]
+    selected["source_revision"] = PR9_SOURCE
+    copied["catalogue_sha256"] = chain._hash(catalogue)
+    copied["source_revision"] = PR9_SOURCE
+    # Reusing a valid signature from a different source is not authority.
+    forged = export._canonical({"payload": copied,
+                                "signature": json.loads(signed)["signature"]})
+    obj, prepared, advanced = _non_authorizing_gateway(
+        tmp_path, monkeypatch, fake_export=forged)
+    with pytest.raises(export.GraphicalExportBlocked):
+        obj._advance_one_reviewed()
+    assert not prepared and not advanced
+
+
+def test_prepared_dispatch_with_stale_source_catalogue_digest_never_advances(
+        tmp_path, monkeypatch):
+    from test_gateway_graphics_chain_gateway import APPROVAL_DIGEST
+    obj, prepared, advanced = _non_authorizing_gateway(tmp_path, monkeypatch)
+    # Test the current gateway's actual immutable dispatch consistency
+    # boundary without allowing a synthetic generic advance.
+    state = {"phase":"prepared","binding":{
+        "task_catalogue_identity":"sha256:"+"a"*64}}
+    monkeypatch.setattr(consumer,"load_dispatch",lambda *_:state)
+    # The missing authenticated export must be rejected first, even with
+    # a preexisting dispatch that claims to be already frozen.
+    with pytest.raises(export.GraphicalExportBlocked):
+        obj._advance_one_reviewed()
+    assert not prepared and not advanced
