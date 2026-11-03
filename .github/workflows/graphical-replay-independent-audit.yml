@@ -36,6 +36,7 @@ jobs:
           python -m compileall -q src/zog/host_deploy/gateway tests/test_gateway_graphical_replay_invariant.py
           PYTHONPATH=src:tests python -m pytest -q -rx \
             tests/test_gateway_graphical_replay_invariant.py \
+            tests/test_gateway_graphical_original_ssm_intent.py \
             tests/test_gateway_graphical_submission_journal_review.py \
             tests/test_gateway_workspace_submission_boundary.py \
             tests/test_gateway_generic_pipeline.py \
