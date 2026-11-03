@@ -99,7 +99,7 @@ def inspect_only_source_boundary(binding, request_id, step, *,
 # The older PR28 claim-only envelope below is retained solely for historical
 # source test comparison; it is NEVER a permission to send from the gateway.
 SELECTED_OWNER_SCHEMA = "zog-protected-graphical-operation-request-v1"
-SELECTED_ROOT_OWNER_SOURCE = "2078f0f76c23fed44da0d4f073693786e32a1cc2"
+SELECTED_ROOT_OWNER_SOURCE = "12bcaa70a16ad6e1d9e017a07ca373e511f1e910"
 PROTECTED_SELECTION_FIELDS = frozenset({
     "host_id", "installation_id", "state_volume_id", "task",
     "base_generation_id", "predecessor_receipt_sha256",
