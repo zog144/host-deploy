@@ -80,7 +80,10 @@
       "recipe_status": "SOURCE_PLAN_NOT_CANONICAL",
       "outputs": [
         "usr/lib/libLLVM.so",
-        "usr/bin/llvm-tblgen"
+        "usr/bin/llvm-tblgen",
+        "usr/bin/llvm-config",
+        "usr/share/licenses/llvm/LICENSE.TXT",
+        "usr/share/licenses/llvm/BLAKE3-LICENSE"
       ],
       "accepted_generation_receipt": null
     },
@@ -99,7 +102,9 @@
       "recipe_status": "SOURCE_PLAN_NOT_CANONICAL",
       "outputs": [
         "usr/lib/libGL.so",
-        "usr/lib/dri/swrast_dri.so"
+        "usr/lib/dri/swrast_dri.so",
+        "usr/share/licenses/mesa/license.rst",
+        "usr/share/licenses/mesa/glapi-generator-license.py"
       ],
       "accepted_generation_receipt": null
     },
@@ -119,7 +124,12 @@
       "recipe_path": "project/graphics-first-workspace/turbovnc-draft/stages/final/dependencies.py",
       "recipe_status": "DRAFT_NOT_PACKAGE_ADMITTED",
       "outputs": [
-        "usr/bin/Xvnc"
+        "usr/bin/Xvnc",
+        "usr/bin/vncserver",
+        "usr/bin/vncpasswd",
+        "usr/share/licenses/turbovnc/LICENSE.txt",
+        "usr/share/licenses/turbovnc/Xserver-COPYING",
+        "usr/share/licenses/turbovnc/libsha1-COPYING"
       ],
       "accepted_generation_receipt": null
     },
@@ -139,7 +149,9 @@
       "outputs": [
         "usr/bin/i3",
         "usr/bin/i3bar",
-        "usr/bin/i3-msg"
+        "usr/bin/i3-msg",
+        "usr/bin/i3-nagbar",
+        "usr/share/licenses/i3/LICENSE"
       ],
       "accepted_generation_receipt": null
     },
@@ -157,7 +169,10 @@
       "recipe_path": "project/package/xterm/stages/final/dependencies.py",
       "recipe_status": "SOURCE_AUTHORED_NATIVE_HELD",
       "outputs": [
-        "usr/bin/xterm"
+        "usr/bin/xterm",
+        "usr/share/X11/app-defaults/XTerm",
+        "usr/share/terminfo/x/xterm",
+        "usr/share/licenses/xterm/COPYING"
       ],
       "accepted_generation_receipt": null
     },
@@ -181,7 +196,9 @@
       "recipe_status": "SOURCE_PLAN_NOT_CANONICAL",
       "outputs": [
         "usr/bin/glxgears",
-        "usr/bin/glxinfo"
+        "usr/bin/glxinfo",
+        "usr/share/licenses/mesa-demos/glxgears.c",
+        "usr/share/licenses/mesa-demos/glxinfo.c"
       ],
       "accepted_generation_receipt": null
     }
