@@ -256,7 +256,7 @@ def test_signed_looking_local_export_cannot_overwrite_selected_source(
     copied["source_revision"] = PR9_SOURCE
     # Reusing a valid signature from a different source is not authority.
     forged = export._canonical({"payload": copied,
-                                "signature": json.loads(signed)["signature"]})
+                                "signature": json.loads(signed(payload))["signature"]})
     obj, prepared, advanced = _non_authorizing_gateway(
         tmp_path, monkeypatch, fake_export=forged)
     with pytest.raises(export.GraphicalExportBlocked):
