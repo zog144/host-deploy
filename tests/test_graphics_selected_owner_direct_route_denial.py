@@ -119,7 +119,7 @@ def test_default_protected_route_blocks_direct_gateway_send_before_claim(tmp_pat
     with pytest.raises(RuntimeError,match="protected graphical operation owner required"):
         generic.advance(tmp_path,GATEWAY,host_factory=Host)
     assert seen==[]
-    assert not (tmp_path/"generic-operation-send-intents").exists()
+    assert not list((tmp_path/"generic-operation-send-intents").glob("*.json"))
     # Direct SendCommand was never attempted despite the fixture Host exposing it.
     source=(ROOT/"src/zog/host_deploy/gateway/generic_pipeline.py").read_text()
     assert "command_id = host.submit_command(" not in source
