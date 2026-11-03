@@ -35,6 +35,102 @@ MIN_RESOURCES = {
     "mesa-demos-smoke": {"usr/bin/glxgears", "usr/bin/glxinfo",
                          "usr/lib/dri/swrast_dri.so"},
 }
+FROZEN_STAGE_DEPENDENCIES = {
+  "Xvnc": {
+    "build": [
+      "libjpeg-turbo-final",
+      "pixman-final",
+      "xkeyboard-config-final",
+      "libX11-final",
+      "libXau-final",
+      "libXdmcp-final",
+      "libxkbfile-final",
+      "libXfont2-final",
+      "mesa-final",
+      "openssl-final",
+      "zlib-native-environment",
+      "libXext-final",
+      "libXrender-final",
+      "xorgproto-final",
+      "xkbcomp-final"
+    ],
+    "runtime": [
+      "libjpeg-turbo-final",
+      "pixman-final",
+      "xkeyboard-config-final",
+      "libX11-final",
+      "libXau-final",
+      "libXdmcp-final",
+      "libxkbfile-final",
+      "libXfont2-final",
+      "mesa-final",
+      "openssl-final",
+      "zlib-native-environment",
+      "libXext-final",
+      "libXrender-final",
+      "xorgproto-final",
+      "xkbcomp-final"
+    ]
+  },
+  "i3": {
+    "build": [
+      "libev-final",
+      "yajl-final",
+      "startup-notification-final",
+      "libxkbcommon-final",
+      "xkeyboard-config-final",
+      "libX11-final",
+      "libxcb-final",
+      "xcb-util-final",
+      "xcb-util-wm-final",
+      "xcb-util-cursor-final",
+      "xcb-util-keysyms-final",
+      "xcb-util-xrm-final",
+      "glib-final",
+      "cairo-final",
+      "pango-final",
+      "pcre2-final"
+    ],
+    "runtime": [
+      "libev-final",
+      "yajl-final",
+      "startup-notification-final",
+      "libxkbcommon-final",
+      "xkeyboard-config-final",
+      "libX11-final",
+      "libxcb-final",
+      "xcb-util-final",
+      "xcb-util-wm-final",
+      "xcb-util-cursor-final",
+      "xcb-util-keysyms-final",
+      "xcb-util-xrm-final",
+      "glib-final",
+      "cairo-final",
+      "pango-final",
+      "pcre2-final"
+    ]
+  },
+  "xterm": {
+    "build": [
+      "libXt-final",
+      "libXaw-final",
+      "libXmu-final",
+      "libXpm-final",
+      "libXft-final",
+      "ncurses-temporary"
+    ],
+    "runtime": [
+      "libXt-final",
+      "libXaw-final",
+      "libXmu-final",
+      "libXpm-final",
+      "libXft-final",
+      "ncurses-temporary",
+      "luit-final",
+      "basic-font-final"
+    ]
+  }
+}
 REQUIRED_SOURCE_DEPENDENCIES = {
     "Xvnc": {"xkbcomp-final", "xkeyboard-config-final", "mesa-final",
              "openssl-final", "zlib-native-environment", "pixman-final",
@@ -240,6 +336,10 @@ def validate(proposal):
                            for x in dep_list)):
                 _deny("unreviewed package-stage graph")
         if stage["id"] in STAGE_DAG_PATHS:
+            frozen = FROZEN_STAGE_DEPENDENCIES[stage["id"]]
+            if (stage["build_package_stages"] != frozen["build"] or
+                    stage["runtime_package_stages"] != frozen["runtime"]):
+                _deny("pinned source package stage DAG differs from review")
             if (stage["recipe_path"] != STAGE_DAG_PATHS[stage["id"]]
                     or not REQUIRED_SOURCE_DEPENDENCIES[stage["id"]].issubset(
                         set(stage["build_package_stages"]) |
