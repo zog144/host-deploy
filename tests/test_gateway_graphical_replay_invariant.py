@@ -1,9 +1,8 @@
-"""Independent replay review of PR #15, not a production acceptance suite.
+"""Offline regression gates for original-operation and snapshot-history replay.
 
-Expected-failure cases are deliberately tagged STRICT: an XPASS is a test
-maintenance failure, while an XFAIL is a documented unresolved security
-property. No GitHub Actions run of these tests authorizes a compiler job.
+Tests exercise a synthetic SSM adapter, never a real AWS or compiler host.
 """
+
 import hashlib
 import json
 
@@ -14,11 +13,6 @@ from test_gateway_generic_pipeline import GATEWAY, mock_environment
 from test_gateway_graphical_submission_journal_review import _at_stage
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PR15 lacks independently protected per-operation sent fence; "
-           "old prepared journal can be restored after SSM SendCommand",
-)
 def test_rollback_of_submitted_pipeline_prepared_state_must_not_send_again(
         tmp_path, monkeypatch):
     """The *same original* frozen valid request can be replayed unmodified.
@@ -38,16 +32,13 @@ def test_rollback_of_submitted_pipeline_prepared_state_must_not_send_again(
     # Synthetic local journal restoration: same valid request, exact original
     # SHA, correct order and operation ID; no SSM or remote access in tests.
     path.write_bytes(originally_prepared_bytes)
-    generic.advance(tmp_path, GATEWAY, host_factory=Host)
+    from zog.host_deploy.gateway import graphics_operation_send_intent
+    with pytest.raises(graphics_operation_send_intent.SendIntentBlocked):
+        generic.advance(tmp_path, GATEWAY, host_factory=Host)
     assert sum(k == "submit" and v == "pipeline.submit" for k,v in calls) == initial_count + 1, (
         "second SSM submission for same operation after journal replay")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PR15 binds recipe_snapshot to mutable journal snapshot receipt, "
-           "not to the original independently observed SSM snapshot result",
-)
 def test_coherently_rewritten_snapshot_history_must_not_submit(
         tmp_path, monkeypatch):
     """A forged snapshot+result+hash can satisfy current PR15 _read checks."""
@@ -66,7 +57,8 @@ def test_coherently_rewritten_snapshot_history_must_not_submit(
         generic._canonical(submit_step["request"])).hexdigest()
     path.write_text(json.dumps(state))
     count = sum(k == "submit" and v == "pipeline.submit" for k,v in calls)
-    generic.advance(tmp_path, GATEWAY, host_factory=Host)
+    with pytest.raises(RuntimeError, match="original snapshot receipt differs"):
+        generic.advance(tmp_path, GATEWAY, host_factory=Host)
     assert sum(k == "submit" and v == "pipeline.submit" for k,v in calls) == count, (
         "substituted recipe snapshot sent to producer with forged local history")
 
