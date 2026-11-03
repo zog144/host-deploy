@@ -55,7 +55,18 @@
     "native_installed_notice_sha256_accepted": false,
     "evidence_source_revision": "a1ad8fd41186d70cc2f7d8f4ebe7b0ae54e4f023",
     "independently_approved_rights_receipt": null,
-    "hold_reason": "TurboVNC bundled Xserver/libsha1/zlib-ng and LLVM/Mesa/libdrm/mesa-demos plus desktop component rights require selected-object and notice review."
+    "hold_reason": "TurboVNC bundled Xserver/libsha1/zlib-ng and LLVM/Mesa/libdrm/mesa-demos plus desktop component rights require selected-object and notice review.",
+    "component_rights_receipts": {
+      "turbovnc-xserver": null,
+      "turbovnc-libsha1": null,
+      "turbovnc-zlib-ng-excluded": null,
+      "llvm-generated-blake3": null,
+      "mesa-glapi-generated": null,
+      "mesa-llvmpipe": null,
+      "libdrm-common": null,
+      "mesa-demos-glxgears": null,
+      "mesa-demos-glxinfo": null
+    }
   },
   "execution": {
     "workers_authorized": false,
@@ -373,5 +384,12 @@
     "xorgproto-final": null,
     "yajl-final": null,
     "zlib-native-environment": null
+  },
+  "required_tool_provenance_receipts": {
+    "C-C++-linker-ar-objcopy-readelf": null,
+    "meson-ninja-cmake-pkgconf": null,
+    "python-generators": null,
+    "XKB-and-font-tools": null,
+    "build-utilities": null
   }
 }
