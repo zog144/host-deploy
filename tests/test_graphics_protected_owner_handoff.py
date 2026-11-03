@@ -96,7 +96,14 @@ def test_changed_local_binding_cannot_reuse_original_signed_approval(mutate):
     owner,operator,db=fixture()
     a,s=approval(owner,operator,original)
     modified=binding();mutate(modified)
-    changed=handoff.original_operation_claim(modified,REQUEST_ID,stage(),
+    rewritten=stage()
+    # Coherent journal substitution must also rewrite its own request digest.
+    # An obviously inconsistent source is already stopped by the local gate;
+    # this tests the additional independent signed-owner denial.
+    rewritten["request"]["source"]=modified["source"]
+    rewritten["request_sha256"]=hashlib.sha256(
+        intent._canonical(rewritten["request"])).hexdigest()
+    changed=handoff.original_operation_claim(modified,REQUEST_ID,rewritten,
                                              protected_generation_sha256=GENERATION)
     with pytest.raises(owner_module.SendOwnerDenied):
         owner.claim_once(claim=changed,approval=a,approval_signature=s,now=400)
