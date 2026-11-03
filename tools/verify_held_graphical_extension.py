@@ -11,6 +11,15 @@ import re
 import subprocess
 
 SCHEMA = "zog-held-graphical-extension-proposal-v1"
+TOOL_PROVENANCE_KEYS = (
+    "C-C++-linker-ar-objcopy-readelf", "meson-ninja-cmake-pkgconf",
+    "python-generators", "XKB-and-font-tools", "build-utilities",
+)
+RIGHTS_COMPONENTS = (
+    "turbovnc-xserver","turbovnc-libsha1","turbovnc-zlib-ng-excluded",
+    "llvm-generated-blake3","mesa-glapi-generated","mesa-llvmpipe",
+    "libdrm-common","mesa-demos-glxgears","mesa-demos-glxinfo",
+)
 STAGE_DAG_PATHS = {
     "Xvnc": "project/graphics-first-workspace/turbovnc-draft/stages/final/dependencies.py",
     "i3": "project/package/i3/stages/final/dependencies.py",
@@ -193,7 +202,8 @@ def validate(proposal):
     _exact(proposal, (
         "schema", "status", "purpose", "candidate_revision", "producer",
         "authority", "required_predecessor_receipts", "rights", "execution",
-        "stage_order", "smoke", "required_package_stage_receipts"
+        "stage_order", "smoke", "required_package_stage_receipts",
+        "required_tool_provenance_receipts"
     ), "proposal")
     if (proposal["schema"] != SCHEMA or proposal["status"] != STATUS
             or proposal["candidate_revision"] != "2026-11-03"):
@@ -267,7 +277,13 @@ def validate(proposal):
         "compiled_object_mapping_accepted",
         "native_installed_notice_sha256_accepted", "evidence_source_revision",
         "independently_approved_rights_receipt", "hold_reason",
+        "component_rights_receipts",
     ), "rights")
+    if (type(rights["component_rights_receipts"]) is not dict
+            or set(rights["component_rights_receipts"]) != set(RIGHTS_COMPONENTS)
+            or any(v is not None for v in
+                   rights["component_rights_receipts"].values())):
+        _deny("component rights or notice decision fabricated")
     if (rights["original_archive_notice_inventory"] !=
                 "SOURCE_HASHES_ONLY_NOT_LICENSE_GRANT"
             or rights["rights_holder_authorized"] is not False
@@ -356,6 +372,10 @@ def validate(proposal):
                 "SOURCE_PLAN_NOT_CANONICAL", "DRAFT_NOT_PACKAGE_ADMITTED",
                 "SOURCE_AUTHORED_NATIVE_HELD"):
             _deny("source-only recipe was promoted")
+    tools = proposal["required_tool_provenance_receipts"]
+    if (type(tools) is not dict or set(tools) != set(TOOL_PROVENANCE_KEYS)
+            or any(v is not None for v in tools.values())):
+        _deny("missing or invented selected tool provenance")
     package_receipts = proposal["required_package_stage_receipts"]
     all_package_ids = {d for stage in stages for d in (
         stage["build_package_stages"] + stage["runtime_package_stages"])}
@@ -405,6 +425,21 @@ def attest_source_checkouts(proposal, pr9_checkout, mesa_checkout):
     closure = json.loads((root / p["closure_path"]).read_bytes())
     rights = json.loads((root / p["original_rights_matrix_path"]).read_bytes())
     supplemental = json.loads((root / p["unresolved_rights_path"]).read_bytes())
+    actual_rights = {c["id"]: c for c in rights["components"]}
+    supplemental_rights = {c["id"]: c for c in supplemental["components"]}
+    if (set(actual_rights) != set(RIGHTS_COMPONENTS)
+            or set(supplemental_rights) != set(RIGHTS_COMPONENTS)
+            or any(actual_rights[k]["redistribution_status"] != "HOLD"
+                   or actual_rights[k]["source_bytes_status"] !=
+                      "pinned_original_archive_member_sha256_observed"
+                   or supplemental_rights[k]["rights_decision"] !=
+                      "HOLD_ORIGINAL_NOTICE_NOT_AUTHORITY"
+                   or supplemental_rights[k]["compiled_inclusion_evidence"] is not None
+                   or supplemental_rights[k]["installed_notice_sha256_evidence"] is not None
+                   for k in RIGHTS_COMPONENTS)
+            or set(handoff["required_tool_provenance"]) !=
+               set(TOOL_PROVENANCE_KEYS)):
+        _deny("independent component-rights or build-tool evidence missing")
     if (handoff.get("status") != "PREPARED_NOT_SUBMITTABLE"
             or handoff.get("build_submission_allowed") is not False
             or handoff.get("native_accepted") is not False
