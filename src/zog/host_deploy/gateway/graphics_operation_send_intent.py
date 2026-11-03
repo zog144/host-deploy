@@ -191,3 +191,63 @@ def refuse_if_claimed(gateway_root, request_id, binding, step):
             _deny()
     finally:
         os.close(fd)
+
+
+
+def _command_record(binding, request_id, step, command_id):
+    expected = _expected(binding, request_id, step)
+    if (type(command_id) is not str or
+            not 1 <= len(command_id) <= 128 or
+            any(ord(c) < 0x21 or ord(c) > 0x7e for c in command_id)):
+        _deny()
+    return {
+        "schema": "host-deploy-generic-original-ssm-command-v1",
+        "send_intent_sha256": hashlib.sha256(_canonical(expected)).hexdigest(),
+        "operation_id": step["operation_id"],
+        "command_id": command_id,
+    }
+
+
+def record_command(gateway_root, request_id, binding, step, command_id):
+    """Publish returned original CommandId once, never replace or amend.
+
+    A crash after SendCommand but before this publication leaves only the
+    durable intent, so recovery cannot send again or invent a CommandId.
+    """
+    require_claim(gateway_root, request_id, binding, step)
+    record = _command_record(binding, request_id, step, command_id)
+    fd, name = _open(gateway_root, request_id, step)
+    name = name[:-5] + ".command.json"
+    try:
+        try:
+            leaf = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                           os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=fd)
+        except OSError:
+            _deny()
+        raw = _canonical(record)
+        try:
+            if os.write(leaf, raw) != len(raw):
+                _deny()
+            os.fsync(leaf)
+        finally:
+            os.close(leaf)
+        os.fsync(fd)
+        if _load(fd, name) != record:
+            _deny()
+        return record
+    finally:
+        os.close(fd)
+
+
+def require_command(gateway_root, request_id, binding, step):
+    """Prove CommandId is original, not a substituted journal string."""
+    require_claim(gateway_root, request_id, binding, step)
+    record = _command_record(binding, request_id, step,
+                             step.get("command_id"))
+    fd, name = _open(gateway_root, request_id, step)
+    try:
+        if _load(fd, name[:-5] + ".command.json") != record:
+            _deny()
+        return record
+    finally:
+        os.close(fd)
