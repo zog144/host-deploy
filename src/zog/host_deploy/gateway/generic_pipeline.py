@@ -27,6 +27,16 @@ STAGES = ("capabilities", "snapshot", "submit", "inspect")
 IDENTITY = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
+def _selected_protected_owner_sender(root, binding, step):
+    """Privileged root owner must make the sole SSM send under its CAS lock.
+
+    This source has NO installed owner transport. Never fall back to the
+    gateway's direct Host.submit_command, even after a lost ACK or restart.
+    Synthetic tests replace this private function; no public option controls it.
+    """
+    raise RuntimeError("protected graphical operation owner required; native sender unavailable")
+
+
 def _operation_id(gateway_id, name, ordinal=0):
     return hashlib.sha256(
         ("zog-generic-pipeline-v1:" + gateway_id + ":" + name +
@@ -375,6 +385,13 @@ def advance(root, request_id, *, host_factory=Host):
                 _authenticate_snapshot_before_submit(
                     root, request_id, host, binding, value)
             script = remote_script(stage_binding)
+            # BEFORE any local mutation or send-intent publication: require
+            # the independently installed privileged owner-selected sender.
+            # The owner MUST commit its nonrollbackable operation claim and
+            # perform the only SSM SendCommand under the revocation lock.
+            protected_sender = _selected_protected_owner_sender(root, binding, step)
+            if not callable(protected_sender):
+                raise RuntimeError("protected graphical owner transport unavailable")
             step["phase"] = "submitting"
             _save(directory, value)  # fsync before AWS mutation
             # This separate exclusive fsynced identity is committed AFTER
@@ -383,7 +400,11 @@ def advance(root, request_id, *, host_factory=Host):
             # occurs if claim exists, is partial or has a changed identity.
             send_intent.claim(root, request_id, binding, step)
             try:
-                command_id = host.submit_command(
+                # No gateway-owned direct SendCommand fallback. The selected
+                # owner transport must independently authenticate the immutable
+                # original request, commit the protected claim, send once, and
+                # provide its original authenticated CommandId.
+                command_id = protected_sender(
                     script, seconds=CONTROL_TIMEOUT_SECONDS)
             except BaseException:
                 value["phase"] = "uncertain"
