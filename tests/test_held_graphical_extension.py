@@ -151,3 +151,75 @@ def test_checkout_revision_substitution_never_becomes_a_generation():
     # Same checkout cannot satisfy the distinct image-build Mesa PR #8 ref.
     with pytest.raises(held.HeldProposalRejected, match="moving or stale"):
         held.attest_source_checkouts(proposal(), pr9, pr9)
+
+
+
+@pytest.mark.parametrize("stage,kind,missing", (
+    ("Xvnc", "build_package_stages", "xkbcomp-final"),
+    ("Xvnc", "runtime_package_stages", "mesa-final"),
+    ("Xvnc", "build_package_stages", "libjpeg-turbo-final"),
+    ("Xvnc", "build_package_stages", "openssl-final"),
+    ("i3", "build_package_stages", "xcb-util-cursor-final"),
+    ("i3", "runtime_package_stages", "pango-final"),
+    ("i3", "build_package_stages", "yajl-final"),
+    ("xterm", "runtime_package_stages", "luit-final"),
+    ("xterm", "build_package_stages", "ncurses-temporary"),
+))
+def test_missing_original_image_build_package_stage_is_not_a_held_complete_plan(
+        stage,kind,missing):
+    value=proposal()
+    item=next(x for x in value["stage_order"] if x["id"]==stage)
+    item[kind].remove(missing)
+    with pytest.raises(held.HeldProposalRejected):
+        held.validate(value)
+
+
+@pytest.mark.parametrize("stage,resource", (
+    ("Xvnc", "usr/bin/xkbcomp"),
+    ("Xvnc", "usr/share/X11/xkb"),
+    ("Xvnc", "usr/share/fonts/X11/misc/6x13.pcf.gz"),
+    ("Xvnc", "usr/lib/dri/swrast_dri.so"),
+    ("Xvnc", "usr/share/licenses/turbovnc/Xserver-COPYING"),
+    ("i3", "usr/bin/i3bar"),
+    ("xterm", "usr/bin/luit"),
+    ("xterm", "usr/share/terminfo/x/xterm"),
+    ("xterm", "usr/share/X11/app-defaults/XTerm"),
+    ("mesa-demos-smoke", "usr/bin/glxgears"),
+))
+def test_missing_graphical_native_resource_cannot_be_silently_omitted(
+        stage,resource):
+    value=proposal()
+    item=next(x for x in value["stage_order"] if x["id"]==stage)
+    item["required_installed_resources"].remove(resource)
+    with pytest.raises(held.HeldProposalRejected, match="missing native graphical resource"):
+        held.validate(value)
+
+
+def test_invented_accepted_package_stage_receipt_is_not_source_authority():
+    value=proposal()
+    assert len(value["required_package_stage_receipts"]) >= 35
+    assert all(x is None for x in value["required_package_stage_receipts"].values())
+    value["required_package_stage_receipts"]["xkbcomp-final"]="sha256:"+"a"*64
+    with pytest.raises(held.HeldProposalRejected, match="fabricated"):
+        held.validate(value)
+
+
+def test_dropped_package_receipt_slot_is_denied():
+    value=proposal()
+    del value["required_package_stage_receipts"]["xkbcomp-final"]
+    with pytest.raises(held.HeldProposalRejected, match="missing or fabricated"):
+        held.validate(value)
+
+
+def test_real_pinned_stage_dags_and_held_output_inventory():
+    value=proposal()
+    assert held.attest_source_checkouts(
+        value, os.environ["ZOG_HELD_PR9_SOURCE"],
+        os.environ["ZOG_HELD_MESA_SOURCE"]) == held.STATUS
+    for name in ("Xvnc", "i3", "xterm"):
+        stage=next(x for x in value["stage_order"] if x["id"]==name)
+        assert stage["recipe_path"]==held.STAGE_DAG_PATHS[name]
+        assert stage["build_package_stages"]
+        assert stage["runtime_package_stages"]
+    assert value["authority"]["task_allowlist_extension_allowed"] is False
+    assert value["authority"]["installed_authority_epoch"] is None
