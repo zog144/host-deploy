@@ -66,29 +66,42 @@ def _open_base(gateway_root, request_id, *, create):
     if (type(request_id) is not str or _ID.fullmatch(request_id) is None):
         _deny()
     root = Path(gateway_root)
-    if root.is_symlink() or not root.is_dir():
-        _deny()
-    # The fixed directory lives alongside, NOT inside, the mutable request
-    # journal; its uid and mode must be independently checked.
-    base = root / _DIR
-    if create:
-        try:
-            base.mkdir(mode=0o700)
-        except FileExistsError:
-            pass
+    # Retain the root directory descriptor across creation/opening. A
+    # just-created send-intents directory MUST also fsync its parent before
+    # any SSM mutation; fsyncing only the new directory does not persist its
+    # own entry after a power-loss crash.
     try:
-        fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY |
-                     os.O_NOFOLLOW | os.O_CLOEXEC)
+        rootfd = os.open(root, os.O_RDONLY | os.O_DIRECTORY |
+                        os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError:
         _deny()
-    info = os.fstat(fd)
-    if (not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o700):
-        os.close(fd)
-        _deny()
-    name = request_id + "--"
-    return fd, name
+    try:
+        info = os.fstat(rootfd)
+        if (not stat.S_ISDIR(info.st_mode) or
+                info.st_uid != os.geteuid() or info.st_mode & 0o022):
+            _deny()
+        if create:
+            try:
+                os.mkdir(_DIR, mode=0o700, dir_fd=rootfd)
+            except FileExistsError:
+                pass
+            except OSError:
+                _deny()
+            os.fsync(rootfd)
+        try:
+            fd = os.open(_DIR, os.O_RDONLY | os.O_DIRECTORY |
+                         os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=rootfd)
+        except OSError:
+            _deny()
+        info = os.fstat(fd)
+        if (not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o700):
+            os.close(fd)
+            _deny()
+        return fd, request_id + "--"
+    finally:
+        os.close(rootfd)
 
 
 def _load(fd, filename):
