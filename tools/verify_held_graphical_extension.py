@@ -254,6 +254,14 @@ def attest_source_checkouts(proposal, pr9_checkout, mesa_checkout):
         path = stage["recipe_path"]
         if path is not None and not (root / path).is_file():
             _deny("source-pinned recipe draft path missing")
+    # Independent comparison of actual package-stage DAG, resource outputs,
+    # build-tool origins and rights holds. Pure Python reads only.
+    import importlib.util
+    script = Path(__file__).with_name("verify_held_graphical_source_dag.py")
+    spec = importlib.util.spec_from_file_location("held_native_source_dag", script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.verify(module.load(), proposal, pr9_checkout, mesa_checkout)
     return STATUS
 
 
