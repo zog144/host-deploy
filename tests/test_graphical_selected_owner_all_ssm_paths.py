@@ -180,3 +180,30 @@ def test_selected_gateway_code_has_no_unprotected_preflight_or_send():
         "protected_preflight()")
     # This module still has a host.inspect_command read, which isn't SendCommand.
     assert "host.inspect_command" in source
+
+
+def test_complete_python_ssm_sendcommand_callsite_inventory_is_explicit():
+    """Detect new SDK/method SSM write paths which bypass review.
+
+    This inventory is not an IAM security boundary: approved nongraphical
+    sender APIs still require separate native principal permissions.
+    """
+    import ast
+    root=ROOT/"src/zog/host_deploy"
+    seen={}
+    for file in root.rglob("*.py"):
+        tree=ast.parse(file.read_text())
+        for node in ast.walk(tree):
+            if (isinstance(node,ast.Call) and
+                    isinstance(node.func,ast.Attribute) and
+                    node.func.attr in {"send_command","submit_command"}):
+                relative=str(file.relative_to(root))
+                seen.setdefault(relative,[]).append(node.func.attr)
+    assert {k:sorted(v) for k,v in seen.items()} == {
+        "runner.py":["send_command","submit_command"],
+        "gateway/image_build_execution.py":["submit_command"],
+        "gateway/toolchain_supervisor.py":["submit_command"],
+    }
+    # Explicitly reviewed boundary: none of the selected graphical stage
+    # transitions may invoke a gateway Host command or SSM sender.
+    assert "gateway/generic_pipeline.py" not in seen
