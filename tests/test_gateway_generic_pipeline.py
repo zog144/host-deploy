@@ -114,6 +114,13 @@ def mock_environment(monkeypatch, *, wrong_capability=None, lost_reply=False):
                     "pipeline_id":PIPELINE}
         return {"result":result}
     monkeypatch.setattr(generic,"parse_receipt",parse)
+    # Explicit fixture-only substitute for the independently protected owner.
+    # The real gateway default has NO direct SendCommand fallback.
+    monkeypatch.setattr(
+        generic,"_selected_protected_owner_sender",
+        lambda root,binding,step: (
+            lambda script, seconds: Host({}).submit_command(
+                script,seconds=seconds)))
     return Host,seen
 
 def test_four_separate_durable_operations(tmp_path,monkeypatch):

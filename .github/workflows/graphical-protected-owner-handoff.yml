@@ -1,7 +1,7 @@
-name: Exact graphical gateway to protected send owner source contract
+name: Selected graphical owner native-only gateway source denial
 on:
   push:
-    branches: [review/graphical-independent-send-owner-consumer-20261103]
+    branches: [review/graphical-selected-owner-direct-send-denial-20261103]
 permissions:
   contents: read
 jobs:
@@ -19,17 +19,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/root-control
-          ref: 66c5e2b1ec43a6d785bb140964af3cdcf927998a
+          ref: ad5985ee602f24cbb5d45ef259c31d6c5a13e386
           path: companion-root-control
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
       - name: Verify exact source selected owner
-        run: test "$(git -C companion-root-control rev-parse HEAD)" = 66c5e2b1ec43a6d785bb140964af3cdcf927998a
-      - run: python -m pip install 'pytest>=8,<10' 'cryptography>=43,<47'
+        run: test "$(git -C companion-root-control rev-parse HEAD)" = ad5985ee602f24cbb5d45ef259c31d6c5a13e386
+      - run: python -m pip install 'pytest>=8,<10' 'cryptography>=44,<49' 'boto3>=1.34,<2'
       - name: Test exact original operation source and independent owner
         env:
           PYTHONPATH: ${{ github.workspace }}/src
-        run: python -m pytest -q -rs tests/test_graphics_protected_owner_handoff.py
-      - run: echo 'No protected owner installed or wired to SendCommand. No SSM, AWS, production pin or STATE.' >> "$GITHUB_STEP_SUMMARY"
+        run: python -m pytest -q -rs tests/test_graphics_selected_owner_direct_route_denial.py tests/test_graphics_owner_ipc_contract.py
+      - run: echo 'No protected owner installed. Gateway direct SendCommand denied. No SSM, AWS, production pin or STATE.' >> "$GITHUB_STEP_SUMMARY"
