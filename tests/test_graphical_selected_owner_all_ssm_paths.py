@@ -201,9 +201,20 @@ def test_complete_python_ssm_sendcommand_callsite_inventory_is_explicit():
                 seen.setdefault(relative,[]).append(node.func.attr)
     assert {k:sorted(v) for k,v in seen.items()} == {
         "runner.py":["send_command","submit_command"],
+        "station.py":["send_command"],
+        "gateway/adoption.py":["submit_command"],
         "gateway/image_build_execution.py":["submit_command"],
         "gateway/toolchain_supervisor.py":["submit_command"],
     }
     # Explicitly reviewed boundary: none of the selected graphical stage
     # transitions may invoke a gateway Host command or SSM sender.
     assert "gateway/generic_pipeline.py" not in seen
+    # Two additional SSM entry points are distinct fixed-purpose operations:
+    # adoption writes a fixed ownership marker; station deployment selects
+    # its reviewed packaged station_remote.py. They are NOT authority to
+    # submit a graphical build. Actual AWS principal isolation still needed.
+    adoption=(root/"gateway/adoption.py").read_text()
+    station=(root/"station.py").read_text()
+    assert "host.submit_command(_marker_write_script(marker), seconds=60)" in adoption
+    assert "with_name('station_remote.py')" in station
+
