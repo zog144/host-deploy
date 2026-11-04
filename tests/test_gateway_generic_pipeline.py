@@ -117,6 +117,11 @@ def mock_environment(monkeypatch, *, wrong_capability=None, lost_reply=False):
     # Explicit fixture-only substitute for the independently protected owner.
     # The real gateway default has NO direct SendCommand fallback.
     monkeypatch.setattr(
+        generic,"_selected_protected_owner_preflight",
+        lambda root,binding,step,stage_binding: (
+            lambda: {"contract":"zog-protected-graphical-preflight-observation-v1",
+                     "ready":True,"mutation":False,"authenticated":True}))
+    monkeypatch.setattr(
         generic,"_selected_protected_owner_sender",
         lambda root,binding,step: (
             lambda script, seconds: Host({}).submit_command(
