@@ -99,3 +99,36 @@ def test_native_ipc_denies_missing_original_issue_number_before_connect(monkeypa
     fields["origin_issue_number"]=0
     with pytest.raises(ipc.OwnerUnavailable):
         ipc.submit_original(**fields)
+
+
+def test_fixed_root_socket_accepts_installer_0660_but_no_writable_ancestors(monkeypatch):
+    import stat
+    from types import SimpleNamespace
+    def fake(path):
+        mode=(stat.S_IFSOCK|0o660) if path == ipc.SOCKET_PATH else (
+            stat.S_IFDIR|0o755)
+        return SimpleNamespace(st_mode=mode,st_uid=0)
+    monkeypatch.setattr(ipc.os,"lstat",fake)
+    ipc._check_path()  # authorized root-owned, group-scoped 0660 socket
+
+
+@pytest.mark.parametrize("path,mode,owner_uid",[
+    ("/run",0o775,0),
+    (ipc.SOCKET_DIR,0o777,0),
+    (ipc.SOCKET_PATH,0o666,0),
+    (ipc.SOCKET_PATH,0o600,0),
+    (ipc.SOCKET_PATH,0o660,1000),
+])
+def test_writable_ancestors_and_wrong_or_shared_socket_modes_denied(
+        monkeypatch,path,mode,owner_uid):
+    import stat
+    from types import SimpleNamespace
+    def fake(which):
+        socket_mode=stat.S_IFSOCK if which == ipc.SOCKET_PATH else stat.S_IFDIR
+        return SimpleNamespace(
+            st_mode=socket_mode | (mode if which == path else
+                    (0o660 if which == ipc.SOCKET_PATH else 0o755)),
+            st_uid=(owner_uid if which == path else 0))
+    monkeypatch.setattr(ipc.os,"lstat",fake)
+    with pytest.raises(ipc.OwnerUnavailable):
+        ipc._check_path()
