@@ -158,8 +158,11 @@ def preflight_original(*, request_id, original_request_sha256,
                        remote_request_sha256=remote_request_sha256)
     if result["status"] != "preflight-ready" or result["command_id"] is None:
         _deny()
-    return {"contract": "zog-protected-graphical-preflight-observation-v1",
-            "ready": True, "mutation": False, "authenticated": True}
+    # A root UID and a matching nonce are not sufficient current-authority
+    # attestation. Do not manufacture authenticated=True from an unsigned
+    # response. The native owner must supply a verifier integrated with the
+    # protected monotonic issuer and the originally approved preflight result.
+    _deny()
 
 # Important: the above preflight API is intentionally held until the installed
 # server supports preflight-original with a separate irreversible operation ID.
