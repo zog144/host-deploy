@@ -7,7 +7,8 @@ from zog.host_deploy.gateway import graphics_owner_ipc as ipc
 REQ = dict(request_id="a"*32, operation_id="b"*32, stage="submit",
            ordinal=0, binding_sha256="c"*64, remote_request_sha256="d"*64)
 
-def test_missing_native_root_owned_socket_denies():
+def test_missing_native_root_owned_socket_denies(monkeypatch):
+    monkeypatch.setattr(ipc, "_check_path", ipc._deny)
     with pytest.raises(ipc.OwnerUnavailable):
         ipc.submit_original(**REQ)
 
