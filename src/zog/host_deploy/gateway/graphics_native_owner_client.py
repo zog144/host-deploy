@@ -38,7 +38,7 @@ class NativeOwnerHold(RuntimeError):
 
 
 def hold():
-    raise NativeOwnerHold("native graphical owner or original operation unavailable")
+    raise NativeOwnerHold("protected graphical operation owner required; native authority unavailable")
 
 
 def canonical(row):
@@ -77,7 +77,10 @@ def _protected_file(path):
         if (not stat.S_ISDIR(st.st_mode) or st.st_uid!=0
                 or st.st_mode&0o022):
             hold()
-    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    except OSError:
+        hold()
     try:
         info=os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid!=0 or
@@ -111,13 +114,15 @@ class NativeOwnerClient:
                          "owner_key_sha256","boot_id","host_id",
                          "installation_id","state_volume_id",
                          "client_uid","client_gid","owner_uid","owner_gid",
-                         "socket","enabled"} or
+                         "socket","scope_sha256","enabled"} or
                 pin["schema"]!="zog-graphical-native-owner-gateway-pin-v1" or
                 pin["root_source_sha"]!=OWNER_SOURCE_SHA or
                 pin["socket"]!=str(SOCKET) or
                 pin["enabled"] is not True or
                 pin["boot_id"]!=_boot_id() or
                 pin["owner_uid"]!=0 or pin["owner_gid"]!=0 or
+                type(pin["scope_sha256"]) is not str or
+                not pin["scope_sha256"].startswith("sha256:") or
                 pin["client_uid"]!=os.geteuid() or
                 pin["client_gid"]!=os.getegid()):
             hold()
@@ -195,6 +200,7 @@ class NativeOwnerClient:
                                "operation_id","request_sha256","outcome",
                                "command_id","revoked","signature_ed25519"} or
                 reply["schema"]!=OBS_SCHEMA or reply["nonce"]!=nonce or
+                reply["scope_sha256"]!=self.pin["scope_sha256"] or
                 reply["operation_id"]!=request["operation_id"] or
                 reply["request_sha256"]!="sha256:"+hashlib.sha256(canonical(request)).hexdigest() or
                 reply["outcome"] not in ("CLAIMED_UNCERTAIN","SENT_ORIGINAL") or
