@@ -30,7 +30,8 @@ def test_frozen_original_identity_for_both_owner_routes(monkeypatch):
     binding={"request_id":original["request_id"]}
     from zog.host_deploy.gateway import protocol
     monkeypatch.setattr(protocol,"request_digest",lambda req:original["original_request_sha256"])
-    monkeypatch.setattr(pipeline,"load_request",lambda root, id:{
+    monkeypatch.setattr(
+        pipeline,"_load_provenance_state_under_owner_lock",lambda root, id:{
         "request_sha256":original["original_request_sha256"],
         "request":{"request_id":id,"operation":"build.submit",
                    "origin":{"repository":original["origin_repository"],
@@ -132,3 +133,14 @@ def test_writable_ancestors_and_wrong_or_shared_socket_modes_denied(
     monkeypatch.setattr(ipc.os,"lstat",fake)
     with pytest.raises(ipc.OwnerUnavailable):
         ipc._check_path()
+
+
+def test_owner_identity_read_does_not_acquire_nonreentrant_request_lock_twice():
+    # Source invariant: generic_pipeline.advance calls these helpers while it
+    # holds ledger.request_lock for the original gateway request. A second
+    # load_request -> request_lock would block forever on the same flock.
+    code=inspect.getsource(pipeline._load_provenance_state_under_owner_lock)
+    assert "load_request(" not in code.split('    from .ledger')[1]
+    assert "_load_state(directory)" in code
+    selected=inspect.getsource(pipeline._protected_original_identifiers)
+    assert "_load_provenance_state_under_owner_lock(" in selected
