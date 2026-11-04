@@ -29,7 +29,7 @@ DOMAIN = b"zog-graphical-owner-native-observation-v1\0"
 PIN = Path("/etc/zog/graphical-owner/gateway-client.json")
 APPROVALS = Path("/etc/zog/graphical-owner/gateway-approvals.json")
 SOCKET = Path("/run/zog/graphical-owner.sock")
-OWNER_SOURCE_SHA = "4a84cc347e7a82b08d21398a62689aff91be9e30"
+OWNER_SOURCE_SHA = "6cf1e3064f77a6aefe17bf75f50c4b8d83a15762"
 MAX_WIRE = 16384
 
 
