@@ -31,12 +31,23 @@ def load_review():return json.loads(REVIEW.read_text())
 def literal(path):return ast.literal_eval(Path(path).read_text())
 def deny(why):raise ValueError("graphical TableGen successor NOT READY: "+why)
 
-def verify(candidate, review, pr9_checkout, old_checkout, new_checkout, *, previous=None, previous_review=None):
+def verify(candidate, review, pr9_checkout, old_checkout, new_checkout, pr20_checkout, *, previous=None, previous_review=None):
     old=copy.deepcopy(previous if previous is not None else load_proposal())
     oldreview=copy.deepcopy(previous_review if previous_review is not None else load_old_dag())
     pr9=Path(pr9_checkout).resolve(strict=True)
     oldroot=Path(old_checkout).resolve(strict=True)
     newroot=Path(new_checkout).resolve(strict=True)
+    independent=Path(pr20_checkout).resolve(strict=True)
+    pr20=json.loads((independent/"project/held-graphical-catalogue/workspace-next-v1.json").read_text())
+    if (pr20.get("status")!="HELD_NOT_SUBMITTABLE" or
+        pr20.get("producer",{}).get("mesa_pr8_candidate_revision")!=OLD or
+        pr20.get("producer",{}).get("workspace_pr9_candidate_revision")!=PR9 or
+        pr20.get("candidate_revision")!="2026-11-03"):
+        deny("PR20 exact independent DAG input changed")
+    if not all(pr20.get("required_package_stage_receipts",{}).get(k) is None
+               for k in ("xkbcomp-final","basic-font-final","ncurses-temporary","openssl-final",
+                         "mesa-final","zlib-native-environment")):
+        deny("PR20 source receipt slots are not held")
     # This invokes the existing real gateway's active catalogue and original source pin
     # checks, as well as the existing independently accepted v1 source-DAG inspection.
     if validate_old(old)!="HELD_NOT_SUBMITTABLE":
@@ -47,6 +58,17 @@ def verify(candidate, review, pr9_checkout, old_checkout, new_checkout, *, previ
     required=copy.deepcopy(old)
     required["candidate_revision"]="2026-11-04"
     required["producer"]["mesa_pr8_candidate_revision"]=NEW
+    # PR20's independent Xvnc/i3/xterm source-stage lineage and resource
+    # obligations are additive, not a replacement for PR19's output manifests.
+    for slot in ("required_package_stage_receipts","required_tool_provenance_receipts"):
+        required[slot]=copy.deepcopy(pr20[slot])
+        if not required[slot] or any(v is not None for v in required[slot].values()):
+            deny("PR20 package/tool receipt obligations not all unaccepted")
+    for idx,stage in enumerate(required["stage_order"]):
+        other=pr20["stage_order"][idx]
+        if other["id"]!=stage["id"]:deny("PR20 stage ordering mismatched")
+        for field in ("build_package_stages","runtime_package_stages","required_installed_resources"):
+            stage[field]=copy.deepcopy(other[field])
     if type(candidate) is not dict or "successor_review" not in candidate:
         deny("missing successor-only source selection")
     extras=candidate["successor_review"]
@@ -100,9 +122,22 @@ def verify(candidate, review, pr9_checkout, old_checkout, new_checkout, *, previ
             deny("selected exact package dependencies/output manifest drift: "+stage)
         if not CRITICAL[stage]["build"].issubset(set(dep["build"])) or not CRITICAL[stage]["runtime"].issubset(set(dep["runtime"])):
             deny("missing essential source predecessor: "+stage)
-        if candidate["stage_order"][list(STAGES).index(stage)]["outputs"]!=old["stage_order"][list(STAGES).index(stage)]["outputs"]:
+        slot=candidate["stage_order"][list(STAGES).index(stage)]
+        if slot["outputs"]!=old["stage_order"][list(STAGES).index(stage)]["outputs"]:
             deny("successor substituted installed output shape: "+stage)
-        if set(candidate["stage_order"][list(STAGES).index(stage)]["outputs"])!=set(output["required"]):
+        if stage in ("Xvnc","i3","xterm") and (
+            slot["build_package_stages"]!=dep["build"] or
+            slot["runtime_package_stages"]!=dep["runtime"]):
+            deny("PR20 independently reviewed package stage build/runtime lineage lost: "+stage)
+        if not set(slot["required_installed_resources"]).issubset(
+            set(slot["outputs"])|set(x["output"] for x in review["required_resources"])|
+            {"usr/bin/luit","usr/lib/dri/swrast_dri.so","usr/lib/libGL.so",
+             "usr/share/licenses/turbovnc/Xserver-COPYING",
+             "usr/share/licenses/turbovnc/libsha1-COPYING",
+             "usr/share/licenses/xterm/COPYING",
+             "usr/share/licenses/i3/LICENSE"}):
+            deny("PR20 required installed graphical resource not accounted for: "+stage)
+        if set(slot["outputs"])!=set(output["required"]):
             deny("catalogue proposed outputs not identical to actual package stage: "+stage)
     for source,where,required_output in RESOURCES:
         if required_output not in literal(pr9/where/"produce-manifest.py")["required"]:
