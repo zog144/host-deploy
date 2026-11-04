@@ -28,24 +28,15 @@ IDENTITY = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 def _selected_protected_owner_preflight(root, binding, step, stage_binding):
-    """Native preflight is another independently admitted original SSM operation.
-
-    Never run gateway Host.command/prod-runtime-preflight as a covert direct
-    SendCommand. The installed root owner must authenticate an independently
-    approved original preflight claim and use its fixed sender, or deny.
-    No native preflight transport is available in this source candidate.
-    """
-    raise RuntimeError("protected graphical preflight owner required; native sender unavailable")
+    """Installed-only independent preflight operation; never Host.command."""
+    from .graphics_native_owner_client import selected_preflight
+    return selected_preflight(root,binding,step,stage_binding)
 
 
 def _selected_protected_owner_sender(root, binding, step):
-    """Privileged root owner must make the sole SSM send under its CAS lock.
-
-    This source has NO installed owner transport. Never fall back to the
-    gateway's direct Host.submit_command, even after a lost ACK or restart.
-    Synthetic tests replace this private function; no public option controls it.
-    """
-    raise RuntimeError("protected graphical operation owner required; native sender unavailable")
+    """Installed-only root sender over pinned authenticated Unix IPC."""
+    from .graphics_native_owner_client import selected_sender
+    return selected_sender(root,binding,step)
 
 
 def _operation_id(gateway_id, name, ordinal=0):
