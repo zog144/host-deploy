@@ -27,6 +27,17 @@ STAGES = ("capabilities", "snapshot", "submit", "inspect")
 IDENTITY = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
+def _selected_protected_owner_preflight(root, binding, step, stage_binding):
+    """Native preflight is another independently admitted original SSM operation.
+
+    Never run gateway Host.command/prod-runtime-preflight as a covert direct
+    SendCommand. The installed root owner must authenticate an independently
+    approved original preflight claim and use its fixed sender, or deny.
+    No native preflight transport is available in this source candidate.
+    """
+    raise RuntimeError("protected graphical preflight owner required; native sender unavailable")
+
+
 def _selected_protected_owner_sender(root, binding, step):
     """Privileged root owner must make the sole SSM send under its CAS lock.
 
@@ -378,20 +389,33 @@ def advance(root, request_id, *, host_factory=Host):
             return _save(directory, value)  # cannot infer lost SendCommand ID
         stage_binding = _stage_binding(binding, step)
         if step["phase"] == "prepared":
+            # This must precede *all* Host and preflight activity: the old
+            # producer_runtime_preflight(host, ...) invoked Host.command(),
+            # which itself performed an unfenced AWS SSM SendCommand.
+            protected_sender = _selected_protected_owner_sender(root, binding, step)
+            protected_preflight = _selected_protected_owner_preflight(
+                root, binding, step, stage_binding)
+            if not callable(protected_sender) or not callable(protected_preflight):
+                raise RuntimeError("protected graphical owner transport unavailable")
+            # An independently preapproved preflight has its OWN irrevocable
+            # root-owned send claim and must not be reconstructed from local
+            # journal state. No native implementation exists in this branch.
+            preflight = protected_preflight()
+            if (type(preflight) is not dict or
+                    preflight.get("contract") !=
+                    "zog-protected-graphical-preflight-observation-v1" or
+                    preflight.get("ready") is not True or
+                    preflight.get("mutation") is not False or
+                    preflight.get("authenticated") is not True):
+                raise RuntimeError("protected graphical preflight evidence unavailable")
             configuration = verify_current_target(root, binding)
             host = host_factory(configuration)
-            producer_runtime_preflight(host, stage_binding)
             if step["name"] == "submit":
                 _authenticate_snapshot_before_submit(
                     root, request_id, host, binding, value)
+            # Original script is only a local provenance witness; a native
+            # privileged sender must independently select command bytes.
             script = remote_script(stage_binding)
-            # BEFORE any local mutation or send-intent publication: require
-            # the independently installed privileged owner-selected sender.
-            # The owner MUST commit its nonrollbackable operation claim and
-            # perform the only SSM SendCommand under the revocation lock.
-            protected_sender = _selected_protected_owner_sender(root, binding, step)
-            if not callable(protected_sender):
-                raise RuntimeError("protected graphical owner transport unavailable")
             step["phase"] = "submitting"
             _save(directory, value)  # fsync before AWS mutation
             # This separate exclusive fsynced identity is committed AFTER
