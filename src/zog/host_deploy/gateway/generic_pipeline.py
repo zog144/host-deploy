@@ -27,12 +27,27 @@ STAGES = ("capabilities", "snapshot", "submit", "inspect")
 IDENTITY = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
-def _protected_original_identifiers(binding, step):
+def _protected_original_identifiers(root, binding, step):
     """Read frozen original operation identity; never infer authority from it."""
     from .graphics_operation_send_intent import _expected
+    original = load_request(root, binding["request_id"])
+    request = original["request"]
+    origin = request["origin"]
+    from .protocol import request_digest, ORIGIN_REPOSITORY
+    if (original["request_sha256"] != request_digest(request)
+            or request["request_id"] != binding["request_id"]
+            or request["operation"] != "build.submit"
+            or type(origin) is not dict
+            or set(origin) != {"repository", "issue_number", "trigger_actor"}
+            or origin["repository"] != ORIGIN_REPOSITORY):
+        raise RuntimeError("graphical original GitHub issue/request provenance unavailable")
     selected = _expected(binding, binding["request_id"], step)
     return {
         "request_id": binding["request_id"],
+        "original_request_sha256": original["request_sha256"],
+        "origin_repository": origin["repository"],
+        "origin_issue_number": origin["issue_number"],
+        "origin_trigger_actor": origin["trigger_actor"],
         "operation_id": selected["operation_id"],
         "stage": selected["stage"],
         "ordinal": selected["ordinal"],
@@ -44,7 +59,7 @@ def _protected_original_identifiers(binding, step):
 def _selected_protected_owner_preflight(root, binding, step, stage_binding):
     """Selected root owner must separately claim every original preflight."""
     from . import graphics_owner_ipc
-    original = _protected_original_identifiers(binding, step)
+    original = _protected_original_identifiers(root, binding, step)
     # This deterministic, domain-separated ID MUST be independently approved
     # and immutably mapped by the root service; the gateway cannot mint it.
     preflight_operation_id = hashlib.sha256(
