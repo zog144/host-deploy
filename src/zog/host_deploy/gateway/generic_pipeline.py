@@ -95,7 +95,7 @@ def _selected_protected_owner_sender(root, binding, step):
     from . import graphics_owner_ipc
     try:
         original = _protected_original_identifiers(root, binding, step)
-    except (KeyError, TypeError, ValueError, RuntimeError):
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError):
         # Fail closed before Host/SSM access if the original GitHub request
         # or immutable stage selection cannot be independently reopened.
         # Never let a missing original become a first-seen owner grant.
