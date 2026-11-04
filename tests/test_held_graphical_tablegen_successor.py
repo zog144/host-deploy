@@ -16,7 +16,8 @@ def check(candidate=None,review=None):
                     review if review is not None else m.load_review(),
                     os.environ["ZOG_HELD_PR9_SOURCE"],
                     os.environ["ZOG_HELD_MESA_OLD_SOURCE"],
-                    os.environ["ZOG_HELD_MESA_NEW_SOURCE"])
+                    os.environ["ZOG_HELD_MESA_NEW_SOURCE"],
+                    os.environ["ZOG_HELD_PR20_SOURCE"])
 
 def test_successor_selects_exact_corrected_llvm_and_keeps_old_hold_independently():
     result=check()
