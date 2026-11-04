@@ -29,16 +29,25 @@ def _canonical(value):
 def _check_path():
     # All ancestors of the root-installed endpoint must remain root-owned.
     # The installation owner must separately protect service/source identity.
-    for path, kind in (("/run", stat.S_ISDIR),
-                       (SOCKET_DIR, stat.S_ISDIR),
-                       (SOCKET_PATH, stat.S_ISSOCK)):
+    # Directories must not be group/world-writable, but the socket itself
+    # NEEDS its exact root-installed 0660 mode for the dedicated client group.
+    # Applying the directory prohibition to the socket would reject every
+    # legitimate host-install Task C Unix endpoint.
+    for path in ("/run", SOCKET_DIR):
         try:
             info = os.lstat(path)
         except OSError:
             _deny()
-        if (not kind(info.st_mode) or info.st_uid != 0
-                or (info.st_mode & 0o022)):
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or
+                (info.st_mode & 0o022)):
             _deny()
+    try:
+        endpoint = os.lstat(SOCKET_PATH)
+    except OSError:
+        _deny()
+    if (not stat.S_ISSOCK(endpoint.st_mode) or endpoint.st_uid != 0 or
+            stat.S_IMODE(endpoint.st_mode) != 0o660):
+        _deny()
 
 def _read_frame(sock):
     data = bytearray()
