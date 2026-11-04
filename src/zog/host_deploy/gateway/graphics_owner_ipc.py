@@ -56,7 +56,9 @@ def _read_frame(sock):
         _deny()
     return bytes(data[:-1])
 
-def _exchange(*, action, request_id, operation_id, stage, ordinal,
+def _exchange(*, action, request_id, original_request_sha256,
+              origin_repository, origin_issue_number, origin_trigger_actor,
+              operation_id, stage, ordinal,
               binding_sha256, remote_request_sha256):
     """Ask the independently installed owner to handle one ORIGINAL operation.
 
@@ -72,13 +74,23 @@ def _exchange(*, action, request_id, operation_id, stage, ordinal,
             or stage not in ("capabilities", "snapshot", "submit", "inspect")
             or type(ordinal) is not int or not 0 <= ordinal < 64
             or any(type(x) is not str or re.fullmatch(r"[a-f0-9]{64}", x) is None
-                   for x in (binding_sha256, remote_request_sha256))):
+                   for x in (binding_sha256, remote_request_sha256, original_request_sha256))
+            or origin_repository != 'zog144/host-deploy'
+            or type(origin_issue_number) is not int
+            or not 1 <= origin_issue_number <= 2147483647
+            or type(origin_trigger_actor) is not str
+            or not 1 <= len(origin_trigger_actor) <= 100
+            or re.fullmatch(r'[A-Za-z0-9-]+', origin_trigger_actor) is None):
         _deny()
     nonce = secrets.token_hex(24)
     if action not in ("submit-original", "preflight-original"):
         _deny()
     request = {"schema": SCHEMA, "action": action,
                "request_id": request_id, "operation_id": operation_id,
+               "original_request_sha256": original_request_sha256,
+               "origin_repository": origin_repository,
+               "origin_issue_number": origin_issue_number,
+               "origin_trigger_actor": origin_trigger_actor,
                "stage": stage, "ordinal": ordinal,
                "binding_sha256": binding_sha256,
                "remote_request_sha256": remote_request_sha256, "nonce": nonce}
@@ -126,7 +138,9 @@ def _exchange(*, action, request_id, operation_id, stage, ordinal,
     except (ValueError, TypeError, UnicodeError):
         _deny()
 
-def preflight_original(*, request_id, operation_id, stage, ordinal,
+def preflight_original(*, request_id, original_request_sha256,
+                       origin_repository, origin_issue_number, origin_trigger_actor,
+                       operation_id, stage, ordinal,
                        binding_sha256, remote_request_sha256):
     """Request the owner's separately approved original preflight operation.
 
@@ -135,6 +149,10 @@ def preflight_original(*, request_id, operation_id, stage, ordinal,
     protected original GitHub authorization, never trust client-selected code.
     """
     result = _exchange(action="preflight-original", request_id=request_id,
+                       original_request_sha256=original_request_sha256,
+                       origin_repository=origin_repository,
+                       origin_issue_number=origin_issue_number,
+                       origin_trigger_actor=origin_trigger_actor,
                        operation_id=operation_id, stage=stage, ordinal=ordinal,
                        binding_sha256=binding_sha256,
                        remote_request_sha256=remote_request_sha256)
@@ -146,9 +164,15 @@ def preflight_original(*, request_id, operation_id, stage, ordinal,
 # Important: the above preflight API is intentionally held until the installed
 # server supports preflight-original with a separate irreversible operation ID.
 
-def submit_original(*, request_id, operation_id, stage, ordinal,
+def submit_original(*, request_id, original_request_sha256,
+                    origin_repository, origin_issue_number, origin_trigger_actor,
+                    operation_id, stage, ordinal,
                     binding_sha256, remote_request_sha256):
     response = _exchange(action="submit-original", request_id=request_id,
+                         original_request_sha256=original_request_sha256,
+                         origin_repository=origin_repository,
+                         origin_issue_number=origin_issue_number,
+                         origin_trigger_actor=origin_trigger_actor,
                          operation_id=operation_id, stage=stage, ordinal=ordinal,
                          binding_sha256=binding_sha256,
                          remote_request_sha256=remote_request_sha256)
