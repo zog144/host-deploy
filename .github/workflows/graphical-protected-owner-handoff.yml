@@ -31,5 +31,5 @@ jobs:
       - name: Test exact original operation source and independent owner
         env:
           PYTHONPATH: ${{ github.workspace }}/src
-        run: python -m pytest -q -rs tests/test_graphics_selected_owner_direct_route_denial.py
+        run: python -m pytest -q -rs tests/test_graphics_selected_owner_direct_route_denial.py tests/test_graphics_owner_ipc_contract.py
       - run: echo 'No protected owner installed. Gateway direct SendCommand denied. No SSM, AWS, production pin or STATE.' >> "$GITHUB_STEP_SUMMARY"
