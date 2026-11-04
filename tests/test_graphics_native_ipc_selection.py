@@ -83,3 +83,19 @@ def test_graphical_gateway_has_no_direct_ssm_call_or_legacy_preflight():
     assert "_selected_protected_owner_sender(" in source
     assert source.index("_selected_protected_owner_sender(")<source.index(
         "protected_preflight()")
+
+
+def test_unsigned_native_preflight_receipt_is_never_authenticated(monkeypatch):
+    from zog.host_deploy.gateway import graphics_owner_ipc
+    monkeypatch.setattr(graphics_owner_ipc, "_exchange", lambda **kw: {
+        "status": "preflight-ready", "command_id": "faked-original"})
+    with pytest.raises(graphics_owner_ipc.OwnerUnavailable):
+        graphics_owner_ipc.preflight_original(**_original())
+
+
+def test_native_ipc_denies_missing_original_issue_number_before_connect(monkeypatch):
+    monkeypatch.setattr(ipc,"_check_path",lambda:pytest.fail("socket reached"))
+    fields=_original()
+    fields["origin_issue_number"]=0
+    with pytest.raises(ipc.OwnerUnavailable):
+        ipc.submit_original(**fields)
