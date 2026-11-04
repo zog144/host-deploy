@@ -7,6 +7,8 @@ on:
       - src/zog/host_deploy/gateway/generic_pipeline.py
       - src/zog/host_deploy/gateway/image_build_execution.py
       - tests/test_graphical_selected_owner_all_ssm_paths.py
+      - tests/test_graphics_native_ipc_selection.py
+      - src/zog/host_deploy/gateway/graphics_owner_ipc.py
       - .github/workflows/graphical-selected-owner-all-ssm-paths.yml
 permissions:
   contents: read
@@ -54,7 +56,8 @@ jobs:
             tests/test_gateway_graphical_replay_invariant.py \
             tests/test_gateway_graphical_submission_journal_review.py \
             tests/test_graphics_selected_owner_direct_route_denial.py \
-            tests/test_graphical_selected_owner_all_ssm_paths.py
+            tests/test_graphical_selected_owner_all_ssm_paths.py \
+            tests/test_graphics_native_ipc_selection.py
       - name: Disallow any production submission claim
         if: always()
         run: echo 'Source-only synthetic owner. No installed preflight owner, independent CAS, IAM/SSM path or real AWS execution. Native NO-GO.' >> "$GITHUB_STEP_SUMMARY"
