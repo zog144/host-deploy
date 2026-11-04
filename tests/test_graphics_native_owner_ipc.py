@@ -135,7 +135,6 @@ def test_full_cross_repository_unix_ipc_send_and_signed_reconciliation(tmp_path,
 
 
 def test_original_approval_files_cannot_be_substituted_or_promoted(monkeypatch):
-    b,s,p,req,grant,owner,remote,calls=fake_installed(__import__("tempfile").TemporaryDirectory().__enter__()) if False else (None,)*8
     # This intentionally tests only the actual contract via source static
     # evidence; the root file path and selected key are not caller-settable.
     assert str(client.PIN)=="/etc/zog/graphical-owner/gateway-client.json"
