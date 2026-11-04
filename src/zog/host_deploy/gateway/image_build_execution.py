@@ -668,6 +668,16 @@ def submit_prepared(gateway_root, request_id, *, host_factory=Host, at=None):
         raise RuntimeError(
             "dispatch is not safely submit-able; reconcile existing evidence instead"
         )
+    # Legacy one-shot dispatch must never provide an alternative graphical
+    # SendCommand route, including after a coherent restored gateway journal.
+    # A reviewed graphical task is protected even if a local request attempts
+    # to substitute a valid-looking remote operation and checksum.
+    from .graphics_generation_chain import TASKS as PROTECTED_GRAPHICAL_TASKS
+    original = load_request(gateway_root, request_id)["request"]
+    if (original.get("operation") == "build.submit" and
+            original.get("parameters", {}).get("task") in PROTECTED_GRAPHICAL_TASKS):
+        raise RuntimeError(
+            "protected graphical operation owner required; legacy SSM route denied")
     if binding["remote_request"]["operation"] == "capabilities.inspect":
         raise RuntimeError(
             "generic build requires supervised multi-stage advancement; "
