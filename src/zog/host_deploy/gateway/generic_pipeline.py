@@ -76,7 +76,15 @@ def _selected_protected_owner_preflight(root, binding, step, stage_binding):
 def _selected_protected_owner_sender(root, binding, step):
     """Root-only IPC request; no direct SSM or gateway-selected command bytes."""
     from . import graphics_owner_ipc
-    original = _protected_original_identifiers(binding, step)
+    try:
+        original = _protected_original_identifiers(root, binding, step)
+    except (KeyError, TypeError, ValueError, RuntimeError):
+        # Fail closed before Host/SSM access if the original GitHub request
+        # or immutable stage selection cannot be independently reopened.
+        # Never let a missing original become a first-seen owner grant.
+        raise RuntimeError(
+            "protected graphical operation owner required; original identity unavailable"
+        ) from None
 
     def sender(_script, *, seconds):
         # Source-only compatibility with the existing stage caller. Neither
