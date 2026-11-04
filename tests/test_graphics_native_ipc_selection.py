@@ -8,7 +8,10 @@ from zog.host_deploy.gateway import graphics_owner_ipc as ipc
 
 
 def _original():
-    return dict(request_id="a"*32, operation_id="b"*32, stage="submit",
+    return dict(request_id="a"*32, original_request_sha256="e"*64,
+                origin_repository="zog144/host-deploy",origin_issue_number=17,
+                origin_trigger_actor="zog144",
+                operation_id="b"*32, stage="submit",
                 ordinal=0, binding_sha256="c"*64,
                 remote_request_sha256="d"*64)
 
@@ -25,6 +28,14 @@ def test_frozen_original_identity_for_both_owner_routes(monkeypatch):
             "remote_request_sha256": original["remote_request_sha256"],
         } if request_id == original["request_id"] else pytest.fail("new request selected"))
     binding={"request_id":original["request_id"]}
+    from zog.host_deploy.gateway import protocol
+    monkeypatch.setattr(protocol,"request_digest",lambda req:original["original_request_sha256"])
+    monkeypatch.setattr(pipeline,"load_request",lambda root, id:{
+        "request_sha256":original["original_request_sha256"],
+        "request":{"request_id":id,"operation":"build.submit",
+                   "origin":{"repository":original["origin_repository"],
+                             "issue_number":original["origin_issue_number"],
+                             "trigger_actor":original["origin_trigger_actor"]}}})
     step={"name":"submit"}
     calls=[]
     def preflight(**kwargs):
