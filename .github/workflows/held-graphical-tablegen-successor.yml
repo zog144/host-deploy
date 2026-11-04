@@ -36,6 +36,12 @@ jobs:
           ref: ed6ea94586ceeb13feee905b9e70afcb8963b128
           path: dependencies/image-build-pr8-new
           persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/host-deploy
+          ref: 7d091af5673fbc9c767d9d46386d344197d0267a
+          path: dependencies/host-deploy-pr20
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
@@ -50,12 +56,13 @@ jobs:
           ZOG_HELD_MESA_SOURCE: dependencies/image-build-pr8-old
           ZOG_HELD_MESA_OLD_SOURCE: dependencies/image-build-pr8-old
           ZOG_HELD_MESA_NEW_SOURCE: dependencies/image-build-pr8-new
+          ZOG_HELD_PR20_SOURCE: dependencies/host-deploy-pr20
         run: |
           python -m compileall -q tools/verify_held_graphical_tablegen_successor.py tests/test_held_graphical_tablegen_successor.py
           python - <<'PY'
           from tools.verify_held_graphical_tablegen_successor import load, load_review, verify
           import os
-          print(verify(load(),load_review(),os.environ["ZOG_HELD_PR9_SOURCE"],os.environ["ZOG_HELD_MESA_OLD_SOURCE"],os.environ["ZOG_HELD_MESA_NEW_SOURCE"]))
+          print(verify(load(),load_review(),os.environ["ZOG_HELD_PR9_SOURCE"],os.environ["ZOG_HELD_MESA_OLD_SOURCE"],os.environ["ZOG_HELD_MESA_NEW_SOURCE"],os.environ["ZOG_HELD_PR20_SOURCE"]))
           PY
           python -m pytest -q tests/test_held_graphical_tablegen_successor.py tests/test_held_graphical_extension.py tests/test_held_graphical_source_dag_review.py tests/test_gateway_task_catalogue.py tests/test_gateway_protocol.py
       - name: Report no compiler authority
