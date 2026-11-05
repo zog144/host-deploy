@@ -6,6 +6,7 @@ import pytest
 from zog.host_deploy import image_build_lanes
 from zog.host_deploy.gateway import task_catalogue
 from zog.host_deploy.gateway import graphics_catalogue_owner as graphics
+from zog.host_deploy.gateway import graphics_base_acceptance as base
 
 GEN = "e" * 64  # purely synthetic: NEVER production accepted base
 RECEIPT = "sha256:" + "f" * 64
@@ -53,6 +54,45 @@ def example():
     return a, lane, base, reservation
 
 
+def base_evidence(a, lane):
+    observation = {
+        "schema": base.OBSERVATION_SCHEMA, "task": graphics.TASK,
+        "source_repository": graphics.REPOSITORY,
+        "source_revision": graphics.SOURCE,
+        "monthly_pin_identity": "sha256:"+graphics.PIN_SHA256,
+        "host_id": a["host_id"], "project_id": lane["provenance_project_id"],
+        "base_generation_id": a["accepted_base_generation_id"],
+        "base_generation_kind": "toolchain", "base_generation_stage": 2,
+        "base_manifest_sha256": "sha256:"+"1"*64,
+        "base_inventory_sha256": "sha256:"+"2"*64,
+        "base_generation_record_sha256": "sha256:"+"3"*64,
+        "status": "canonical-base-observed-not-native-admission",
+        "catalogue_installed": False, "native_compiler_authorized": False,
+    }
+    native = {
+        "host_id": a["host_id"], "installation_id": a["installation_id"],
+        "lane": a["lane"], "project_id": lane["provenance_project_id"],
+        "base_generation_id": a["accepted_base_generation_id"],
+        "base_manifest_sha256": observation["base_manifest_sha256"],
+        "base_inventory_sha256": observation["base_inventory_sha256"],
+        "base_generation_record_sha256": observation["base_generation_record_sha256"],
+        "accepted_base_receipt_sha256": a["accepted_base_receipt_sha256"],
+        "source_revision": graphics.SOURCE,
+        "monthly_pin_identity": "sha256:"+graphics.PIN_SHA256,
+        "status": "independently-native-accepted",
+    }
+    return observation, native
+
+
+def candidate(a,l,b,r):
+    observed, native = base_evidence(a,l)
+    return graphics.prepare(
+        approval=a, lane_record=l, accepted_base=b,
+        installed_pin_bytes=accepted_pin_bytes(), actual_reservation=r,
+        producer_base_observation=observed,
+        native_base_acceptance=native)
+
+
 def accepted_pin_bytes():
     """Fixed fixture cannot forge pin hash; real pin verified separately in CI."""
     import pathlib
@@ -79,9 +119,7 @@ def test_exact_pin_bytes_match_frozen_image_build_source():
 
 def test_fonts_only_candidate_is_canonical_and_not_dispatch_admission():
     a,l,b,r = example()
-    data = graphics.prepare(
-        approval=a, lane_record=l, accepted_base=b,
-        installed_pin_bytes=accepted_pin_bytes(), actual_reservation=r)
+    data = candidate(a,l,b,r)
     assert data["compiler_authorized"] is False
     assert data["sha256"] == graphics._sha(data["bytes"])
     assert set(data["catalogue"]["tasks"]) == {graphics.TASK}
@@ -124,9 +162,7 @@ def test_rejects_changed_pin_base_owner_allowlist_reservation(
     subject={"a":a,"l":l,"b":b,"r":r}[part]
     subject[key]=value
     with pytest.raises((graphics.GraphicalCatalogueBlocked, ValueError)):
-        graphics.prepare(
-            approval=a, lane_record=l, accepted_base=b,
-            installed_pin_bytes=accepted_pin_bytes(), actual_reservation=r)
+        candidate(a,l,b,r)
 
 
 def test_rejects_wrong_original_pin_bytes():
@@ -134,7 +170,9 @@ def test_rejects_wrong_original_pin_bytes():
     with pytest.raises(graphics.GraphicalCatalogueBlocked):
         graphics.prepare(approval=a, lane_record=l, accepted_base=b,
                          installed_pin_bytes=b"wrong source pin",
-                         actual_reservation=r)
+                         actual_reservation=r,
+                         producer_base_observation=base_evidence(a,l)[0],
+                         native_base_acceptance=base_evidence(a,l)[1])
 
 
 def test_root_only_native_install_cannot_be_called_by_regular_chat(monkeypatch):
@@ -187,3 +225,62 @@ def test_host_attestation_blocks_root_install_before_catalogue_write(monkeypatch
             attest_installed_source=lambda _:True,
             attest_host_identity=lambda *_:False)
     assert seen == []
+
+
+def test_canonical_base_and_independent_acceptance_are_both_required():
+    a,l,b,r=example()
+    for observed,native in ((None,None), (base_evidence(a,l)[0],None),
+                            (None,base_evidence(a,l)[1])):
+        with pytest.raises(base.BaseAcceptanceDenied):
+            graphics.prepare(approval=a,lane_record=l,accepted_base=b,
+                             installed_pin_bytes=accepted_pin_bytes(),
+                             actual_reservation=r,
+                             producer_base_observation=observed,
+                             native_base_acceptance=native)
+
+
+@pytest.mark.parametrize("field,value",[
+    ("base_generation_stage",1), ("base_generation_kind","image"),
+    ("base_generation_id","0"*64),
+    ("base_manifest_sha256","sha256:"+"0"*64),
+    ("base_inventory_sha256","sha256:"+"0"*64),
+    ("base_generation_record_sha256","sha256:"+"0"*64),
+    ("catalogue_installed",True), ("native_compiler_authorized",True),
+    ("status","accepted"),
+])
+def test_producer_observation_cannot_change_native_base(field,value):
+    a,l,b,r=example()
+    observed,native=base_evidence(a,l)
+    observed[field]=value
+    with pytest.raises(base.BaseAcceptanceDenied):
+        graphics.prepare(approval=a,lane_record=l,accepted_base=b,
+                         installed_pin_bytes=accepted_pin_bytes(),
+                         actual_reservation=r,
+                         producer_base_observation=observed,
+                         native_base_acceptance=native)
+
+
+def test_accepted_retained_image_is_not_a_toolchain_and_not_authorization():
+    task="graphics-xcb-core-image-v1"
+    generation="c"*64
+    evidence={"schema":base.OUTPUT_SCHEMA,
+              "output_kind":"image", "output_generation_id":generation,
+              "status":"accepted","terminal_outcome":"success",
+              "uncertainty":False,"missing_evidence_count":0,
+              "generation_manifest_sha256":"sha256:"+"1"*64,
+              "acceptance_receipt_sha256":"sha256:"+"2"*64,
+              "producer_receipt_sha256":"sha256:"+"3"*64}
+    assert base.retained_generation(
+        task=task,generation_id=generation,kind="image",evidence=evidence,
+        approved_input_generation_id=generation)==generation
+    for changed in ({"output_kind":"toolchain"}, {"uncertainty":True},
+                    {"status":"pending"}, {"output_generation_id":"0"*64}):
+        with pytest.raises(base.BaseAcceptanceDenied):
+            base.retained_generation(
+                task=task,generation_id=generation,kind="image",
+                evidence={**evidence,**changed},
+                approved_input_generation_id=generation)
+    with pytest.raises(base.BaseAcceptanceDenied):
+        base.retained_generation(
+            task=graphics.TASK,generation_id=generation,kind="image",
+            evidence=evidence,approved_input_generation_id=generation)
