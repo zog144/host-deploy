@@ -137,9 +137,8 @@ def verify(raw, *, action, nonce, operation_id, original_request_sha256,
                 or (command_id is None) != (state == "uncertain")
                 or (status == "claimed-uncertain") != (state == "uncertain")):
             deny()
-        is_preflight = action == "preflight-original" or (
-            action == "observe-original" and status.startswith("preflight-"))
-        if (action == "submit-original" and not status.startswith("stage-")
+        if (action == "submit-original" and
+                not (status.startswith("stage-") or status == "claimed-uncertain")
                 or action == "preflight-original" and
                 not status.startswith("preflight-") and status != "claimed-uncertain"
                 or status == "preflight-ready" and state != "success"
