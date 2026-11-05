@@ -31,4 +31,4 @@ ReadWritePaths=/run/zog
 # A separate native install must add exact GetObject-only broker credentials
 # and private signing-key custody via protected systemd LoadCredential.
 # NEVER mount owner SSM credentials or checkpoint PUT credentials here.
-# No [Install] stanza: preserve disabled admission.
+# Installation does not enable or start this unit.
