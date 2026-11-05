@@ -20,7 +20,7 @@ SOURCES = frozenset((
     "zog.host_deploy.gateway.graphics_owner_trust_daemon",
 ))
 FINGERPRINTS = frozenset((
-    "host_id","installation_id","state_volume_id","scope_sha256",
+    "scope_sha256",
     "gateway_executable_sha256","original_checkpoint_sha256",
     "owner_observation_public_sha256","broker_signer_public_sha256",
     "installed_gateway_source_sha256",
@@ -81,6 +81,7 @@ def validate_disabled_selection(manifest, *, actual_modules, service, socket_uni
             or type(manifest["gateway_cgroup"]) is not str
             or not manifest["gateway_cgroup"].startswith("/system.slice/")
             or not manifest["gateway_cgroup"].endswith(".service")
+            or type(manifest["runtime_python"]) is not str
             or not manifest["runtime_python"].startswith("/")
             or manifest["status"] != "NOT_ACTIVATED"
             or any(manifest[k] is not False for k in (
