@@ -1,0 +1,34 @@
+# SOURCE TEMPLATE ONLY; do not start until native authority is admitted.
+[Unit]
+Description=Protected Zog graphical read-only original trust/history broker
+Requires=zog-graphical-trust.socket
+After=network-online.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -m zog.host_deploy.gateway.graphics_owner_trust_daemon
+Sockets=zog-graphical-trust.socket
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+UMask=0077
+ReadOnlyPaths=/etc/zog/graphical-owner
+ReadOnlyPaths=/var/lib/zog-graphical-owner-ledger
+ReadWritePaths=/run/zog
+# A separate native install must add exact GetObject-only broker credentials
+# and private signing-key custody via protected systemd LoadCredential.
+# NEVER mount owner SSM credentials or checkpoint PUT credentials here.
+# No [Install] stanza: preserve disabled admission.
