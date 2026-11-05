@@ -71,8 +71,11 @@ def _trusted_selection_for_original(original, *, action):
     The broker has ONLY separately installed GetObject credentials. No owner
     sender/STS/SSM/session or private material can reach the gateway here.
     """
-    from .graphics_owner_trust_history import select_original
-    return select_original(original, action=action)
+    from .graphics_owner_trust_history import select_original, TrustUnavailable
+    try:
+        return select_original(original, action=action)
+    except TrustUnavailable:
+        _deny()
 
 
 def _current_external_history(selection):
