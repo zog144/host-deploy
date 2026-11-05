@@ -62,6 +62,7 @@ def _remote_request(
     *,
     task_catalogue=None,
     task_catalogue_identity=None,
+    retained_input_evidence=None,
 ):
     operation = gateway_request["operation"]
     parameters = gateway_request["parameters"]
@@ -89,6 +90,17 @@ def _remote_request(
             monthly_pin_repository_path=lane_spec["monthly_pin_repository_path"],
             monthly_pin_identity=lane_spec["monthly_pin_identity"],
         )
+        # Canonical retained-input acceptance is separate from task/source
+        # authorization. No 64hex selection alone grants a graphical run.
+        from .task_catalogue import REVIEWED_IMAGE_TASKS, select_retained
+        if parameters["task"] in REVIEWED_IMAGE_TASKS:
+            task = select_retained(
+                task_catalogue, parameters["task"],
+                retained_input_evidence=retained_input_evidence,
+                repository=source["repository"], revision=source["revision"],
+                lane=parameters["lane"],
+                monthly_pin_repository_path=lane_spec["monthly_pin_repository_path"],
+                monthly_pin_identity=lane_spec["monthly_pin_identity"])
         if task["lane_owner"] != lane_spec["provenance_host_id"]:
             raise RuntimeError("generic pipeline task is not owned by managed lane")
         if gateway_request["source"] != {
@@ -192,6 +204,7 @@ def binding_for_request(
     *,
     task_catalogue=None,
     task_catalogue_identity=None,
+    retained_input_evidence=None,
 ):
     """Build an immutable server-owned binding without performing remote mutation."""
     state = load_request(gateway_root, request_id)
@@ -234,6 +247,7 @@ def binding_for_request(
             lane_spec,
             task_catalogue=task_catalogue,
             task_catalogue_identity=task_catalogue_identity,
+            retained_input_evidence=retained_input_evidence,
         )
         project_root = Path(lane_spec["project_root"])
         controller_companion = lane_record.get("controller_companion")
@@ -351,6 +365,7 @@ def prepare_image_build_dispatch(
     *,
     task_catalogue=None,
     task_catalogue_identity=None,
+    retained_input_evidence=None,
     at=None,
 ):
     binding = binding_for_request(
@@ -358,6 +373,7 @@ def prepare_image_build_dispatch(
         request_id,
         task_catalogue=task_catalogue,
         task_catalogue_identity=task_catalogue_identity,
+        retained_input_evidence=retained_input_evidence,
     )
     return prepare_dispatch(
         gateway_root,
