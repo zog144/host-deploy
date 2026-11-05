@@ -8,18 +8,16 @@ from zog.host_deploy.gateway import graphics_catalogue_owner as graphics
 from zog.host_deploy.gateway import graphics_base_acceptance as base
 from zog.host_deploy.gateway import image_build_dispatch as dispatch
 from zog.host_deploy.gateway import task_catalogue
-from test_gateway_first_graphics_catalogue import example, candidate
+from test_gateway_first_graphics_catalogue import example, candidate, base_evidence
 
 
 def fixture():
     approval,lane,accepted,reservation=example()
     cat=candidate(approval,lane,accepted,reservation)["catalogue"]
     selected=cat["tasks"][graphics.TASK]["arguments"]["selection"]
-    retained={"generation_id":selected,"kind":"toolchain",
-              "evidence":{"generation_id":selected,"kind":"toolchain",
-                          "stage":2,
-                          "accepted_receipt_sha256":
-                              approval["accepted_base_receipt_sha256"]}}
+    producer,native=base_evidence(approval,lane)
+    bound=base.checked_base(producer,native,approval=approval,lane=lane)
+    retained={"generation_id":selected,"kind":"toolchain","evidence":bound}
     request={"operation":"build.submit","request_id":"1"*32,
              "parameters":{"task":graphics.TASK,"lane":approval["lane"]},
              "source":{"repository":graphics.REPOSITORY,
