@@ -249,9 +249,10 @@ def test_actual_root_source_over_gateway_stream_with_pending_observe(tmp_path,mo
     public=signer.public_key().public_bytes(
         serialization.Encoding.Raw,serialization.PublicFormat.Raw)
     scope=executor.owner.installed["identity"]
+    from zog.host_deploy.gateway.graphics_owner_trust_history import AttestedSelection
     def trust_for(original,*,action):
         req=executor.registry.entries[original["operation_id"]]["owner_request"]
-        return v2.SelectedOwnerTrust(
+        trust=v2.SelectedOwnerTrust(
             public_key=public,
             public_key_sha256="sha256:"+hashlib.sha256(public).hexdigest(),
             owner_request_sha256=contract.digest(req),
@@ -259,9 +260,10 @@ def test_actual_root_source_over_gateway_stream_with_pending_observe(tmp_path,mo
             installation_id=req["installation_id"],
             state_volume_id=req["state_volume_id"],
             authority_epoch=req["authority_epoch"])
+        return AttestedSelection(trust,ledger.checkpoint.current_witness(scope))
     monkeypatch.setattr(ipc,"_trusted_selection_for_original",trust_for)
     monkeypatch.setattr(ipc,"_current_external_history",
-                        lambda selection:ledger.checkpoint.current_witness(scope))
+                        lambda selection:selection.current_history)
     monkeypatch.setattr(ipc,"_check_path",lambda:None)
     class Socket:
         def __enter__(self):return self
