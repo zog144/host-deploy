@@ -15,8 +15,8 @@ def fixture():
     approval,lane,accepted,reservation=example()
     cat=candidate(approval,lane,accepted,reservation)["catalogue"]
     selected=cat["tasks"][graphics.TASK]["arguments"]["selection"]
-    producer,native=base_evidence(approval,lane)
-    bound=base.checked_base(producer,native,approval=approval,lane=lane)
+    receipt,issuer,binding=base_evidence(approval,lane)
+    bound=base.checked_base(receipt,issuer,binding,approval=approval,lane=lane)
     retained={"generation_id":selected,"kind":"toolchain","evidence":bound}
     request={"operation":"build.submit","request_id":"1"*32,
              "parameters":{"task":graphics.TASK,"lane":approval["lane"]},
@@ -45,7 +45,7 @@ def test_fonts_original_base_required_for_request_selection():
 @pytest.mark.parametrize("change",[
     lambda ev:ev.update(generation_id="0"*64),
     lambda ev:ev.update(kind="image"),
-    lambda ev:ev["evidence"].update(stage=1),
+    lambda ev:ev["evidence"].update(target_abi="aarch64-linux-gnu"),
     lambda ev:ev["evidence"].update(accepted_receipt_sha256="sha256:"+"0"*64),
 ])
 def test_wrong_accepted_input_does_not_select_graphical_request(change):
@@ -127,3 +127,21 @@ def test_later_image_batch_retains_image_kind_with_exact_native_receipt():
         run(req,lane,catalogue,alternate)
     with pytest.raises(task_catalogue.TaskCatalogueError):
         run(req,lane,catalogue,{**retained,"kind":"toolchain"})
+
+
+def test_initial_fonts_can_keep_signed_compiler_image_original_kind():
+    approval,lane,accepted,reservation=example("image")
+    catalogue=candidate(approval,lane,accepted,reservation)["catalogue"]
+    receipt,issuer,binding=base_evidence(approval,lane,kind="image")
+    selected=base.checked_base(receipt,issuer,binding,approval=approval,lane=lane)
+    retained={"generation_id":approval["accepted_base_generation_id"],
+              "kind":"image","evidence":selected}
+    req={"operation":"build.submit","request_id":"1"*32,
+         "parameters":{"task":graphics.TASK,"lane":approval["lane"]},
+         "source":{"repository":graphics.REPOSITORY,"commit":graphics.SOURCE}}
+    _,choice=run(req,lane,catalogue,retained)
+    assert choice["task"]["arguments"]["selection"]==selected["generation_id"]
+    assert choice["task"]["retained_acceptance_sha256"]==catalogue[
+        "tasks"][graphics.TASK]["retained_acceptance_sha256"]
+    assert retained["kind"]=="image"
+    assert selected["historical_provenance"]["status"]=="historical-gap-declared"
