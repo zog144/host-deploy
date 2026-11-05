@@ -8,6 +8,9 @@ on:
       - src/zog/host_deploy/gateway/graphics_owner_observation_v2.py
       - src/zog/host_deploy/gateway/graphics_owner_trust_history.py
       - src/zog/host_deploy/gateway/graphics_owner_trust_service.py
+      - src/zog/host_deploy/gateway/graphics_owner_trust_daemon.py
+      - tests/test_graphics_owner_trust_daemon.py
+      - deploy/graphical-trust-broker/**
       - tests/test_graphics_owner_trust_history.py
       - tests/test_graphics_owner_signed_v2.py
       - .github/workflows/graphical-task-c-signed-v2.yml
@@ -45,6 +48,7 @@ jobs:
           python -m pytest -q -rs \
             tests/test_graphics_owner_signed_v2.py \
             tests/test_graphics_owner_trust_history.py \
+            tests/test_graphics_owner_trust_daemon.py \
             tests/test_graphics_native_ipc_selection.py \
             tests/test_graphical_selected_owner_all_ssm_paths.py \
             tests/test_gateway_generic_pipeline.py
