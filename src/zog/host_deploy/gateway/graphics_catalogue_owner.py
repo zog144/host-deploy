@@ -139,11 +139,17 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
                 "scope": aggregate.BUDGET_SCOPE}):
         _fail()
     fixed = task_catalogue.REVIEWED_IMAGE_TASKS[TASK]
+    accepted_input = {
+        "generation_id": bound_base["generation_id"],
+        "kind": bound_base["kind"], "evidence": bound_base,
+    }
+    retained_identity = _sha(_canonical(accepted_input))
     task = {
         "source_repository": REPOSITORY, "source_revision": SOURCE,
         "lane": a["lane"], "lane_owner": a["lane_owner"],
         "monthly_pin_repository_path": PIN_PATH,
         "monthly_pin_identity": "sha256:" + PIN_SHA256,
+        "retained_acceptance_sha256": retained_identity,
         "pin_date": PIN_DATE,
         "entries": [
             {"id": key, "project": project, "recipe": recipe}
@@ -160,6 +166,7 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
     return {"catalogue": value, "bytes": raw, "sha256": _sha(raw),
             "approval_sha256": _sha(_canonical(a)),
             "accepted_base_receipt_sha256": a["accepted_base_receipt_sha256"],
+            "retained_acceptance_sha256": retained_identity,
             "accepted_base_manifest_sha256": bound_base["manifest_sha256"],
             "accepted_base_inventory_sha256": bound_base["inventory_sha256"],
             "accepted_base_generation_record_sha256": bound_base["generation_record_sha256"],
@@ -248,6 +255,7 @@ def install_native(*, read_managed_lane, read_accepted_base,
         "monthly_pin_identity": "sha256:" + PIN_SHA256,
         "accepted_base_generation_id": a["accepted_base_generation_id"],
         "accepted_base_receipt_sha256": a["accepted_base_receipt_sha256"],
+        "retained_acceptance_sha256": candidate["retained_acceptance_sha256"],
         "accepted_base_manifest_sha256": candidate["accepted_base_manifest_sha256"],
         "accepted_base_inventory_sha256": candidate["accepted_base_inventory_sha256"],
         "accepted_base_generation_record_sha256": candidate["accepted_base_generation_record_sha256"],
