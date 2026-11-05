@@ -42,9 +42,9 @@ jobs:
           source=Path('dependencies/image-build-base-observer/src/zog/image_build/compiler_base_acceptance.py').read_text()
           consumer=Path('src/zog/host_deploy/gateway/graphics_base_acceptance.py').read_text()
           assert 'image-build-compiler-base-acceptance-v1' in source
-          assert 'image-build-first-fonts-base-observation-v1' in consumer
+          assert 'image-build-compiler-base-acceptance-v1' in consumer
           assert 'independent-compiler-capability-observed-not-job-authorization' in source
-          assert 'canonical-base-observed-not-native-admission' in consumer
+          assert 'independent-compiler-capability-observed-not-job-authorization' in consumer
           PY
       - name: Pin exact source tree and original October pin bytes
         run: |
