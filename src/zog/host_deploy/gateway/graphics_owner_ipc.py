@@ -178,9 +178,9 @@ def preflight_original(*, request_id, original_request_sha256,
             operation_id=operation_id, stage=stage, ordinal=ordinal,
             binding_sha256=binding_sha256,
             remote_request_sha256=remote_request_sha256)
-    if (result["status"] != "preflight-ready" or
-            result["ssm_state"] != "success" or
-            result["command_id"] is None):
+    if (result.get("status") != "preflight-ready" or
+            result.get("ssm_state") != "success" or
+            result.get("command_id") is None):
         _deny()
     return {"contract": "zog-protected-graphical-preflight-observation-v1",
             "ready": True, "mutation": False, "authenticated": True}
