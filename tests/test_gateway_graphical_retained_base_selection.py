@@ -68,3 +68,62 @@ def test_source_pin_lane_and_task_remain_independent():
     req["parameters"]["task"]="graphics-xcb-core-image-v1"
     with pytest.raises(task_catalogue.TaskCatalogueError):
         run(req,lane,cat,evidence)
+
+
+def test_later_image_batch_retains_image_kind_with_exact_native_receipt():
+    """Acceptance is reusable as a pinned image, not a toolchain substitute.
+
+    A separately approved dependency edge and original operation owner remain
+    mandatory outside this narrow task-selection test.
+    """
+    import hashlib
+    import json
+    req,lane,cat,_=fixture()
+    task_name="graphics-xcb-core-image-v1"
+    image_generation="9"*64
+    attested={
+        "schema":base.OUTPUT_SCHEMA,
+        "task":"graphics-fonts-image-v1",
+        "host_id":lane["provenance_host_id"],
+        "installation_id":"fixture-installation",
+        "lane":lane["lane"],
+        "lane_owner":lane["provenance_host_id"],
+        "project_root":lane["project_root"],
+        "source_revision":graphics.SOURCE,
+        "monthly_pin_identity":"sha256:"+graphics.PIN_SHA256,
+        "request_id":"7"*32,"pipeline_id":"8"*32,
+        "predecessor_catalogue_sha256":"sha256:"+"0"*64,
+        "input_generation_id":cat["tasks"][graphics.TASK]["arguments"]["selection"],
+        "output_generation_id":image_generation,
+        "output_kind":"image",
+        "generation_manifest_sha256":"sha256:"+"1"*64,
+        "acceptance_receipt_sha256":"sha256:"+"2"*64,
+        "producer_receipt_sha256":"sha256:"+"3"*64,
+        "status":"accepted","terminal_outcome":"success",
+        "uncertainty":False,"missing_evidence_count":0,
+    }
+    retained={"generation_id":image_generation,"kind":"image","evidence":attested}
+    digest="sha256:"+hashlib.sha256(json.dumps(
+        retained,sort_keys=True,separators=(",",":"),
+        ensure_ascii=True).encode("ascii")).hexdigest()
+    selected=cat["tasks"][graphics.TASK].copy()
+    reviewed=task_catalogue.REVIEWED_IMAGE_TASKS[task_name]
+    selected["entries"]=[{"id":id,"project":project,"recipe":recipe}
+                          for id,project,recipe in reviewed["entries"]]
+    selected["arguments"]={"mode":"image","selection":image_generation,
+                           "targets":list(reviewed["targets"])}
+    selected["retained_acceptance_sha256"]=digest
+    catalogue={"schema":task_catalogue.SCHEMA,"tasks":{task_name:selected}}
+    req["parameters"]["task"]=task_name
+    command,binding=run(req,lane,catalogue,retained)
+    assert command["operation"]=="capabilities.inspect"
+    assert binding["task"]["arguments"]["selection"]==image_generation
+    assert binding["task"]["retained_acceptance_sha256"]==digest
+    # A valid-looking *different* accepted image cannot replace the original.
+    alternate=dict(retained)
+    alternate["evidence"]={**attested,
+                          "producer_receipt_sha256":"sha256:"+"4"*64}
+    with pytest.raises(task_catalogue.TaskCatalogueError):
+        run(req,lane,catalogue,alternate)
+    with pytest.raises(task_catalogue.TaskCatalogueError):
+        run(req,lane,catalogue,{**retained,"kind":"toolchain"})
