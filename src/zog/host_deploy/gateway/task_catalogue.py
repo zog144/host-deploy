@@ -228,3 +228,37 @@ def select(catalogue, task, *, repository, revision, lane=None,
                 and item["monthly_pin_identity"] != monthly_pin_identity)):
         raise TaskCatalogueError("admitted source/lane/pin differs from selected task")
     return json.loads(json.dumps(item))
+
+
+def select_retained(catalogue, task, *, retained_input_evidence,
+                    repository, revision, lane=None,
+                    monthly_pin_repository_path=None,
+                    monthly_pin_identity=None):
+    """Read-only selected task + separately accepted canonical retained input.
+
+    This does not attest a caller-supplied evidence dictionary, install
+    catalogue bytes, grant task authorization, check a dependency edge, or
+    change execution budget. Only the protected native owner may select
+    evidence from its independently installed canonical acceptance reader.
+    """
+    from .graphics_base_acceptance import retained_generation
+    item = select(
+        catalogue, task, repository=repository, revision=revision,
+        lane=lane, monthly_pin_repository_path=monthly_pin_repository_path,
+        monthly_pin_identity=monthly_pin_identity)
+    if task not in REVIEWED_IMAGE_TASKS or type(retained_input_evidence) is not dict:
+        raise TaskCatalogueError("graphical retained input acceptance unavailable")
+    if set(retained_input_evidence) != {"generation_id", "kind", "evidence"}:
+        raise TaskCatalogueError("graphical retained input evidence is incomplete")
+    if retained_input_evidence["generation_id"] != item["arguments"]["selection"]:
+        raise TaskCatalogueError("accepted retained input differs from immutable catalogue")
+    try:
+        retained_generation(
+            task=task,
+            generation_id=retained_input_evidence["generation_id"],
+            kind=retained_input_evidence["kind"],
+            evidence=retained_input_evidence["evidence"],
+            approved_input_generation_id=item["arguments"]["selection"])
+    except ValueError as error:
+        raise TaskCatalogueError("retained input not independently accepted") from error
+    return item
