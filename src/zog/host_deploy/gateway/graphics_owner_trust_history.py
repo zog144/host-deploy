@@ -72,8 +72,7 @@ def _decoded(raw):
 
 def _protected_path(path, is_socket=False):
     path=Path(path)
-    for directory in (Path("/"),Path("/run") if is_socket else Path("/etc"),
-                      path.parent):
+    for directory in reversed(path.parents):
         try: info=os.lstat(directory)
         except OSError: deny()
         if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
@@ -134,7 +133,9 @@ class AttestedSelection:
 def verify_broker_reply(raw, *, nonce, action, original, pin, pin_sha256):
     if (type(raw) is not bytes or not 0<len(raw)<=MAX_FRAME
             or type(original) is not dict or set(original)!=ORIGINAL_KEYS
-            or action not in v2.ACTIONS or not v2.match(nonce,v2.H48)):
+            or action not in v2.ACTIONS or not v2.match(nonce,v2.H48)
+            or not v2.match(original.get("operation_id"),v2.H32)
+            or not v2.match(original.get("original_request_sha256"),v2.H64)):
         deny()
     row=_decoded(raw)
     if (type(row) is not dict or set(row)!=WIRE_KEYS or row["schema"]!=SCHEMA
