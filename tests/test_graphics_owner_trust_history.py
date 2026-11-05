@@ -75,9 +75,12 @@ def test_valid_pinned_signed_history_and_trust():
 ])
 def test_changed_signed_trust_identity_or_nonce_denied(change):
     key,pin,sha,body=fixture()
+    original=json.loads(json.dumps(body["original"]))
     change(body)
     with pytest.raises(broker.TrustUnavailable):
-        verify(key,pin,sha,body)
+        broker.verify_broker_reply(
+            signed(key,body),nonce="9"*48,action="observe-original",
+            original=original,pin=pin,pin_sha256=sha)
 
 def test_wrong_broker_signer_and_duplicate_fields_denied():
     key,pin,sha,body=fixture()
