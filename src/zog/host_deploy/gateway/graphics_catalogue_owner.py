@@ -14,6 +14,7 @@ import stat
 
 from .. import image_build_lanes
 from . import task_catalogue
+from . import graphics_base_acceptance as base_acceptance
 from . import fresh_aggregate_disk as aggregate
 from . import fresh_quota_volume as quota
 
@@ -79,7 +80,8 @@ def _checked_approval(value):
 
 
 def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
-            actual_reservation):
+            actual_reservation, producer_base_observation=None,
+            native_base_acceptance=None):
     """Pure candidate. Does not install or attest the caller's dictionaries.
 
     Root Work must independently verify signed/genuine accepted generation,
@@ -113,6 +115,20 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
             or not re.fullmatch(r"[a-f0-9]{40}",
                                 accepted_base["verified_source_revision"])):
         _fail()
+    # A syntactically valid legacy kind=toolchain record alone no longer
+    # constitutes acceptance. The exact canonical producer manifest/inventory
+    # and Build Record root must match separately accepted native authority.
+    bound_base = base_acceptance.checked_base(
+        producer_base_observation, native_base_acceptance,
+        approval=a, lane=lane)
+    if (bound_base["generation_id"] != accepted_base["generation_id"]
+            or bound_base["accepted_receipt_sha256"] !=
+               accepted_base["acceptance_receipt_sha256"]):
+        _fail()
+    base_acceptance.retained_generation(
+        task=TASK, generation_id=a["accepted_base_generation_id"],
+        kind=accepted_base["kind"], evidence=bound_base,
+        approved_input_generation_id=a["accepted_base_generation_id"])
     if (type(installed_pin_bytes) is not bytes
             or hashlib.sha256(installed_pin_bytes).hexdigest() != PIN_SHA256):
         _fail()
@@ -144,13 +160,17 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
     return {"catalogue": value, "bytes": raw, "sha256": _sha(raw),
             "approval_sha256": _sha(_canonical(a)),
             "accepted_base_receipt_sha256": a["accepted_base_receipt_sha256"],
+            "accepted_base_manifest_sha256": bound_base["manifest_sha256"],
+            "accepted_base_inventory_sha256": bound_base["inventory_sha256"],
+            "accepted_base_generation_record_sha256": bound_base["generation_record_sha256"],
             "lane": a["lane"], "host_id": a["host_id"],
             "compiler_authorized": False}
 
 
 def install_native(*, read_managed_lane, read_accepted_base,
                    read_installed_pin, attest_installed_source,
-                   attest_host_identity):
+                   attest_host_identity, read_base_observation=None,
+                   read_native_base_acceptance=None):
     """Root owner only; one non-replacing installation into existing STATE.
 
     The four reader capabilities MUST be independently installed privileged
@@ -186,9 +206,16 @@ def install_native(*, read_managed_lane, read_accepted_base,
     for target in (CATALOGUE, RECEIPT):
         if target.exists() or target.is_symlink():
             _fail()
+    if (not callable(read_base_observation) or
+            not callable(read_native_base_acceptance)):
+        _fail()
     candidate = prepare(
         approval=a, lane_record=read_managed_lane(a["lane"]),
         accepted_base=read_accepted_base(a["accepted_base_generation_id"]),
+        producer_base_observation=read_base_observation(
+            a["accepted_base_generation_id"]),
+        native_base_acceptance=read_native_base_acceptance(
+            a["accepted_base_generation_id"]),
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
         actual_reservation={
             "work_bytes": quota.BUILD_BYTES,
@@ -221,6 +248,9 @@ def install_native(*, read_managed_lane, read_accepted_base,
         "monthly_pin_identity": "sha256:" + PIN_SHA256,
         "accepted_base_generation_id": a["accepted_base_generation_id"],
         "accepted_base_receipt_sha256": a["accepted_base_receipt_sha256"],
+        "accepted_base_manifest_sha256": candidate["accepted_base_manifest_sha256"],
+        "accepted_base_inventory_sha256": candidate["accepted_base_inventory_sha256"],
+        "accepted_base_generation_record_sha256": candidate["accepted_base_generation_record_sha256"],
         "host_id": a["host_id"], "installation_id": a["installation_id"],
         "lane": a["lane"], "lane_owner": a["lane_owner"],
         "task_allowlist": [TASK], "dedicated_storage_bytes": 32 * 1024**3,
