@@ -11,7 +11,6 @@ from zog.host_deploy.gateway import graphics_owner_trust_daemon as daemon
 from zog.host_deploy.gateway import graphics_owner_trust_history as history
 
 ROOT40 = "c603eee47e8e43ed0e1b46052337a35ce9836e7c"
-HOSTINSTALL32 = "9a91fa2e3eba1e41e5b4d8f201ee30a7be14814d"
 SELECTED_REVIEWED_BROKER = "0ea6d583fa441527f45dabbbf542731560644a72"
 
 
