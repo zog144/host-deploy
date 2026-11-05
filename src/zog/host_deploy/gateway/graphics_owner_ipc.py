@@ -66,18 +66,21 @@ def _read_frame(sock):
     return bytes(data[:-1])
 
 def _trusted_selection_for_original(original, *, action):
-    """Must be replaced by native installed-key/original-mapping reader.
+    """Fetch post-operation trust + fresh S3 witness from protected broker.
 
-    No gateway-controlled path, environment variable, IPC response or test
-    convenience may become production authority. Until native installation
-    attests signed operation mapping + pinned owner key this remains HOLD.
+    The broker has ONLY separately installed GetObject credentials. No owner
+    sender/STS/SSM/session or private material can reach the gateway here.
     """
-    _deny()
+    from .graphics_owner_trust_history import select_original
+    return select_original(original, action=action)
 
 
 def _current_external_history(selection):
-    """Independent fresh S3 history read, NOT from gateway STATE or IPC reply."""
-    _deny()
+    """Use only the nonce-bound signed broker's fresh external scan."""
+    from .graphics_owner_trust_history import AttestedSelection
+    if type(selection) is not AttestedSelection:
+        _deny()
+    return selection.current_history
 
 
 def _exchange(*, action, request_id, original_request_sha256,
@@ -143,11 +146,14 @@ def _exchange(*, action, request_id, original_request_sha256,
     try:
         selection = _trusted_selection_for_original(original, action=action)
         history = _current_external_history(selection)
+        from .graphics_owner_trust_history import AttestedSelection
+        if type(selection) is not AttestedSelection:
+            _deny()
         return v2.verify(raw, action=action, nonce=nonce,
                          operation_id=operation_id,
                          original_request_sha256=original_request_sha256,
-                         selected_trust=selection, current_history=history)
-    except v2.OwnerObservationDenied:
+                         selected_trust=selection.trust, current_history=history)
+    except (v2.OwnerObservationDenied, ValueError, TypeError, OSError):
         _deny()
 
 def preflight_original(*, request_id, original_request_sha256,
