@@ -234,3 +234,63 @@ def test_real_pinned_root_executor_observations_verify_across_both_claims(tmp_pa
     failed=executor.handle(final_frame,now=400)
     checked(final_frame,failed)
     assert failed["status"]=="stage-failed"
+
+
+def test_actual_root_source_over_gateway_stream_with_pending_observe(tmp_path,monkeypatch):
+    import sys
+    import json
+    import struct
+    root=Path(__file__).resolve().parents[1]/"companion-root-control"
+    sys.path.insert(0,str(root/"src"))
+    sys.path.insert(0,str(root/"tests"))
+    from test_graphical_task_c_runtime import setup
+    from zog.root_control import graphical_operation_owner_source as contract
+    executor,frames,signer,sender,inspector,ledger=setup(tmp_path)
+    public=signer.public_key().public_bytes(
+        serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+    scope=executor.owner.installed["identity"]
+    def trust_for(original,*,action):
+        req=executor.registry.entries[original["operation_id"]]["owner_request"]
+        return v2.SelectedOwnerTrust(
+            public_key=public,
+            public_key_sha256="sha256:"+hashlib.sha256(public).hexdigest(),
+            owner_request_sha256=contract.digest(req),
+            scope_sha256=scope, host_id=req["host_id"],
+            installation_id=req["installation_id"],
+            state_volume_id=req["state_volume_id"],
+            authority_epoch=req["authority_epoch"])
+    monkeypatch.setattr(ipc,"_trusted_selection_for_original",trust_for)
+    monkeypatch.setattr(ipc,"_current_external_history",
+                        lambda selection:ledger.checkpoint.current_witness(scope))
+    monkeypatch.setattr(ipc,"_check_path",lambda:None)
+    class Socket:
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+        def settimeout(self,x):pass
+        def connect(self,x):pass
+        def getsockopt(self,*a):return struct.pack("3i",1234,0,0)
+        def sendall(self,raw):self.request=json.loads(raw)
+        def recv(self,n):
+            response=executor.handle(self.request,now=400)
+            if self.request["action"]=="preflight-original":
+                inspector.states[response["command_id"]]="success"
+            return v2.canonical(response)+bytes([10])
+    monkeypatch.setattr(ipc.socket,"socket",lambda *args:Socket())
+    pre=frames["preflight-original"]
+    ready=ipc.preflight_original(**{k:pre[k] for k in (
+        "request_id","original_request_sha256","origin_repository",
+        "origin_issue_number","origin_trigger_actor","operation_id",
+        "stage","ordinal","binding_sha256","remote_request_sha256")})
+    assert ready["authenticated"] and ready["ready"]
+    assert len(sender.sent)==1
+    stage=frames["submit-original"]
+    original={k:stage[k] for k in (
+        "request_id","original_request_sha256","origin_repository",
+        "origin_issue_number","origin_trigger_actor","operation_id",
+        "stage","ordinal","binding_sha256","remote_request_sha256")}
+    command=ipc.submit_original(**original)
+    assert command=="command-2"
+    assert len(sender.sent)==2
+    inspected=ipc.observe_original(**original)
+    assert inspected["status"]=="stage-pending"
+    assert len(sender.sent)==2
