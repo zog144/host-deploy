@@ -176,7 +176,8 @@ def verify_broker_reply(raw, *, nonce, action, original, pin, pin_sha256):
                 or type(hist["revoked"]) is not bool or hist["revoked"]):
             deny()
         return AttestedSelection(selected,hist)
-    except (ValueError,KeyError,TypeError,InvalidSignature,OverflowError):
+    except (ValueError,KeyError,TypeError,InvalidSignature,OverflowError,
+            v2.OwnerObservationDenied):
         deny()
 
 def _recv(peer):
