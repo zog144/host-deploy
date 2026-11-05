@@ -128,3 +128,55 @@ def test_source_has_no_sending_or_checkpoint_write_or_role_discovery():
     assert "checkpoint.current_witness(scope)" in producer
     assert "origin.verify_installed_evidence(" in producer
     assert "registry.select(parsed)" in producer
+
+
+def test_missing_or_unavailable_broker_translates_to_gateway_owner_denial(monkeypatch):
+    key,pin,sha,body=fixture()
+    def offline(*a,**k):
+        broker.deny()
+    monkeypatch.setattr(broker,"select_original",offline)
+    with pytest.raises(ipc.OwnerUnavailable):
+        ipc._trusted_selection_for_original(
+            body["original"],action="observe-original")
+    with pytest.raises(ipc.OwnerUnavailable):
+        ipc._trusted_selection_for_original(
+            body["original"],action="preflight-original")
+
+
+def test_previous_signed_history_cannot_verify_new_owner_observation():
+    key,pin,sha,body=fixture()
+    selection=verify(key,pin,sha,body)
+    # A prior signed broker witness is immutable evidence, not an allowance
+    # to accept a newer owner observation after the next external S3 claim.
+    owner_signer=Ed25519PrivateKey.generate()
+    owner_pub=owner_signer.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)
+    body2={"schema":v2.SCHEMA,"action":"observe-original","nonce":"f"*48,
+           "operation_id":body["original"]["operation_id"],
+           "request_sha256":selection.trust.owner_request_sha256,
+           "original_request_sha256":body["original"]["original_request_sha256"],
+           "scope_sha256":selection.trust.scope_sha256,
+           "host_id":selection.trust.host_id,
+           "installation_id":selection.trust.installation_id,
+           "state_volume_id":selection.trust.state_volume_id,
+           "authority_epoch":selection.trust.authority_epoch,
+           "command_id":"command-1","ssm_state":"pending",
+           "status":"stage-pending","revoked":False,
+           "checkpoint_sequence":selection.current_history["sequence"]+1,
+           "checkpoint_head_sha256":"sha256:"+"9"*64}
+    raw=v2.canonical({**body2,"signature_ed25519":base64.b64encode(
+        owner_signer.sign(v2.DOMAIN+v2.canonical(body2))).decode("ascii")})
+    fresh=v2.SelectedOwnerTrust(
+        public_key=owner_pub,
+        public_key_sha256="sha256:"+hashlib.sha256(owner_pub).hexdigest(),
+        owner_request_sha256=selection.trust.owner_request_sha256,
+        scope_sha256=selection.trust.scope_sha256,
+        host_id=selection.trust.host_id,
+        installation_id=selection.trust.installation_id,
+        state_volume_id=selection.trust.state_volume_id,
+        authority_epoch=selection.trust.authority_epoch)
+    with pytest.raises(v2.OwnerObservationDenied):
+        v2.verify(raw,action="observe-original",nonce="f"*48,
+                  operation_id=body["original"]["operation_id"],
+                  original_request_sha256=body["original"]["original_request_sha256"],
+                  selected_trust=fresh,
+                  current_history=selection.current_history)
