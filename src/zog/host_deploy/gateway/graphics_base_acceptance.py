@@ -14,13 +14,13 @@ ACCEPTANCE_SCHEMA = "image-build-compiler-base-acceptance-v1"
 BINDING_SCHEMA = "image-build-compiler-base-binding-v1"
 ISSUER_SCHEMA = "zog-protected-compiler-base-issuer-v1"
 OUTPUT_SCHEMA = "image-build-verified-graphical-predecessor-v1"
-DOMAIN = b"ZOG_IMAGE_BUILD_COMPILER_BASE_ACCEPTANCE_V1\\x00"
+DOMAIN = b"ZOG_IMAGE_BUILD_COMPILER_BASE_ACCEPTANCE_V1\x00"
 SOURCE = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 PIN = "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
 REPOSITORY = "zog144/image-build"
 TASK = "graphics-fonts-image-v1"
-H64 = re.compile(r"[a-f0-9]{64}\\Z")
-SHA = re.compile(r"sha256:[a-f0-9]{64}\\Z")
+H64 = re.compile(r"[a-f0-9]{64}\Z")
+SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 ABI = frozenset(("x86_64-linux-gnu", "x86_64-pc-linux-gnu",
                   "x86_64-unknown-linux-gnu"))
 ROLES = ("compiler", "linker", "assembler", "libc_header", "abi_header", "crt", "libc")
@@ -118,7 +118,7 @@ def checked_base(receipt_bytes, issuer_policy, producer_binding, *,
                 or claim["schema"]!=ACCEPTANCE_SCHEMA
                 or claim["status"]!="independently-accepted-for-compiler-use"
                 or not match(envelope["signature"],
-                             re.compile(r"[A-Za-z0-9+/]{86}==\\Z"))):
+                             re.compile(r"[A-Za-z0-9+/]{86}==\Z"))):
             deny()
         sig=base64.b64decode(envelope["signature"],validate=True)
         if len(sig)!=64: deny()
