@@ -113,8 +113,7 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
             or accepted_base["acceptance_receipt_sha256"] !=
                 a["accepted_base_receipt_sha256"]
             or accepted_base["source_repository"] != REPOSITORY
-            or not re.fullmatch(r"[a-f0-9]{40}",
-                                accepted_base["verified_source_revision"])):
+            or accepted_base["verified_source_revision"] != READER_SOURCE):
         _fail()
     # The original generation kind is immutable; only a verified Ed25519
     # acceptance plus protected canonical producer binding can select it.
