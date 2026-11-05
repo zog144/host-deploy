@@ -204,8 +204,8 @@ def retained_generation(*, task, generation_id, kind, evidence,
                         approved_input_generation_id):
     """Check selected kind without turning predecessor success into task grant.
 
-    First Fonts must use the independently accepted stage-two compiler.
-    A later image batch may retain an accepted kind=image predecessor only
+    First Fonts retains the signed original compiler generation kind (toolchain
+    or image); a later batch may retain an accepted kind=image predecessor only
     when the dedicated graphical predecessor attester supplies its original
     accepted provenance, and the approved input ID matches. It does not
     authorize a task, dependency edge, source pin, worker or new generation.
