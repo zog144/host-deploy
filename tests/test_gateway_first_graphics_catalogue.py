@@ -270,3 +270,45 @@ def test_no_implicit_compilation_or_authorization():
     assert "os.O_EXCL" in source
     assert '"compiler_authorized": False' in source
     assert "attest_installed_source(READER_SOURCE)" in source
+
+
+def test_exact_producer_signed_compiler_image_binding(tmp_path):
+    """Exercise pinned image-build PR18 resolve(), including actual image bytes.
+
+    Producer's synthetic test signer is not native authority; consumer checks
+    its real output schema and byte-for-byte signed receipt independently.
+    """
+    import sys
+    producer=Path("dependencies/image-build-base-observer").resolve()
+    sys.path.insert(0,str(producer/"src"))
+    sys.path.insert(0,str(producer/"tests"))
+    from test_compiler_base_acceptance import signed_fixture
+    from zog.image_build import compiler_base_acceptance as upstream
+    builder,selection,claim,issuer,sign=signed_fixture(tmp_path,kind="image")
+    receipt_id=sign()
+    observed=upstream.resolve(builder,selection,receipt_id)
+    bytes_=(Path(issuer["receipt_directory"])/
+            (selection.generation+".json")).read_bytes()
+    approval={
+        "host_id":claim["host_id"],
+        "installation_id":claim["installation_id"],
+        "accepted_base_generation_id":selection.generation,
+        "accepted_base_receipt_sha256":receipt_id,
+    }
+    lane={"provenance_project_id":claim["project_id"],
+          "provenance_host_id":claim["host_id"]}
+    consumed=base.checked_base(
+        bytes_,issuer,observed,approval=approval,lane=lane)
+    assert consumed["kind"]=="image"
+    assert consumed["generation_id"]==selection.generation
+    assert consumed["accepted_receipt_sha256"]==receipt_id
+    assert consumed["generation_record_sha256"] is None
+    assert consumed["historical_provenance"]==claim["historical_provenance"]
+    assert consumed["status"]==observed["status"]
+    # Signatures and binding are separate; a changing issued receipt must
+    # never be accepted using the old immutable approval's hash.
+    with pytest.raises(base.BaseAcceptanceDenied):
+        base.checked_base(bytes_+b" ",issuer,observed,approval=approval,lane=lane)
+    with pytest.raises(base.BaseAcceptanceDenied):
+        base.checked_base(bytes_,issuer,{**observed,"generation_kind":"toolchain"},
+                          approval=approval,lane=lane)
