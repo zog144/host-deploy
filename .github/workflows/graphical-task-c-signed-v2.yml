@@ -46,4 +46,5 @@ jobs:
             tests/test_gateway_generic_pipeline.py
       - name: Native not activated
         if: always()
-        run: echo 'Signed-v2 source-only: no installed signer/current S3 history reader/owner SSM activation or gateway IAM proof.' >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo 'Signed-v2 source-only: no installed signer/current S3 history reader/owner SSM activation or gateway IAM proof.' >> "$GITHUB_STEP_SUMMARY"
