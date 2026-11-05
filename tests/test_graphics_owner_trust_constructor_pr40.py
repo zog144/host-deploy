@@ -3,7 +3,7 @@
 Positive cases use synthetic protected objects only and never start a service.
 The native admission switch and public-pin selection remain OFF.
 """
-from pathlib import Path
+import inspect
 
 import pytest
 
@@ -60,21 +60,24 @@ def test_bad_selected_constructor_result_denies(monkeypatch, wrong):
 
 
 def test_pinned_root_and_install_sources_keep_broker_disabled():
-    root=(Path(__file__).resolve().parents[1]/
-          "companion-root-control/src/zog/root_control/graphical_task_c_trust_authority.py")
-    install=(Path(__file__).resolve().parents[1]/
-             "companion-host-install/src/zog/host_install/graphical_readonly_trust_broker_install.py")
-    assert root.is_file() and install.is_file()
-    root_bytes=root.read_text()
-    install_bytes=install.read_text()
-    assert "def installed_readonly_authority():" in root_bytes
-    assert "GetObjectOnly(" in root_bytes
-    assert "read_original_record()" in root_bytes
-    assert "original_checkpoint_installation" not in root_bytes or "read_original_record" in root_bytes
-    assert f'ROOT_PROVIDER_SOURCE = "{ROOT40}"' in install_bytes
-    assert f'BROKER_SOURCE = "{SELECTED_REVIEWED_BROKER}"' in install_bytes
-    assert 'state" != "NOT_INSTALLED"' not in install_bytes
-    assert "review_disabled_source(" in install_bytes
+    # Use imported companion modules, not a repository-specific checkout path.
+    # GitHub Actions independently verifies the exact checkout SHAs.
+    from zog.root_control import graphical_task_c_trust_authority as root
+    from zog.host_install import graphical_readonly_trust_broker_install as install
+
+    assert root.OWNER_SOURCE == "5ad7d5ed72d1b72edc767a658de28506791a74d4"
+    assert root.BROKER_SOURCE == SELECTED_REVIEWED_BROKER
+    assert install.ROOT_PROVIDER_SOURCE == ROOT40
+    assert install.BROKER_SOURCE == SELECTED_REVIEWED_BROKER
+    assert install.ROOT_MODULE == root.__name__
+    assert inspect.isfunction(root.installed_readonly_authority)
+    assert inspect.isfunction(install.review_disabled_source)
+    root_source = inspect.getsource(root)
+    install_source = inspect.getsource(install)
+    assert "GetObjectOnly(" in root_source
+    assert "read_original_record()" in root_source
+    assert 'selection["state"] != "NOT_INSTALLED"' in install_source
     assert "NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False" in (
-        Path(__file__).resolve().parents[1]/
-        "src/zog/host_deploy/gateway/graphics_owner_trust_daemon.py").read_text()
+        inspect.getsource(daemon))
+    assert daemon.NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED is False
+    assert history.APPROVED_PIN_SHA256 is None
