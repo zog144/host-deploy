@@ -13,7 +13,7 @@ import struct
 
 SOCKET_DIR = "/run/zog"
 SOCKET_PATH = SOCKET_DIR + "/graphical-operation-owner.sock"
-SCHEMA = "zog-graphical-owner-ipc-v1"
+SCHEMA = "zog-graphical-owner-ipc-v1"  # request frame; signed response is v2
 MAX_FRAME = 8192
 
 class OwnerUnavailable(RuntimeError):
@@ -65,6 +65,21 @@ def _read_frame(sock):
         _deny()
     return bytes(data[:-1])
 
+def _trusted_selection_for_original(original, *, action):
+    """Must be replaced by native installed-key/original-mapping reader.
+
+    No gateway-controlled path, environment variable, IPC response or test
+    convenience may become production authority. Until native installation
+    attests signed operation mapping + pinned owner key this remains HOLD.
+    """
+    _deny()
+
+
+def _current_external_history(selection):
+    """Independent fresh S3 history read, NOT from gateway STATE or IPC reply."""
+    _deny()
+
+
 def _exchange(*, action, request_id, original_request_sha256,
               origin_repository, origin_issue_number, origin_trigger_actor,
               operation_id, stage, ordinal,
@@ -92,7 +107,7 @@ def _exchange(*, action, request_id, original_request_sha256,
             or re.fullmatch(r'[A-Za-z0-9-]+', origin_trigger_actor) is None):
         _deny()
     nonce = secrets.token_hex(24)
-    if action not in ("submit-original", "preflight-original"):
+    if action not in ("submit-original", "preflight-original", "observe-original"):
         _deny()
     request = {"schema": SCHEMA, "action": action,
                "request_id": request_id, "operation_id": operation_id,
@@ -122,29 +137,17 @@ def _exchange(*, action, request_id, original_request_sha256,
             raw = _read_frame(peer)
     except (OSError, TimeoutError, struct.error):
         _deny()
+    from . import graphics_owner_observation_v2 as v2
+    original = {key: value for key, value in request.items()
+                if key not in ("schema", "action", "nonce")}
     try:
-        def unique(pairs):
-            value = {}
-            for key, item in pairs:
-                if key in value:
-                    _deny()
-                value[key] = item
-            return value
-        reply = json.loads(raw, object_pairs_hook=unique,
-                           parse_constant=lambda x: _deny())
-        if (type(reply) is not dict or
-                set(reply) != {"schema", "nonce", "operation_id", "status", "command_id"}
-                or reply["schema"] != SCHEMA or reply["nonce"] != nonce
-                or reply["operation_id"] != operation_id
-                or reply["status"] != ("sent-original" if action == "submit-original" else "preflight-ready")
-                or type(reply["command_id"]) is not str
-                or not 1 <= len(reply["command_id"]) <= 128
-                or any(ord(c) < 33 or ord(c) > 126
-                       for c in reply["command_id"])
-                or _canonical(reply) != raw):
-            _deny()
-        return reply
-    except (ValueError, TypeError, UnicodeError):
+        selection = _trusted_selection_for_original(original, action=action)
+        history = _current_external_history(selection)
+        return v2.verify(raw, action=action, nonce=nonce,
+                         operation_id=operation_id,
+                         original_request_sha256=original_request_sha256,
+                         selected_trust=selection, current_history=history)
+    except v2.OwnerObservationDenied:
         _deny()
 
 def preflight_original(*, request_id, original_request_sha256,
@@ -165,16 +168,40 @@ def preflight_original(*, request_id, original_request_sha256,
                        operation_id=operation_id, stage=stage, ordinal=ordinal,
                        binding_sha256=binding_sha256,
                        remote_request_sha256=remote_request_sha256)
-    if result["status"] != "preflight-ready" or result["command_id"] is None:
+    if result["status"] == "preflight-pending":
+        # This is a READ-ONLY check of the original claim, never another send.
+        result = observe_original(
+            request_id=request_id, original_request_sha256=original_request_sha256,
+            origin_repository=origin_repository,
+            origin_issue_number=origin_issue_number,
+            origin_trigger_actor=origin_trigger_actor,
+            operation_id=operation_id, stage=stage, ordinal=ordinal,
+            binding_sha256=binding_sha256,
+            remote_request_sha256=remote_request_sha256)
+    if (result["status"] != "preflight-ready" or
+            result["ssm_state"] != "success" or
+            result["command_id"] is None):
         _deny()
-    # A root UID and a matching nonce are not sufficient current-authority
-    # attestation. Do not manufacture authenticated=True from an unsigned
-    # response. The native owner must supply a verifier integrated with the
-    # protected monotonic issuer and the originally approved preflight result.
-    _deny()
+    return {"contract": "zog-protected-graphical-preflight-observation-v1",
+            "ready": True, "mutation": False, "authenticated": True}
 
 # Important: the above preflight API is intentionally held until the installed
 # server supports preflight-original with a separate irreversible operation ID.
+
+def observe_original(*, request_id, original_request_sha256,
+                     origin_repository, origin_issue_number, origin_trigger_actor,
+                     operation_id, stage, ordinal,
+                     binding_sha256, remote_request_sha256):
+    """Never creates a claim or sends an SSM command."""
+    return _exchange(action="observe-original", request_id=request_id,
+                     original_request_sha256=original_request_sha256,
+                     origin_repository=origin_repository,
+                     origin_issue_number=origin_issue_number,
+                     origin_trigger_actor=origin_trigger_actor,
+                     operation_id=operation_id, stage=stage, ordinal=ordinal,
+                     binding_sha256=binding_sha256,
+                     remote_request_sha256=remote_request_sha256)
+
 
 def submit_original(*, request_id, original_request_sha256,
                     origin_repository, origin_issue_number, origin_trigger_actor,
@@ -188,4 +215,8 @@ def submit_original(*, request_id, original_request_sha256,
                          operation_id=operation_id, stage=stage, ordinal=ordinal,
                          binding_sha256=binding_sha256,
                          remote_request_sha256=remote_request_sha256)
+    if (response["status"] not in ("stage-pending", "stage-succeeded")
+            or response["ssm_state"] not in ("pending", "success")
+            or response["command_id"] is None):
+        _deny()
     return response["command_id"]
