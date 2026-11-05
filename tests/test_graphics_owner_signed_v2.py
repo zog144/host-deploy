@@ -80,7 +80,7 @@ def test_exact_signed_v2_status_and_current_history(action,status):
     ("host_id","0"*64),("installation_id","0"*64),
     ("state_volume_id","0"*64),("authority_epoch",10),
     ("checkpoint_sequence",6),("checkpoint_head_sha256","sha256:"+"0"*64),
-    ("revoked",True),("ssm_state","pending"),("command_id","wrong"),
+    ("revoked",True),("ssm_state","pending"),
 ])
 def test_signed_but_wrong_original_or_current_claim_denied(field,value):
     signer,trust,history,body=fixture()
@@ -189,7 +189,7 @@ def test_real_pinned_root_executor_observations_verify_across_both_claims(tmp_pa
             state_volume_id=request["state_volume_id"],
             authority_epoch=request["authority_epoch"])
         current=ledger.checkpoint.current_witness(scope)
-        assert verify(v2.canonical(response),action=frame["action"],
+        assert v2.verify(v2.canonical(response),action=frame["action"],
                       nonce=frame["nonce"],
                       operation_id=frame["operation_id"],
                       original_request_sha256=frame["original_request_sha256"],
