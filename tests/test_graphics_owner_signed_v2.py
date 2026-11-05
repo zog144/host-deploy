@@ -160,3 +160,77 @@ def test_gateway_missing_native_trust_and_history_denied(monkeypatch):
     monkeypatch.setattr(ipc.socket,"socket",lambda *a:Socket())
     with pytest.raises(ipc.OwnerUnavailable):
         ipc.submit_original(**original)
+
+
+def test_real_pinned_root_executor_observations_verify_across_both_claims(tmp_path):
+    """Exercise root-control PR39's real source fixture, not a copied payload."""
+    import sys
+    root=Path(__file__).resolve().parents[1]/"companion-root-control"
+    sys.path.insert(0,str(root/"src"))
+    sys.path.insert(0,str(root/"tests"))
+    from test_graphical_task_c_runtime import setup,observe
+    executor,frames,signer,sender,inspector,ledger=setup(tmp_path)
+    public=signer.public_key().public_bytes(
+        serialization.Encoding.Raw,serialization.PublicFormat.Raw)
+
+    def checked(frame,response):
+        selected=executor.registry.entries[frame["operation_id"]]
+        request=selected["owner_request"]
+        contract=__import__(
+            "zog.root_control.graphical_operation_owner_source",
+            fromlist=["digest"])
+        scope=executor.owner.installed["identity"]
+        trust=v2.SelectedOwnerTrust(
+            public_key=public,
+            public_key_sha256="sha256:"+hashlib.sha256(public).hexdigest(),
+            owner_request_sha256=contract.digest(request),
+            scope_sha256=scope, host_id=request["host_id"],
+            installation_id=request["installation_id"],
+            state_volume_id=request["state_volume_id"],
+            authority_epoch=request["authority_epoch"])
+        current=ledger.checkpoint.current_witness(scope)
+        assert verify(v2.canonical(response),action=frame["action"],
+                      nonce=frame["nonce"],
+                      operation_id=frame["operation_id"],
+                      original_request_sha256=frame["original_request_sha256"],
+                      selected_trust=trust,current_history=current)["status"]==response["status"]
+
+    pre=frames["preflight-original"]
+    stage=frames["submit-original"]
+    first=executor.handle(pre,now=400)
+    checked(pre,first)
+    assert first["status"]=="preflight-pending"
+    assert len(sender.sent)==1
+    inspector.states[first["command_id"]]="success"
+    observed=observe(pre)
+    ready=executor.handle(observed,now=400)
+    checked(observed,ready)
+    assert ready["status"]=="preflight-ready"
+    second=executor.handle(stage,now=400)
+    checked(stage,second)
+    assert second["status"]=="stage-pending"
+    assert len(sender.sent)==2
+    # The earlier signed preflight is now STALE relative to S3 stage claim.
+    selected=executor.registry.entries[pre["operation_id"]]
+    req=selected["owner_request"]
+    from zog.root_control import graphical_operation_owner_source as contract
+    trust=v2.SelectedOwnerTrust(
+        public_key=public,
+        public_key_sha256="sha256:"+hashlib.sha256(public).hexdigest(),
+        owner_request_sha256=contract.digest(req),
+        scope_sha256=executor.owner.installed["identity"],
+        host_id=req["host_id"], installation_id=req["installation_id"],
+        state_volume_id=req["state_volume_id"],
+        authority_epoch=req["authority_epoch"])
+    with pytest.raises(v2.OwnerObservationDenied):
+        v2.verify(v2.canonical(ready),action=observed["action"],
+                  nonce=observed["nonce"],operation_id=observed["operation_id"],
+                  original_request_sha256=observed["original_request_sha256"],
+                  selected_trust=trust,
+                  current_history=ledger.checkpoint.current_witness(
+                      executor.owner.installed["identity"]))
+    inspector.states[second["command_id"]]="failed"
+    final_frame=observe(stage,nonce="d"*48)
+    failed=executor.handle(final_frame,now=400)
+    checked(final_frame,failed)
+    assert failed["status"]=="stage-failed"
