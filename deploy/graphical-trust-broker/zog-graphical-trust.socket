@@ -13,4 +13,4 @@ Service=zog-graphical-trust.service
 FileDescriptorName=trust-history
 RemoveOnStop=yes
 
-# No [Install] stanza: never enable as a dependency of installing files.
+# Not installable or enabled by deploying these unit bytes.
