@@ -10,9 +10,9 @@ import pytest
 from zog.host_deploy.gateway import graphics_owner_trust_daemon as daemon
 from zog.host_deploy.gateway import graphics_owner_trust_history as history
 
-ROOT40 = "b0aea19bd265bbf1bdcf0b90eec18269e3276458"
-HOSTINSTALL32 = "339194dd39933c383041b10a5207be7d9312daab"
-SELECTED_OLD_BROKER = "76416b9d7ef64aac17b75b6ce06b98244fd487e0"
+ROOT40 = "c603eee47e8e43ed0e1b46052337a35ce9836e7c"
+HOSTINSTALL32 = "9a91fa2e3eba1e41e5b4d8f201ee30a7be14814d"
+SELECTED_REVIEWED_BROKER = "0ea6d583fa441527f45dabbbf542731560644a72"
 
 
 def _authority():
@@ -38,7 +38,7 @@ def test_native_default_denies_without_importing_or_choosing_authority(monkeypat
 def test_exact_root_pr40_constructor_is_selected_without_gateway_fallback(monkeypatch):
     from zog.root_control import graphical_task_c_trust_authority as root
     assert root.OWNER_SOURCE == "5ad7d5ed72d1b72edc767a658de28506791a74d4"
-    assert root.BROKER_SOURCE == SELECTED_OLD_BROKER
+    assert root.BROKER_SOURCE == SELECTED_REVIEWED_BROKER
     expected=_authority()
     calls=[]
     monkeypatch.setattr(root, "installed_readonly_authority",
@@ -72,7 +72,7 @@ def test_pinned_root_and_install_sources_keep_broker_disabled():
     assert "read_original_record()" in root_bytes
     assert "original_checkpoint_installation" not in root_bytes or "read_original_record" in root_bytes
     assert f'ROOT_PROVIDER_SOURCE = "{ROOT40}"' in install_bytes
-    assert f'BROKER_SOURCE = "{SELECTED_OLD_BROKER}"' in install_bytes
+    assert f'BROKER_SOURCE = "{SELECTED_REVIEWED_BROKER}"' in install_bytes
     assert 'state" != "NOT_INSTALLED"' not in install_bytes
     assert "review_disabled_source(" in install_bytes
     assert "NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False" in (
