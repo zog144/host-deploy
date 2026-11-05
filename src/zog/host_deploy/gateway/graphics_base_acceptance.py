@@ -22,7 +22,7 @@ TASK = "graphics-fonts-image-v1"
 H64 = re.compile(r"[a-f0-9]{64}\Z")
 SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 ABI = frozenset(("x86_64-linux-gnu", "x86_64-pc-linux-gnu",
-                  "x86_64-unknown-linux-gnu"))
+                  "x86_64-unknown-linux-gnu", "x86_64-zog-linux-gnu"))
 ROLES = ("compiler", "linker", "assembler", "libc_header", "abi_header", "crt", "libc")
 CLAIM_FIELDS = frozenset((
     "schema", "status", "generation_id", "generation_kind",
