@@ -17,7 +17,8 @@ def denied():
 
 def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
                     now, observation_public_key, checkpoint, signed_pin,
-                    broker_signer, installed_source_sha256):
+                    broker_signer, installed_source_sha256,
+                    independently_retained_original_checkpoint):
     """Read original mapping and CURRENT independent external S3 head.
 
     All arguments except 'frame' must be supplied by a separate installed
@@ -72,6 +73,32 @@ def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
             or checkpoint.scope!=scope):
         denied()
 
+    # Independent installer verifies local reservation and retained external
+    # anchor first. A different prefix with the same genesis is NOT equivalent.
+    source=independently_retained_original_checkpoint
+    if (type(source) is not dict or
+            set(source)!={
+                "schema","host_id","installation_id","state_volume_id",
+                "checkpoint_account_id","checkpoint_region",
+                "checkpoint_bucket","checkpoint_prefix",
+                "checkpoint_scope_sha256","checkpoint_genesis_sha256",
+                "checkpoint_role_arn","root_source_revision"}
+            or source["schema"]!="zog-task-c-original-checkpoint-installation-v1"
+            or "sha256:"+hashlib.sha256(client.canonical(source)).hexdigest()!=
+               signed_pin["original_checkpoint_sha256"]
+            or source["host_id"]!=request["host_id"]
+            or source["installation_id"]!=request["installation_id"]
+            or source["state_volume_id"]!=request["state_volume_id"]
+            or source["checkpoint_scope_sha256"]!=scope
+            or source["checkpoint_account_id"]!=checkpoint.account
+            or source["checkpoint_bucket"]!=checkpoint.bucket
+            or source["checkpoint_prefix"]!=checkpoint.prefix
+            or source["checkpoint_genesis_sha256"]!=checkpoint.genesis_sha
+            or source["root_source_revision"]!=
+               "5ad7d5ed72d1b72edc767a658de28506791a74d4"):
+        denied()
+    # Region and role come only from independently installed read-only S3
+    # credential selection; the gateway never supplies a role or AWS endpoint.
     # Fresh read of exact existing immutable history: no bootstrap, listing,
     # cached last-seen value, PUT, credential fallback or discovery.
     head=checkpoint.current_witness(scope)
