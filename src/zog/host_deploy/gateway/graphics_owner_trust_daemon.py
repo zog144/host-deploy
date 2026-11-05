@@ -158,12 +158,25 @@ def serve_connection(connection, authority, *, now=None):
 
 
 def installed_runtime():
-    """Native root-control/host-install must author the approved constructor.
+    """Select root-control PR40's original-authority constructor only.
 
-    No service can start from a boolean in JSON, CLI, environment, or a
-    synthetic original-operation mapping.
+    The root provider verifies genuine installed operator/issuer grants,
+    source and gateway identity, separately anchored original checkpoint,
+    pinned broker signer and an exclusively read-only S3 session. No gateway
+    frame, environment option or fallback provides any of these inputs.
+
+    This callable is deliberately not reachable from main() while the native
+    admission gate is false; source interoperability is not service approval.
     """
-    hold()
+    if not NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED:
+        hold()
+    from zog.root_control.graphical_task_c_trust_authority import (
+        installed_readonly_authority,
+    )
+    selected = installed_readonly_authority()
+    if type(selected) is not InstalledReadOnlyAuthority:
+        hold()
+    return selected
 
 
 def main():
