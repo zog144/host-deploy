@@ -36,7 +36,7 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
     state.mkdir(mode=0o700)
     state.chmod(0o700)
     pin=accepted_pin_bytes()
-    producer_base, independent_base = base_evidence(a,lane)
+    signed_receipt, pinned_issuer, producer_binding = base_evidence(a,lane)
     monkeypatch.setattr(g, "STORE", state)
     monkeypatch.setattr(g, "APPROVAL", state/"graphics-foundation-approval-v1.json")
     monkeypatch.setattr(g, "CATALOGUE", state/"graphics-foundation-catalogue-v1.json")
@@ -51,8 +51,8 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
         "budget_scope":g.aggregate.BUDGET_SCOPE})
     observed=[]
     def attested_source(revision):
-        assert revision == g.SOURCE
-        observed.append("source")
+        assert revision in (g.SOURCE, g.READER_SOURCE)
+        observed.append("source" if revision == g.SOURCE else "reader")
         return True
     def attested_host(host, installation):
         assert (host,installation)==(a["host_id"],a["installation_id"])
@@ -68,12 +68,16 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
         return base
     def attested_producer(identity):
         assert identity == a["accepted_base_generation_id"]
-        observed.append("canonical-producer")
-        return producer_base
-    def attested_native(identity):
+        observed.append("signed-receipt")
+        return signed_receipt
+    def attested_issuer():
+        observed.append("issuer")
+        return pinned_issuer
+    def attested_native(identity,receipt_sha):
         assert identity == a["accepted_base_generation_id"]
-        observed.append("independent-acceptance")
-        return independent_base
+        assert receipt_sha == a["accepted_base_receipt_sha256"]
+        observed.append("canonical-binding")
+        return producer_binding
     def attested_pin(revision,path):
         assert (revision,path)==(g.SOURCE,g.PIN_PATH)
         observed.append("pin")
@@ -82,20 +86,21 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
         return g.install_native(
             read_managed_lane=attested_lane,
             read_accepted_base=attested_base,
-            read_base_observation=attested_producer,
-            read_native_base_acceptance=attested_native,
+            read_compiler_base_receipt=attested_producer,
+            read_compiler_base_issuer=attested_issuer,
+            read_compiler_base_binding=attested_native,
             read_installed_pin=attested_pin,
             attest_installed_source=attested_source,
             attest_host_identity=attested_host)
     receipt=install()
-    assert observed == ["source","host","lane","base",
-                        "canonical-producer","independent-acceptance","pin"]
+    assert observed == ["source","reader","host","lane","base",
+                        "signed-receipt","issuer","canonical-binding","pin"]
     assert receipt["compiler_authorized"] is False
     assert receipt["task_allowlist"]==[g.TASK]
     assert receipt["accepted_base_generation_id"] == base["generation_id"]
-    assert receipt["accepted_base_manifest_sha256"] == producer_base["base_manifest_sha256"]
-    assert receipt["accepted_base_inventory_sha256"] == producer_base["base_inventory_sha256"]
-    assert receipt["accepted_base_generation_record_sha256"] == producer_base["base_generation_record_sha256"]
+    assert receipt["accepted_base_manifest_sha256"] == producer_binding["generation_manifest_sha256"]
+    assert receipt["accepted_base_inventory_sha256"] == producer_binding["generation_inventory_sha256"]
+    assert receipt["accepted_base_generation_record_sha256"] == producer_binding["generation_record_sha256"]
     assert receipt["dedicated_storage_bytes"]==32*1024**3
     for file in (g.APPROVAL,g.CATALOGUE,g.RECEIPT):
         st=file.lstat()
