@@ -25,7 +25,7 @@ PIN_SHA256 = "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
 PIN_DATE = "2026-10-01"
 TASK = "graphics-fonts-image-v1"
 APPROVAL_SCHEMA = "host-deploy-graphics-catalogue-approval-v1"
-EVIDENCE_SCHEMA = "image-build-self-hosted-base-acceptance-v1"
+EVIDENCE_SCHEMA = base_acceptance.BINDING_SCHEMA
 RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v1"
 STORE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 APPROVAL = STORE / "graphics-foundation-approval-v1.json"
@@ -80,8 +80,8 @@ def _checked_approval(value):
 
 
 def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
-            actual_reservation, producer_base_observation=None,
-            native_base_acceptance=None):
+            actual_reservation, compiler_base_receipt_bytes=None,
+            compiler_base_issuer_policy=None, compiler_base_binding=None):
     """Pure candidate. Does not install or attest the caller's dictionaries.
 
     Root Work must independently verify signed/genuine accepted generation,
@@ -108,20 +108,20 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
                 "source_repository", "verified_source_revision"}
             or accepted_base["schema"] != EVIDENCE_SCHEMA
             or accepted_base["generation_id"] != a["accepted_base_generation_id"]
-            or accepted_base["kind"] != "toolchain"
+            or accepted_base["kind"] not in ("toolchain", "image")
             or accepted_base["acceptance_receipt_sha256"] !=
                 a["accepted_base_receipt_sha256"]
             or accepted_base["source_repository"] != REPOSITORY
             or not re.fullmatch(r"[a-f0-9]{40}",
                                 accepted_base["verified_source_revision"])):
         _fail()
-    # A syntactically valid legacy kind=toolchain record alone no longer
-    # constitutes acceptance. The exact canonical producer manifest/inventory
-    # and Build Record root must match separately accepted native authority.
+    # The original generation kind is immutable; only a verified Ed25519
+    # acceptance plus protected canonical producer binding can select it.
     bound_base = base_acceptance.checked_base(
-        producer_base_observation, native_base_acceptance,
-        approval=a, lane=lane)
-    if (bound_base["generation_id"] != accepted_base["generation_id"]
+        compiler_base_receipt_bytes, compiler_base_issuer_policy,
+        compiler_base_binding, approval=a, lane=lane)
+    if (bound_base["kind"] != accepted_base["kind"]
+            or bound_base["generation_id"] != accepted_base["generation_id"]
             or bound_base["accepted_receipt_sha256"] !=
                accepted_base["acceptance_receipt_sha256"]):
         _fail()
@@ -170,14 +170,21 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
             "accepted_base_manifest_sha256": bound_base["manifest_sha256"],
             "accepted_base_inventory_sha256": bound_base["inventory_sha256"],
             "accepted_base_generation_record_sha256": bound_base["generation_record_sha256"],
+            "accepted_base_kind": bound_base["kind"],
+            "accepted_base_state_volume_id": bound_base["state_volume_id"],
+            "accepted_base_compiler_files_sha256": bound_base["compiler_files_sha256"],
+            "accepted_base_probe_sha256": bound_base["native_probe_sha256"],
+            "accepted_base_environment_sha256": bound_base["execution_environment_sha256"],
+            "accepted_base_historical_provenance": bound_base["historical_provenance"],
             "lane": a["lane"], "host_id": a["host_id"],
             "compiler_authorized": False}
 
 
 def install_native(*, read_managed_lane, read_accepted_base,
                    read_installed_pin, attest_installed_source,
-                   attest_host_identity, read_base_observation=None,
-                   read_native_base_acceptance=None):
+                   attest_host_identity, read_compiler_base_receipt=None,
+                   read_compiler_base_issuer=None,
+                   read_compiler_base_binding=None):
     """Root owner only; one non-replacing installation into existing STATE.
 
     The four reader capabilities MUST be independently installed privileged
@@ -213,16 +220,18 @@ def install_native(*, read_managed_lane, read_accepted_base,
     for target in (CATALOGUE, RECEIPT):
         if target.exists() or target.is_symlink():
             _fail()
-    if (not callable(read_base_observation) or
-            not callable(read_native_base_acceptance)):
+    if (not callable(read_compiler_base_receipt) or
+            not callable(read_compiler_base_issuer) or
+            not callable(read_compiler_base_binding)):
         _fail()
     candidate = prepare(
         approval=a, lane_record=read_managed_lane(a["lane"]),
         accepted_base=read_accepted_base(a["accepted_base_generation_id"]),
-        producer_base_observation=read_base_observation(
+        compiler_base_receipt_bytes=read_compiler_base_receipt(
             a["accepted_base_generation_id"]),
-        native_base_acceptance=read_native_base_acceptance(
-            a["accepted_base_generation_id"]),
+        compiler_base_issuer_policy=read_compiler_base_issuer(),
+        compiler_base_binding=read_compiler_base_binding(
+            a["accepted_base_generation_id"], a["accepted_base_receipt_sha256"]),
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
         actual_reservation={
             "work_bytes": quota.BUILD_BYTES,
@@ -256,6 +265,12 @@ def install_native(*, read_managed_lane, read_accepted_base,
         "accepted_base_generation_id": a["accepted_base_generation_id"],
         "accepted_base_receipt_sha256": a["accepted_base_receipt_sha256"],
         "retained_acceptance_sha256": candidate["retained_acceptance_sha256"],
+        "accepted_base_kind": candidate["accepted_base_kind"],
+        "accepted_base_state_volume_id": candidate["accepted_base_state_volume_id"],
+        "accepted_base_compiler_files_sha256": candidate["accepted_base_compiler_files_sha256"],
+        "accepted_base_probe_sha256": candidate["accepted_base_probe_sha256"],
+        "accepted_base_environment_sha256": candidate["accepted_base_environment_sha256"],
+        "accepted_base_historical_provenance": candidate["accepted_base_historical_provenance"],
         "accepted_base_manifest_sha256": candidate["accepted_base_manifest_sha256"],
         "accepted_base_inventory_sha256": candidate["accepted_base_inventory_sha256"],
         "accepted_base_generation_record_sha256": candidate["accepted_base_generation_record_sha256"],
