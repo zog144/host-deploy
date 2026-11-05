@@ -10,7 +10,11 @@ permissions:
 jobs:
   exact-source-pin:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12','3.13']
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -23,7 +27,25 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/image-build
+          ref: 92e4d4c2166a49bbb2d5421660f77f75e881d0a2
+          path: dependencies/image-build-base-observer
+          persist-credentials: false
+      - name: Pin canonical producer base observation reader separately from original source
+        run: |
+          test "$(git -C dependencies/image-build-base-observer rev-parse HEAD)" = 92e4d4c2166a49bbb2d5421660f77f75e881d0a2
+          python - <<'PY'
+          from pathlib import Path
+          source=Path('dependencies/image-build-base-observer/src/zog/image_build/first_fonts_producer_contract.py').read_text()
+          consumer=Path('src/zog/host_deploy/gateway/graphics_base_acceptance.py').read_text()
+          assert 'image-build-first-fonts-base-observation-v1' in source
+          assert 'image-build-first-fonts-base-observation-v1' in consumer
+          assert 'canonical-base-observed-not-native-admission' in source
+          assert 'canonical-base-observed-not-native-admission' in consumer
+          PY
       - name: Pin exact source tree and original October pin bytes
         run: |
           python - <<'PY'
@@ -43,8 +65,8 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py
-          python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_owner.py
+          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py
+          python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_owner.py src/zog/host_deploy/gateway/graphics_base_acceptance.py src/zog/host_deploy/gateway/task_catalogue.py src/zog/host_deploy/gateway/image_build_dispatch.py
 
       - name: Verify real root-owned one-shot catalogue file, mode and receipt on ephemeral CI
         env:
