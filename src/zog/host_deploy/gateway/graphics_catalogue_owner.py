@@ -25,7 +25,8 @@ PIN_SHA256 = "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
 PIN_DATE = "2026-10-01"
 TASK = "graphics-fonts-image-v1"
 APPROVAL_SCHEMA = "host-deploy-graphics-catalogue-approval-v1"
-EVIDENCE_SCHEMA = base_acceptance.BINDING_SCHEMA
+EVIDENCE_SCHEMA = "host-deploy-reviewed-compiler-base-selection-v1"
+READER_SOURCE = "bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6"
 RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v1"
 STORE = Path(aggregate.EXTERNAL_MOUNT) / "owner-state"
 APPROVAL = STORE / "graphics-foundation-approval-v1.json"
@@ -195,7 +196,8 @@ def install_native(*, read_managed_lane, read_accepted_base,
         raise PermissionError("protected graphical catalogue requires root")
     # The installed owner/Work must bind actual source checkouts, immutable
     # generation acceptance and managed lane to the current Host/boot.
-    if attest_installed_source(SOURCE) is not True:
+    if (attest_installed_source(SOURCE) is not True or
+            attest_installed_source(READER_SOURCE) is not True):
         _fail()
     work = quota.inspect()
     external = aggregate.inspect_external_pool_native()
