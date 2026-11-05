@@ -27,10 +27,27 @@ STAGES = ("capabilities", "snapshot", "submit", "inspect")
 IDENTITY = re.compile(r"[0-9a-f]{32}\Z")
 SHA = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
+def _load_provenance_state_under_owner_lock(root, request_id):
+    """Read validated original state WITHOUT reacquiring request_lock.
+
+    generic_pipeline.advance already owns the exact request lock while
+    selecting its protected sender. Calling ledger.load_request here would
+    deadlock: that helper takes the same nonreentrant flock a second time.
+    The filesystem read is bounded to the original request's validated path
+    and is not independent native approval.
+    """
+    from .ledger import _load_state, ensure_root
+    if type(request_id) is not str or not IDENTITY.fullmatch(request_id):
+        raise RuntimeError("protected graphical operation owner required; invalid original ID")
+    directory = ensure_root(root) / "requests" / request_id
+    return _load_state(directory)
+
+
 def _protected_original_identifiers(root, binding, step):
-    """Read frozen original operation identity; never infer authority from it."""
+    """Read frozen original identity while caller owns its request lock."""
     from .graphics_operation_send_intent import _expected
-    original = load_request(root, binding["request_id"])
+    original = _load_provenance_state_under_owner_lock(
+        root, binding["request_id"])
     request = original["request"]
     origin = request["origin"]
     from .protocol import request_digest, ORIGIN_REPOSITORY
@@ -76,7 +93,15 @@ def _selected_protected_owner_preflight(root, binding, step, stage_binding):
 def _selected_protected_owner_sender(root, binding, step):
     """Root-only IPC request; no direct SSM or gateway-selected command bytes."""
     from . import graphics_owner_ipc
-    original = _protected_original_identifiers(binding, step)
+    try:
+        original = _protected_original_identifiers(root, binding, step)
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError):
+        # Fail closed before Host/SSM access if the original GitHub request
+        # or immutable stage selection cannot be independently reopened.
+        # Never let a missing original become a first-seen owner grant.
+        raise RuntimeError(
+            "protected graphical operation owner required; original identity unavailable"
+        ) from None
 
     def sender(_script, *, seconds):
         # Source-only compatibility with the existing stage caller. Neither
