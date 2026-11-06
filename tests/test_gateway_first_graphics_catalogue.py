@@ -35,7 +35,10 @@ def base_evidence(a,lane,kind="toolchain"):
             ("libc","usr/lib/libc.so")),start=1)}
     probe={"schema":"image-build-compiler-linker-probe-v1",
            "status":"passed","base_generation_id":a["accepted_base_generation_id"],
-           "compiler_target":"x86_64-linux-gnu","elapsed_seconds":1}
+           "compiler_target":"x86_64-linux-gnu","elapsed_seconds":1,
+           "isolation":{"schema":"image-build-compiler-isolation-v2",
+                        "profile":"selected-root-kernel-mounts-v1",
+                        "witness_sha256":"sha256:"+"9"*64}}
     claim={
         "schema":base.ACCEPTANCE_SCHEMA,
         "status":"independently-accepted-for-compiler-use",
@@ -143,7 +146,7 @@ def accepted_pin_bytes():
 
 def test_original_producer_and_new_reader_sources_remain_distinct():
     assert graphics.SOURCE=="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
-    assert graphics.READER_SOURCE=="6041a91cef371817bcf72db72c178363fd9bc1d9"
+    assert graphics.READER_SOURCE=="8e6fa1d4c270f77737ab3f9c0e0216676a0f089c"
     assert graphics.PIN_SHA256=="d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
     assert graphics.TASK=="graphics-fonts-image-v1"
     assert graphics.RECEIPT.parent==graphics.CATALOGUE.parent
@@ -316,3 +319,16 @@ def test_exact_producer_signed_compiler_image_binding(tmp_path, target_abi):
     with pytest.raises(base.BaseAcceptanceDenied):
         base.checked_base(bytes_,issuer,{**observed,"generation_kind":"toolchain"},
                           approval=approval,lane=lane)
+
+
+def test_legacy_isolation_denied_despite_matching_signature_and_binding():
+    a,lane,_,_=example()
+    raw,issuer,binding=base_evidence(a,lane)
+    row=json.loads(raw)
+    row["claim"]["native_probe"]["isolation"]={"pivot_root":True,"host_mounts_visible":False}
+    key=Ed25519PrivateKey.from_private_bytes(bytes([3])*32)
+    row["signature"]=base64.b64encode(key.sign(base.DOMAIN+base.canonical(row["claim"]))).decode()
+    raw=base.canonical(row);a["accepted_base_receipt_sha256"]=base.digest(raw)
+    binding["acceptance_receipt_sha256"]=base.digest(raw)
+    binding["native_probe_sha256"]=base.digest(base.canonical(row["claim"]["native_probe"]))
+    with pytest.raises(base.BaseAcceptanceDenied):base.checked_base(raw,issuer,binding,approval=a,lane=lane)
