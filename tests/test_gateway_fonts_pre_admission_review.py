@@ -162,3 +162,44 @@ def test_actual_selected_task_c_cannot_send_graphical_ssm_without_owner():
     assert "NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False" in (
         current/"src/zog/host_deploy/gateway/graphics_owner_trust_daemon.py"
     ).read_text()
+
+
+def test_real_recipe_dependency_edges_are_exact_and_no_host_substitution():
+    packages=original()/"project/package"
+    expected={
+        "libpng":{"build":[],"runtime":[]},
+        "freetype":{"build":["libpng-final"],"runtime":["libpng-final"]},
+        "fontconfig":{"build":["freetype-final"],"runtime":["freetype-final"]},
+    }
+    for name,dependencies in expected.items():
+        folder=packages/name/"stages/final"
+        assert literal(folder/"dependencies.py")==dependencies
+        sources=literal(folder/"sources.py")
+        assert len(sources)==1
+        upstream=literal(packages/name/"upstream.py")
+        assert sources[0]=={
+            "url":upstream["release_url"],
+            "sha256":upstream["sha256"],
+            "destination":"upstream","archive":True,
+        }
+        commands=literal(folder/"build.py")
+        assert set(commands)=={"configure","build","test","install"}
+        assert commands["configure"] and commands["test"]
+        assert all("test -n \"$DESTDIR\"" in " ".join(cmd)
+                   for cmd in commands["install"])
+        # Source closure excludes network acquisition during the selected
+        # build and does not permit an unreviewed optional dependency.
+        for stage in ("configure","build","test","install"):
+            for cmd in commands[stage]:
+                joined=" ".join(cmd)
+                for forbidden in ("curl ", "wget ", "pip install ",
+                                  "apt-get ", "dnf install ", "sudo "):
+                    assert forbidden not in joined
+    freetype_build=literal(packages/"freetype/stages/final/build.py")
+    flags=" ".join(" ".join(x) for x in freetype_build["configure"])
+    for required in ("--with-zlib=yes","--with-bzip2=yes",
+                     "--with-png=yes","--with-harfbuzz=no",
+                     "--with-brotli=no"):
+        assert required in flags
+    assert "make check" in " ".join(" ".join(x) for x in
+                                   literal(packages/"fontconfig/stages/final/build.py")["test"])
