@@ -74,3 +74,10 @@ or creating a replacement request. Workflow success is not producer execution su
 The command-center retains durable admission, ownership, operation identities and
 SSM results. Compilation is never hosted by this workflow. Generic automatic build
 advancement remains a separate opt-in; a gateway service upgrade does not enable it.
+
+
+## Selected shared-Host trust model — 2026-11-06
+
+The GitHub Actions OIDC identity is **outside** the trusted administrative Host and must remain an intentionally minimal dispatch principal, **SQS submission only to the selected FIFO queue**. Its AWS trust policy must constrain the real OIDC issuer/audience/subject and authorized repository/workflow; its effective IAM must not include `ssm:SendCommand`, general `sts:AssumeRole` privilege escalation, `iam:PassRole`, S3 checkpoint writes or root-control owner credentials. The checked-in workflow's `id-token: write` only requests a GitHub OIDC token; it does not establish IAM scope. Work must inspect the *actual* selected AWS role trust and permissions, including resource scope, independently.
+
+After SQS delivery, the normal graphical path is host-deploy gateway → authenticated protected owner → original approved claims/revocation/history → SSM. The administrator of that **same trusted Host** may administer SSM and all local credentials; we do not require an impossible admin-inaccessibility proof. Restricting a separately credentialed gateway service is optional defense in depth, not a replacement for protected claims or a proof against root. The contract is [graphical-task-c-shared-host-trust-v1.json](../../graphical-task-c-shared-host-trust-v1.json). No Actions OIDC permission expansion or SSM send was authorized by this document.
