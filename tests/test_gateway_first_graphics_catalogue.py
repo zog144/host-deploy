@@ -143,7 +143,7 @@ def accepted_pin_bytes():
 
 def test_original_producer_and_new_reader_sources_remain_distinct():
     assert graphics.SOURCE=="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
-    assert graphics.READER_SOURCE=="bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6"
+    assert graphics.READER_SOURCE=="6041a91cef371817bcf72db72c178363fd9bc1d9"
     assert graphics.PIN_SHA256=="d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
     assert graphics.TASK=="graphics-fonts-image-v1"
     assert graphics.RECEIPT.parent==graphics.CATALOGUE.parent
@@ -272,7 +272,8 @@ def test_no_implicit_compilation_or_authorization():
     assert "attest_installed_source(READER_SOURCE)" in source
 
 
-def test_exact_producer_signed_compiler_image_binding(tmp_path):
+@pytest.mark.parametrize("target_abi", ["x86_64-linux-gnu", "x86_64-zog-linux-gnu"])
+def test_exact_producer_signed_compiler_image_binding(tmp_path, target_abi):
     """Exercise pinned image-build PR18 resolve(), including actual image bytes.
 
     Producer's synthetic test signer is not native authority; consumer checks
@@ -285,6 +286,8 @@ def test_exact_producer_signed_compiler_image_binding(tmp_path):
     from test_compiler_base_acceptance import signed_fixture
     from zog.image_build import compiler_base_acceptance as upstream
     builder,selection,claim,issuer,sign=signed_fixture(tmp_path,kind="image")
+    claim["target_abi"] = target_abi
+    claim["native_probe"]["compiler_target"] = target_abi
     receipt_id=sign()
     observed=upstream.resolve(builder,selection,receipt_id)
     bytes_=(Path(issuer["receipt_directory"])/
@@ -299,6 +302,7 @@ def test_exact_producer_signed_compiler_image_binding(tmp_path):
           "provenance_host_id":claim["host_id"]}
     consumed=base.checked_base(
         bytes_,issuer,observed,approval=approval,lane=lane)
+    assert consumed["target_abi"] == target_abi
     assert consumed["kind"]=="image"
     assert consumed["generation_id"]==selection.generation
     assert consumed["accepted_receipt_sha256"]==receipt_id

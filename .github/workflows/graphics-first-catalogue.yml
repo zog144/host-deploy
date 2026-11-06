@@ -31,12 +31,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/image-build
-          ref: bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6
+          ref: 6041a91cef371817bcf72db72c178363fd9bc1d9
           path: dependencies/image-build-base-observer
           persist-credentials: false
       - name: Pin independently signed compiler-base reader separately from original source
         run: |
-          test "$(git -C dependencies/image-build-base-observer rev-parse HEAD)" = bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6
+          test "$(git -C dependencies/image-build-base-observer rev-parse HEAD)" = 6041a91cef371817bcf72db72c178363fd9bc1d9
           python - <<'PY'
           from pathlib import Path
           source=Path('dependencies/image-build-base-observer/src/zog/image_build/compiler_base_acceptance.py').read_text()
