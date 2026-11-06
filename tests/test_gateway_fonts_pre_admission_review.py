@@ -101,8 +101,12 @@ def test_pr17_legacy_preparation_is_held_not_reinterpreted_as_current_approval()
         record["task_catalogue"]["installed_catalogue_sha256"]))
     # This earlier source-only audit explicitly predates the signed dual-kind
     # compiler acceptance and current Task C owner; it cannot certify PR7 HEAD.
-    assert record["reviewer"]["host_deploy_fonts_catalogue_revision"]!=CURRENT_PR26_REVIEW
-    assert record["reviewer"]["host_deploy_fonts_catalogue_revision"]!="c01d7eb2ccc3de6f11252801f606a03cb84cad1f"
+    assert record["reviewer"]=={
+        "host_deploy_fonts_catalogue_revision":LEGACY_PR17_FONTS,
+        "host_deploy_task_c_revision":LEGACY_PR17_TASK_C,
+    }
+    assert LEGACY_PR17_FONTS!="c01d7eb2ccc3de6f11252801f606a03cb84cad1f"
+    assert LEGACY_PR17_TASK_C!=SELECTED_TASK_C
     assert record["native_gates"]["accepted_self_hosted_toolchain_generation"] is None
 
 
