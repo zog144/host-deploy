@@ -14,7 +14,7 @@ from zog.host_deploy.gateway import task_catalogue
 SOURCE="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 PR17="324b1469cb490a571d428cadd9ce72bbec5507b4"
 READER="bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6"
-CURRENT_PR26_REVIEW="02db124609b92396ff89fa628d8ddc9383e05f4b"
+SELECTED_TASK_C="02db124609b92396ff89fa628d8ddc9383e05f4b"\nLEGACY_PR17_FONTS="78a772a6542dba660ddaa4223b28593c0251f810"\nLEGACY_PR17_TASK_C="c46c6b5819b1f4496de1b860aa2785812244493e"
 TARGETS=("libpng-final","freetype-final","fontconfig-final")
 ENTRIES=(("fontconfig-final","fontconfig","fontconfig/stages/final"),
          ("freetype-final","freetype","freetype/stages/final"),
@@ -138,3 +138,27 @@ def test_owner_route_remains_separately_protected_and_no_native_claim():
     assert 'claim_once(' not in owner and "send_command(" not in owner
     assert "image-build-compiler-base-acceptance-v1" in route
     assert "historical-gap-declared" in route
+
+
+def test_actual_selected_task_c_cannot_send_graphical_ssm_without_owner():
+    current=root()/"dependencies/host-deploy-taskc"
+    pipeline=(current/"src/zog/host_deploy/gateway/generic_pipeline.py").read_text()
+    ipc=(current/"src/zog/host_deploy/gateway/graphics_owner_ipc.py").read_text()
+    trust=(current/"src/zog/host_deploy/gateway/graphics_owner_trust_history.py").read_text()
+    for needle in ("def _selected_protected_owner_preflight(",
+                   "def _selected_protected_owner_sender(",
+                   "protected_preflight = _selected_protected_owner_preflight(",
+                   "protected_sender = _selected_protected_owner_sender(",
+                   "return graphics_owner_ipc.submit_original(**original)"):
+        assert needle in pipeline
+    assert "return host.submit_command(" not in pipeline
+    assert "Host.submit_command(" not in pipeline.split("def _selected_protected_owner_sender(",1)[1]
+    for needle in ("observe-original","preflight-original","submit-original",
+                   "SO_PEERCRED","original_request_sha256"):
+        assert needle in ipc
+    # The real installed trust and latest history are not selected by a
+    # repository checkout or positive synthetic preflight.
+    assert "APPROVED_PIN_SHA256 = None" in trust
+    assert "NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False" in (
+        current/"src/zog/host_deploy/gateway/graphics_owner_trust_daemon.py"
+    ).read_text()
