@@ -54,6 +54,14 @@ jobs:
           persist-credentials: false
       - name: Verify original reviewed PR17 preparation is held, not native-authority evidence
         run: test "$(git -C dependencies/image-build-prepared rev-parse HEAD)" = 324b1469cb490a571d428cadd9ce72bbec5507b4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/host-deploy
+          ref: 02db124609b92396ff89fa628d8ddc9383e05f4b
+          path: dependencies/host-deploy-taskc
+          persist-credentials: false
+      - name: Pin reviewed protected-owner dispatch source independently
+        run: test "$(git -C dependencies/host-deploy-taskc rev-parse HEAD)" = 02db124609b92396ff89fa628d8ddc9383e05f4b
       - name: Pin exact source tree and original October pin bytes
         run: |
           python - <<'PY'
