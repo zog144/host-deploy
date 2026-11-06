@@ -5,9 +5,9 @@
 ## Exact separately selected revisions
 
 - Original image-build *compiler producer/source* remains `1f07e83dbd80dacb9bed0d6494c697375f0e26cd`. It is not the independently selected new verifier.
-- NEW review-only signed compiler acceptance verifier/source: image-build PR #18 `8e6fa1d4c270f77737ab3f9c0e0216676a0f089c`.
+- NEW review-only signed compiler acceptance verifier/source: image-build PR #18 `1616f192ef9d8964a8f37f32a86c69c0242a213c`.
 - Original monthly source pin: `sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
-- Producer handoff: https://github.com/zog144/image-build/blob/8e6fa1d4c270f77737ab3f9c0e0216676a0f089c/docs/image-build/first-fonts-producer-evidence-consumer-handoff-2026-11-04.md
+- Producer handoff: https://github.com/zog144/image-build/blob/1616f192ef9d8964a8f37f32a86c69c0242a213c/docs/image-build/first-fonts-producer-evidence-consumer-handoff-2026-11-04.md
 
 ## New immutable accepted compiler input
 

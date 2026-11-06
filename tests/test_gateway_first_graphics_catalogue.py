@@ -146,7 +146,7 @@ def accepted_pin_bytes():
 
 def test_original_producer_and_new_reader_sources_remain_distinct():
     assert graphics.SOURCE=="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
-    assert graphics.READER_SOURCE=="8e6fa1d4c270f77737ab3f9c0e0216676a0f089c"
+    assert graphics.READER_SOURCE=="1616f192ef9d8964a8f37f32a86c69c0242a213c"
     assert graphics.PIN_SHA256=="d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
     assert graphics.TASK=="graphics-fonts-image-v1"
     assert graphics.RECEIPT.parent==graphics.CATALOGUE.parent
