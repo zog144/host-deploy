@@ -14,7 +14,9 @@ from zog.host_deploy.gateway import task_catalogue
 SOURCE="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 PR17="324b1469cb490a571d428cadd9ce72bbec5507b4"
 READER="bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6"
-SELECTED_TASK_C="02db124609b92396ff89fa628d8ddc9383e05f4b"\nLEGACY_PR17_FONTS="78a772a6542dba660ddaa4223b28593c0251f810"\nLEGACY_PR17_TASK_C="c46c6b5819b1f4496de1b860aa2785812244493e"
+SELECTED_TASK_C="02db124609b92396ff89fa628d8ddc9383e05f4b"
+LEGACY_PR17_FONTS="78a772a6542dba660ddaa4223b28593c0251f810"
+LEGACY_PR17_TASK_C="c46c6b5819b1f4496de1b860aa2785812244493e"
 TARGETS=("libpng-final","freetype-final","fontconfig-final")
 ENTRIES=(("fontconfig-final","fontconfig","fontconfig/stages/final"),
          ("freetype-final","freetype","freetype/stages/final"),
