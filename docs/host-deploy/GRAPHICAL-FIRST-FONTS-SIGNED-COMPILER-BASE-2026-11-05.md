@@ -5,9 +5,9 @@
 ## Exact separately selected revisions
 
 - Original image-build *compiler producer/source* remains `1f07e83dbd80dacb9bed0d6494c697375f0e26cd`. It is not the independently selected new verifier.
-- NEW review-only signed compiler acceptance verifier/source: image-build PR #18 `6041a91cef371817bcf72db72c178363fd9bc1d9`.
+- NEW review-only signed compiler acceptance verifier/source: image-build PR #18 `1616f192ef9d8964a8f37f32a86c69c0242a213c`.
 - Original monthly source pin: `sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
-- Producer handoff: https://github.com/zog144/image-build/blob/6041a91cef371817bcf72db72c178363fd9bc1d9/docs/image-build/first-fonts-producer-evidence-consumer-handoff-2026-11-04.md
+- Producer handoff: https://github.com/zog144/image-build/blob/1616f192ef9d8964a8f37f32a86c69c0242a213c/docs/image-build/first-fonts-producer-evidence-consumer-handoff-2026-11-04.md
 
 ## New immutable accepted compiler input
 
@@ -36,3 +36,7 @@ The producer's new code changes original engine/graphical-composition source and
 - https://github.com/zog144/host-deploy/actions/runs/42041026236 — PASS both Python versions and same suite.
 
 **Disposition:** no native compiler accepted, no original GitHub issue/SQS, no actual SSM commands, no root-owned catalogue installation on a managed Host, no production source promotion. PR remains draft.
+
+## Observed isolation reader successor
+
+The selected reader now requires image-build-compiler-isolation-v2 and the explicit selected-root-kernel-mounts-v1 profile, including an authenticated witness digest. Kernel mount visibility is stated honestly; legacy unconditional isolation booleans are rejected. The compiler-purpose issuance procedure binds an independently installed approval to exact claim/authority digests and enrolled key. Task C keys alone are not compiler authority. These source changes do not install policy, sign a native receipt or authorize Fonts. Original recipe source/monthly pin and observer allowlists remain unchanged.

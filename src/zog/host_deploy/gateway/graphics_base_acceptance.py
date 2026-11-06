@@ -162,6 +162,14 @@ def checked_base(receipt_bytes, issuer_policy, producer_binding, *,
                 or claim["project_id"]!=lane["provenance_project_id"]
                 or claim["host_id"]!=lane["provenance_host_id"]):
             deny()
+        probe=claim["native_probe"]
+        if (type(probe) is not dict or type(probe.get("isolation")) is not dict
+                or probe["isolation"].get("schema")!="image-build-compiler-isolation-v2"
+                or probe["isolation"].get("profile")!="selected-root-kernel-mounts-v1"
+                or not match(probe["isolation"].get("witness_sha256"),SHA)):
+            deny()
+        # Exact installed producer performs mount/namespace validation; its
+        # independently authenticated binding below covers the entire probe.
         mapping={
             "generation_id":"generation_id",
             "generation_kind":"generation_kind",
