@@ -123,7 +123,10 @@ def selected_pin():
                  "installation_id","state_volume_id")) or
             not v2.match(row["scope_sha256"],v2.SHA) or
             not v2.match(row["original_checkpoint_sha256"],v2.SHA) or
-            row["installed_owner_source"]!="5ad7d5ed72d1b72edc767a658de28506791a74d4" or
+            (row["schema"]==PIN_SCHEMA_V2 and
+                row["installed_owner_source"]!="5ad7d5ed72d1b72edc767a658de28506791a74d4") or
+            (row["schema"]==PIN_SCHEMA_V3 and
+                not v2.match(row["installed_owner_source"],HEX64)) or
             not v2.match(row["installed_broker_source"],HEX64)):
         deny()
     return row,APPROVED_PIN_SHA256
