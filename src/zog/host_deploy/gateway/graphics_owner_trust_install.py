@@ -209,7 +209,7 @@ def validate_disabled_v3_selection(
             or manifest.get("status") != "NOT_ACTIVATED"
             or any(manifest.get(k) is not False for k in (
                 "socket_enabled","service_enabled","broker_admitted",
-                "original_authority_admitted")):
+                "original_authority_admitted"))):
         hold()
     owner_sha = sha(b"".join(
         name.encode("ascii")+b"\0"+installed_root_modules[name]+b"\0"
