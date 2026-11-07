@@ -5,9 +5,9 @@
 ## Exact separately selected revisions
 
 - Original image-build *compiler producer/source* remains `1f07e83dbd80dacb9bed0d6494c697375f0e26cd`. It is not the independently selected new verifier.
-- NEW review-only signed compiler acceptance verifier/source: image-build PR #18 `bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6`.
+- NEW review-only observed-isolation compiler acceptance verifier/source: image-build PR #20 `1616f192ef9d8964a8f37f32a86c69c0242a213c`.
 - Original monthly source pin: `sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
-- Producer handoff: https://github.com/zog144/image-build/blob/bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6/docs/image-build/first-fonts-producer-evidence-consumer-handoff-2026-11-04.md
+- Producer handoff: https://github.com/zog144/image-build/blob/1616f192ef9d8964a8f37f32a86c69c0242a213c/docs/image-build/first-fonts-producer-evidence-consumer-handoff-2026-11-04.md
 
 ## New immutable accepted compiler input
 
@@ -31,8 +31,12 @@ The producer's new code changes original engine/graphical-composition source and
 
 ## Source evidence
 
-- Exact PR #7 consumer source with real PR #18 producer `resolve()` fixture, synthetic Ed25519 image acceptance and negative signature/revocation-like pin/Host/STATE/ABI/byte-binding/history tests.
+- Exact PR #7 consumer source with real PR #20 producer `resolve()` fixture, synthetic Ed25519 image acceptance and negative signature/revocation-like pin/Host/STATE/ABI/byte-binding/history tests.
 - https://github.com/zog144/host-deploy/actions/runs/42041016045 — PASS Python 3.12/3.13, **62 source + 2 disposable root-owned installation tests per lane**.
 - https://github.com/zog144/host-deploy/actions/runs/42041026236 — PASS both Python versions and same suite.
 
 **Disposition:** no native compiler accepted, no original GitHub issue/SQS, no actual SSM commands, no root-owned catalogue installation on a managed Host, no production source promotion. PR remains draft.
+
+### Selected isolation source reconciliation — 2026-11-07
+
+The selected reader is image-build PR #20 `1616f192ef9d8964a8f37f32a86c69c0242a213c`, not the earlier PR #18 reader. It requires `image-build-compiler-isolation-v2` / `selected-root-kernel-mounts-v1`: exact signed original witness digest, actual worker UID/GID, controller runtime/invocation match, separate mount/network namespaces, effective capabilities zero, `NoNewPrivileges`, selected compiler/linker/header identities and bounded explicit kernel/systemd mounts. **The runtime may show pseudo-filesystems and systemd mounts**; the legacy `pivot_root=true` / `host_mounts_visible=false` pair is not an observed fact and is now rejected. Neither source review nor matching Ed25519 shape establishes authentic native issuer custody; Work must reopen the real witness and independently authorize the receipt. Original compiler producer and October source pin are unchanged.
