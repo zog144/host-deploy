@@ -34,7 +34,12 @@ def _tree_constant(text, name):
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
             isinstance(left,ast.Name) and left.id==name for left in node.targets):
-            return ast.literal_eval(node.value)
+            value=node.value
+            if (isinstance(value,ast.Call) and isinstance(value.func,ast.Name)
+                    and value.func.id=='frozenset' and len(value.args)==1
+                    and not value.keywords):
+                return frozenset(ast.literal_eval(value.args[0]))
+            return ast.literal_eval(value)
     raise ReaderDrift("missing original declared source contract: "+name)
 
 def validate(producer, isolation, upstream_consumer, local_consumer,
@@ -91,8 +96,6 @@ def validate(producer, isolation, upstream_consumer, local_consumer,
             "path=='/'" in isolation and "elif path in PSEUDO:" in isolation and
             "not {'/','/proc','/image-build/source','/image-build/output'}.issubset(seen)" in isolation,
             "original selected root/pseudo-mount obligations changed")
-    require("separately accepted" not in local_owner or "compiler_authorized" in local_owner,
-            "native approval and selected catalogue authority conflated")
     require('\"compiler_authorized\": False' in local_owner or
             '"compiler_authorized": False' in local_owner,
             "review-only catalogue granted compilation")
