@@ -31,12 +31,12 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/image-build
-          ref: bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6
+          ref: 1616f192ef9d8964a8f37f32a86c69c0242a213c
           path: dependencies/image-build-base-observer
           persist-credentials: false
-      - name: Pin independently signed compiler-base reader separately from original source
+      - name: Pin observed-isolation compiler reader separately from original recipe source
         run: |
-          test "$(git -C dependencies/image-build-base-observer rev-parse HEAD)" = bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6
+          test "$(git -C dependencies/image-build-base-observer rev-parse HEAD)" = 1616f192ef9d8964a8f37f32a86c69c0242a213c
           python - <<'PY'
           from pathlib import Path
           source=Path('dependencies/image-build-base-observer/src/zog/image_build/compiler_base_acceptance.py').read_text()
@@ -45,6 +45,13 @@ jobs:
           assert 'image-build-compiler-base-acceptance-v1' in consumer
           assert 'independent-compiler-capability-observed-not-job-authorization' in source
           assert 'independent-compiler-capability-observed-not-job-authorization' in consumer
+          isolation=Path('dependencies/image-build-base-observer/src/zog/image_build/compiler_base_isolation.py').read_text()
+          assert "image-build-compiler-isolation-v2" in isolation
+          assert "selected-root-kernel-mounts-v1" in isolation
+          assert "image-build-compiler-isolation-v2" in consumer
+          assert "selected-root-kernel-mounts-v1" in consumer
+          assert "bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6" not in Path(
+             'src/zog/host_deploy/gateway/graphics_catalogue_owner.py').read_text()
           PY
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
