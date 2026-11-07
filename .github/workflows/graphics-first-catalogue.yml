@@ -69,6 +69,14 @@ jobs:
           persist-credentials: false
       - name: Pin reviewed protected-owner dispatch source independently
         run: test "$(git -C dependencies/host-deploy-taskc rev-parse HEAD)" = 02db124609b92396ff89fa628d8ddc9383e05f4b
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: zog144/host-deploy
+          ref: b3ac93cd92df1b280f087fbb748263d3371750aa
+          path: dependencies/host-deploy-reviewed-pr29
+          persist-credentials: false
+      - name: Confirm independent reviewed PR29 consumer checkout
+        run: test "$(git -C dependencies/host-deploy-reviewed-pr29 rev-parse HEAD)" = b3ac93cd92df1b280f087fbb748263d3371750aa
       - name: Pin exact source tree and original October pin bytes
         run: |
           python - <<'PY'
@@ -88,7 +96,7 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py tests/test_gateway_fonts_pre_admission_review.py
+          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py tests/test_gateway_fonts_pre_admission_review.py tests/test_gateway_fonts_reader_pr20_pr29_reconciliation.py
           python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_owner.py src/zog/host_deploy/gateway/graphics_base_acceptance.py src/zog/host_deploy/gateway/task_catalogue.py src/zog/host_deploy/gateway/image_build_dispatch.py
 
       - name: Verify real root-owned one-shot catalogue file, mode and receipt on ephemeral CI
