@@ -250,9 +250,18 @@ def validate_disabled_v3_selection(
             or type(manifest.get("gateway_gid")) is not int
             or manifest["gateway_gid"] <= 0):
         hold()
-    text=service.decode("utf-8")
+    try:
+        text=service.decode("utf-8")
+        sock=socket_unit.decode("utf-8")
+    except UnicodeError:
+        hold()
     units=text.split("[Service]",1)
-    if (len(units)!=2 or "[Install]" in text or
+    if (len(units)!=2 or "[Install]" in text or "[Install]" in sock or
+            "ListenStream=" + daemon.SOCKET not in sock.splitlines() or
+            "SocketMode=0660" not in sock.splitlines() or
+            "Accept=no" not in sock.splitlines() or
+            "NoNewPrivileges=yes" not in units[1].splitlines() or
+            "CapabilityBoundingSet=" not in units[1].splitlines() or
             "RequiresMountsFor=/var/lib/zog-graphical-owner-ledger"
                 not in units[0].splitlines() or
             "RequiresMountsFor=/var/lib/zog-graphical-owner-authority"
