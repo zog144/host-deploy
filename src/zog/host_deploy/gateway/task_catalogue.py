@@ -99,7 +99,11 @@ def validate(value):
         fields = {"source_repository", "source_revision", "lane",
                   "monthly_pin_repository_path", "monthly_pin_identity",
                   "pin_date", "entries", "arguments", "lane_owner"}
-        if name not in BUILD_TASKS or type(item) is not dict or set(item) != fields:
+        # The retained-input digest is a catalogue-frozen binding, not a
+        # source of independent generation acceptance or task authorization.
+        optional_fields = {"retained_acceptance_sha256"}
+        if (name not in BUILD_TASKS or type(item) is not dict
+                or set(item) not in (fields, fields | optional_fields)):
             raise TaskCatalogueError("unknown or incomplete generic pipeline task")
         if (item["source_repository"] != "zog144/image-build"
                 or type(item["source_revision"]) is not str
@@ -115,6 +119,10 @@ def validate(value):
                 or type(item["lane_owner"]) is not str
                 or not _LANE.fullmatch(item["lane_owner"])):
             raise TaskCatalogueError("generic pipeline source/pin/lane is not frozen")
+        if ("retained_acceptance_sha256" in item and
+                (type(item["retained_acceptance_sha256"]) is not str or
+                 _SHA.fullmatch(item["retained_acceptance_sha256"]) is None)):
+            raise TaskCatalogueError("retained generation acceptance digest invalid")
         entries = item["entries"]
         if type(entries) is not list or not 1 <= len(entries) <= 32:
             raise TaskCatalogueError("invalid generic recipe entries")
@@ -228,3 +236,44 @@ def select(catalogue, task, *, repository, revision, lane=None,
                 and item["monthly_pin_identity"] != monthly_pin_identity)):
         raise TaskCatalogueError("admitted source/lane/pin differs from selected task")
     return json.loads(json.dumps(item))
+
+
+def select_retained(catalogue, task, *, retained_input_evidence,
+                    repository, revision, lane=None,
+                    monthly_pin_repository_path=None,
+                    monthly_pin_identity=None):
+    """Read-only selected task + separately accepted canonical retained input.
+
+    This does not attest a caller-supplied evidence dictionary, install
+    catalogue bytes, grant task authorization, check a dependency edge, or
+    change execution budget. Only the protected native owner may select
+    evidence from its independently installed canonical acceptance reader.
+    """
+    from .graphics_base_acceptance import retained_generation
+    item = select(
+        catalogue, task, repository=repository, revision=revision,
+        lane=lane, monthly_pin_repository_path=monthly_pin_repository_path,
+        monthly_pin_identity=monthly_pin_identity)
+    if (task not in REVIEWED_IMAGE_TASKS or
+            type(retained_input_evidence) is not dict or
+            "retained_acceptance_sha256" not in item):
+        raise TaskCatalogueError("graphical retained input acceptance unavailable")
+    if set(retained_input_evidence) != {"generation_id", "kind", "evidence"}:
+        raise TaskCatalogueError("graphical retained input evidence is incomplete")
+    complete_digest = "sha256:" + hashlib.sha256(
+        json.dumps(retained_input_evidence, sort_keys=True, separators=(",", ":"),
+                   ensure_ascii=True, allow_nan=False).encode("ascii")).hexdigest()
+    if complete_digest != item["retained_acceptance_sha256"]:
+        raise TaskCatalogueError("retained input receipt differs from frozen catalogue")
+    if retained_input_evidence["generation_id"] != item["arguments"]["selection"]:
+        raise TaskCatalogueError("accepted retained input differs from immutable catalogue")
+    try:
+        retained_generation(
+            task=task,
+            generation_id=retained_input_evidence["generation_id"],
+            kind=retained_input_evidence["kind"],
+            evidence=retained_input_evidence["evidence"],
+            approved_input_generation_id=item["arguments"]["selection"])
+    except ValueError as error:
+        raise TaskCatalogueError("retained input not independently accepted") from error
+    return item

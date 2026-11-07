@@ -1,0 +1,211 @@
+"""Source-only first Fonts pre-admission audit of immutable producer and GitHub queue.
+
+Runs against separately checked out exact Git refs. It does not read native
+STATE, AWS IAM, real S3 receipts, accepted rights, or authorize submission.
+"""
+import ast
+import json
+from pathlib import Path
+import pytest
+
+from zog.host_deploy.gateway import graphics_catalogue_owner as fonts
+from zog.host_deploy.gateway import task_catalogue
+
+SOURCE="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
+PR17="324b1469cb490a571d428cadd9ce72bbec5507b4"
+READER="1616f192ef9d8964a8f37f32a86c69c0242a213c"
+SELECTED_TASK_C="02db124609b92396ff89fa628d8ddc9383e05f4b"
+LEGACY_PR17_FONTS="78a772a6542dba660ddaa4223b28593c0251f810"
+LEGACY_PR17_TASK_C="c46c6b5819b1f4496de1b860aa2785812244493e"
+TARGETS=("libpng-final","freetype-final","fontconfig-final")
+ENTRIES=(("fontconfig-final","fontconfig","fontconfig/stages/final"),
+         ("freetype-final","freetype","freetype/stages/final"),
+         ("libpng-final","libpng","libpng/stages/final"))
+PACKAGES={"libpng":("1.6.58","28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775"),
+          "freetype":("2.14.3","36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f"),
+          "fontconfig":("2.18.3","4f7b554a38cdf78c033f666c8871f3749e14a094f65a07f630c91ed0b43d35e3")}
+
+
+def root():
+    result=Path(__file__).resolve().parents[1]
+    assert (result/"src/zog/host_deploy/gateway/task_catalogue.py").is_file()
+    return result
+
+
+def prepared():
+    return root()/"dependencies/image-build-prepared"
+
+
+def original():
+    return root()/"dependencies/image-build"
+
+
+def literal(path):
+    return ast.literal_eval(path.read_text())
+
+
+def test_exact_fonts_target_order_and_one_task_catalogue_candidate():
+    reviewed=task_catalogue.REVIEWED_IMAGE_TASKS[fonts.TASK]
+    assert reviewed=={"entries":ENTRIES,"targets":TARGETS}
+    plan=literal(original()/"project/bootstrap/graphics-fonts.py")
+    assert plan["schema"]==1 and plan["architecture"]=="x86_64"
+    assert [(s["id"],s["project"],s["recipe"]) for s in plan["stages"]]==[
+        ENTRIES[2],ENTRIES[1],ENTRIES[0]]
+    assert plan["targets"]==list(TARGETS)
+    assert fonts.SOURCE==SOURCE and fonts.READER_SOURCE==READER
+    assert fonts.PIN_PATH=="project/pins/2026-10-01/commit-pin.py"
+    assert fonts.PIN_SHA256=="d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
+
+
+@pytest.mark.parametrize("package", sorted(PACKAGES))
+def test_exact_archive_license_notice_evidence_is_declared_not_release_clearance(package):
+    version,digest=PACKAGES[package]
+    base=original()/"project/package"/package
+    source=literal(base/"upstream.py")
+    rights=literal(base/"license.py")
+    recipe=literal(base/"recipe-plan.py")
+    assert source["version"]==version and source["sha256"]==digest
+    assert source["verification_status"]=="downloaded-exact-release-sha256"
+    assert rights["package"]==package and rights["version"]==version
+    assert rights["source"]["sha256"]==digest
+    assert rights["status"]=="declared", "a declaration is not a public release grant"
+    assert rights["patches"]==[]
+    assert rights["evidence"] and all(
+        len(row["sha256"])==64 and row["source_sha256"]==digest
+        for row in rights["evidence"])
+    assert rights["components"] and any(
+        row["status"]=="unresolved" for row in rights["components"])
+    assert recipe["status"]=="authored" and recipe["stages"]==["final"]
+
+
+def test_pr17_legacy_preparation_is_held_not_reinterpreted_as_current_approval():
+    record=json.loads((prepared()/"project/graphics-first-workspace/first-fonts-github-preparation-v1.json").read_text())
+    assert record["schema"]=="zog-fonts-github-trigger-preparation-v1"
+    assert record["status"]=="PREPARED_NOT_SUBMITTABLE"
+    assert record["task"]==fonts.TASK
+    assert record["producer"]["source_revision"]==SOURCE
+    assert record["submission"]=={
+        "enabled":False, "auto_retry":False, "manual_direct_ssm_allowed":False,
+        "github_issue_created":False, "submitted_sqs_message":False,
+        "acceptance_claimed":False,
+    }
+    assert record["budget"]=={
+        "work_bytes":30*1024**3,"external_bytes":2*1024**3,
+        "total_bytes":32*1024**3,"execution_limit_seconds":21600,
+    }
+    assert all(x is None for x in record["native_gates"].values())
+    assert all(x is None for x in (
+        record["gateway"]["request_id"],record["gateway"]["issue_number"],
+        record["gateway"]["queue_receipt"],
+        record["task_catalogue"]["selected_base_generation"],
+        record["task_catalogue"]["installed_catalogue_sha256"]))
+    # This earlier source-only audit explicitly predates the signed dual-kind
+    # compiler acceptance and current Task C owner; it cannot certify PR7 HEAD.
+    assert record["reviewer"]=={
+        "host_deploy_fonts_catalogue_revision":LEGACY_PR17_FONTS,
+        "host_deploy_task_c_revision":LEGACY_PR17_TASK_C,
+    }
+    assert LEGACY_PR17_FONTS!="c01d7eb2ccc3de6f11252801f606a03cb84cad1f"
+    assert LEGACY_PR17_TASK_C!=SELECTED_TASK_C
+    assert record["native_gates"]["accepted_self_hosted_toolchain_generation"] is None
+
+
+def test_oidc_single_attempt_fifo_contract_is_separate_from_protected_owner():
+    workflow=(root()/".github/workflows/gateway-issue-dispatch.yml").read_text()
+    code=(root()/"src/zog/host_deploy/gateway/github_dispatch.py").read_text()
+    config=(root()/"src/zog/host_deploy/gateway/github_configuration.py").read_text()
+    # Only GitHub issue-opened event triggers once; AWS credentials are OIDC,
+    # not produced by a GitHub issue or the gateway execution owner.
+    for token in ("types: [opened]","github.run_attempt == 1",
+                  "vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'",
+                  "id-token: write","role-to-assume:",
+                  "ZOG_GATEWAY_DISPATCH_REVISION","github_dispatch submit"):
+        assert token in workflow
+    for token in ('MessageGroupId=request["workspace_id"]',
+                  'MessageDeduplicationId=request["request_id"]',
+                  '"total_max_attempts": 1', 'event.get("action") != "opened"'):
+        assert token in code
+    for token in ("GITHUB_TRIGGERING_ACTOR", "AUTHORIZED_ACTORS",
+                  "ALLOWED_OPERATIONS","GITHUB_RUN_ATTEMPT"):
+        assert token in config
+    # No SSM credentials or direct SendCommand in OIDC issue workflow.
+    assert "ssm:SendCommand" not in workflow
+    assert "aws ssm send-command" not in workflow
+    assert "send_command(" not in code
+
+
+def test_owner_route_remains_separately_protected_and_no_native_claim():
+    # PR7 catalogues never grant or execute the actual operation.
+    owner=(root()/"src/zog/host_deploy/gateway/graphics_catalogue_owner.py").read_text()
+    route=(root()/"src/zog/host_deploy/gateway/graphics_base_acceptance.py").read_text()
+    assert '"compiler_authorized": False' in owner
+    assert "attest_installed_source(READER_SOURCE)" in owner
+    assert 'kind not in ("toolchain", "image")' not in owner
+    assert 'claim_once(' not in owner and "send_command(" not in owner
+    assert "image-build-compiler-base-acceptance-v1" in route
+    assert "historical-gap-declared" in route
+
+
+def test_actual_selected_task_c_cannot_send_graphical_ssm_without_owner():
+    current=root()/"dependencies/host-deploy-taskc"
+    pipeline=(current/"src/zog/host_deploy/gateway/generic_pipeline.py").read_text()
+    ipc=(current/"src/zog/host_deploy/gateway/graphics_owner_ipc.py").read_text()
+    trust=(current/"src/zog/host_deploy/gateway/graphics_owner_trust_history.py").read_text()
+    for needle in ("def _selected_protected_owner_preflight(",
+                   "def _selected_protected_owner_sender(",
+                   "protected_preflight = _selected_protected_owner_preflight(",
+                   "protected_sender = _selected_protected_owner_sender(",
+                   "return graphics_owner_ipc.submit_original(**original)"):
+        assert needle in pipeline
+    assert "return host.submit_command(" not in pipeline
+    assert "Host.submit_command(" not in pipeline.split("def _selected_protected_owner_sender(",1)[1]
+    for needle in ("observe-original","preflight-original","submit-original",
+                   "SO_PEERCRED","original_request_sha256"):
+        assert needle in ipc
+    # The real installed trust and latest history are not selected by a
+    # repository checkout or positive synthetic preflight.
+    assert "APPROVED_PIN_SHA256 = None" in trust
+    assert "NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False" in (
+        current/"src/zog/host_deploy/gateway/graphics_owner_trust_daemon.py"
+    ).read_text()
+
+
+def test_real_recipe_dependency_edges_are_exact_and_no_host_substitution():
+    packages=original()/"project/package"
+    expected={
+        "libpng":{"build":[],"runtime":[]},
+        "freetype":{"build":["libpng-final"],"runtime":["libpng-final"]},
+        "fontconfig":{"build":["freetype-final"],"runtime":["freetype-final"]},
+    }
+    for name,dependencies in expected.items():
+        folder=packages/name/"stages/final"
+        assert literal(folder/"dependencies.py")==dependencies
+        sources=literal(folder/"sources.py")
+        assert len(sources)==1
+        upstream=literal(packages/name/"upstream.py")
+        assert sources[0]=={
+            "url":upstream["release_url"],
+            "sha256":upstream["sha256"],
+            "destination":"upstream","archive":True,
+        }
+        commands=literal(folder/"build.py")
+        assert set(commands)=={"configure","build","test","install"}
+        assert commands["configure"] and commands["test"]
+        assert all("test -n \"$DESTDIR\"" in " ".join(cmd)
+                   for cmd in commands["install"])
+        # Source closure excludes network acquisition during the selected
+        # build and does not permit an unreviewed optional dependency.
+        for stage in ("configure","build","test","install"):
+            for cmd in commands[stage]:
+                joined=" ".join(cmd)
+                for forbidden in ("curl ", "wget ", "pip install ",
+                                  "apt-get ", "dnf install ", "sudo "):
+                    assert forbidden not in joined
+    freetype_build=literal(packages/"freetype/stages/final/build.py")
+    flags=" ".join(" ".join(x) for x in freetype_build["configure"])
+    for required in ("--with-zlib=yes","--with-bzip2=yes",
+                     "--with-png=yes","--with-harfbuzz=no",
+                     "--with-brotli=no"):
+        assert required in flags
+    assert "make check" in " ".join(" ".join(x) for x in
+                                   literal(packages/"fontconfig/stages/final/build.py")["test"])
