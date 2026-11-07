@@ -6,6 +6,9 @@ on:
     paths:
       - src/zog/host_deploy/gateway/graphics_owner_trust_service.py
       - src/zog/host_deploy/gateway/graphics_owner_trust_history.py
+      - src/zog/host_deploy/gateway/graphics_owner_trust_install.py
+      - deploy/graphical-trust-broker/zog-graphical-trust.service
+      - tests/test_graphics_owner_trust_v3_install.py
       - tests/test_graphics_owner_trust_v3_installation.py
       - .github/workflows/graphical-v3-checkpoint-consumer.yml
 permissions:
@@ -25,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/root-control
-          ref: c61add845b7f3e43af458517e9bb3e6856d2e82b
+          ref: dc4275240cdf71efaed643b83fd4126b84728efa
           path: companions/root-control
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -36,9 +39,10 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/tests:${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/root-control/tests
         run: |
-          test "$(git -C companions/root-control rev-parse HEAD)" = c61add845b7f3e43af458517e9bb3e6856d2e82b
+          test "$(git -C companions/root-control rev-parse HEAD)" = dc4275240cdf71efaed643b83fd4126b84728efa
           python -m pytest -q -rs \
             tests/test_graphics_owner_trust_v3_installation.py \
+            tests/test_graphics_owner_trust_v3_install.py \
             tests/test_graphics_owner_trust_daemon.py \
             tests/test_graphics_owner_trust_history.py \
             tests/test_graphics_owner_trust_install.py \
