@@ -3,6 +3,8 @@
 Description=Protected Zog graphical read-only original trust/history broker
 Requires=zog-graphical-trust.socket
 After=network-online.target
+RequiresMountsFor=/var/lib/zog-graphical-owner-ledger
+RequiresMountsFor=/var/lib/zog-graphical-owner-authority
 
 [Service]
 Type=exec
@@ -10,7 +12,6 @@ User=root
 Group=root
 ExecStart=/usr/bin/python3 -I -m zog.host_deploy.gateway.graphics_owner_trust_daemon
 Sockets=zog-graphical-trust.socket
-RequiresMountsFor=/var/lib/zog-graphical-owner-ledger
 LoadCredential=read-only-checkpoint.json:/var/lib/zog-graphical-trust-credential-source/read-only-checkpoint.json
 LoadCredential=broker-private.key:/etc/zog/graphical-owner/trust-broker-private.key
 StandardOutput=journal
@@ -30,6 +31,7 @@ PrivateDevices=yes
 UMask=0077
 ReadOnlyPaths=/etc/zog/graphical-owner
 ReadOnlyPaths=/var/lib/zog-graphical-owner-ledger
+ReadOnlyPaths=/var/lib/zog-graphical-owner-authority
 ReadWritePaths=/run/zog
 # Credentials are explicit protected installation inputs, absent until native
 # admission. The read-only role must be proven GetObject-only for the exact
