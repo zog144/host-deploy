@@ -160,3 +160,123 @@ def validate_disabled_selection(manifest, *, actual_modules, service, socket_uni
             "authentic_operator_mapping_verified":False,
             "read_only_s3_role_verified":False,
             "gateway_ssm_denied":False}
+
+
+
+V3_SCHEMA = "zog-graphical-trust-broker-disabled-install-v3"
+V3_FIELDS = (FIELDS - {"root_source_revision"}) | {
+    "root_source_sha256", "installation_scope_sha256",
+    "registry_sha256", "storage_commit_sha256",
+}
+
+
+def validate_disabled_v3_selection(
+    manifest, *, actual_modules, installed_root_modules,
+    service, socket_unit, installation_storage_record, storage_commit,
+):
+    """Proposed exact-byte v3 install only; never accepts mounted S3/IPC/IAM.
+
+    Root modules and broker modules are installed-byte inputs of an independent
+    installer, not a gateway manifest. The selected native root constructor
+    must independently verify signed registry, grant, external anchor and
+    installer-signed storage commit before using any read-only session.
+    """
+    from zog.root_control import graphical_installation_storage_authority as root
+    from zog.root_control import graphical_task_c_trust_authority as authority
+    from zog.root_control import graphical_operation_owner_source as op
+
+    if (type(manifest) is not dict or set(manifest) != V3_FIELDS
+            or manifest.get("schema") != V3_SCHEMA
+            or type(actual_modules) is not dict
+            or set(actual_modules) != SOURCES
+            or type(installed_root_modules) is not dict
+            or set(installed_root_modules) != set(authority.ROOT_V3_SOURCES)
+            or any(type(v) is not bytes or not v
+                   for v in list(actual_modules.values()) +
+                             list(installed_root_modules.values()))
+            or any(not trust.v2.match(manifest.get(k),trust.v2.SHA) for k in
+                   ("root_source_sha256","installation_scope_sha256",
+                    "registry_sha256","storage_commit_sha256",
+                    "original_checkpoint_sha256",
+                    "source_modules_sha256","service_sha256","socket_sha256",
+                    "owner_observation_public_sha256",
+                    "broker_signer_public_sha256",
+                    "installed_gateway_source_sha256",
+                    "gateway_executable_sha256","scope_sha256"))
+            or any(not trust.v2.match(manifest.get(k),trust.v2.H64)
+                   for k in ("host_id","installation_id","state_volume_id"))
+            or type(service) is not bytes or type(socket_unit) is not bytes
+            or manifest.get("status") != "NOT_ACTIVATED"
+            or any(manifest.get(k) is not False for k in (
+                "socket_enabled","service_enabled","broker_admitted",
+                "original_authority_admitted")):
+        hold()
+    owner_sha = sha(b"".join(
+        name.encode("ascii")+b"\0"+installed_root_modules[name]+b"\0"
+        for name in sorted(authority.ROOT_V3_SOURCES)))
+    broker_sha = sha(b"".join(
+        name.encode("ascii")+b"\0"+actual_modules[name]+b"\0"
+        for name in sorted(SOURCES)))
+    if (owner_sha != manifest["root_source_sha256"]
+            or broker_sha != manifest["source_modules_sha256"]
+            or broker_sha != manifest["installed_gateway_source_sha256"]
+            or sha(service) != manifest["service_sha256"]
+            or sha(socket_unit) != manifest["socket_sha256"]):
+        hold()
+    src=installation_storage_record
+    if (type(src) is not dict or set(src)!=root.AUTHORITY_KEYS
+            or src.get("schema") != root.AUTHORITY_SCHEMA
+            or src.get("mode") != root.SOURCE_MODE
+            or src["installation_scope_sha256"] !=
+                manifest["installation_scope_sha256"]
+            or src["registry_sha256"] != manifest["registry_sha256"]
+            or src["checkpoint_reader_role_arn"] !=
+                manifest["readonly_checkpoint_role_arn"]
+            or src["checkpoint_writer_role_arn"] !=
+                manifest["owner_checkpoint_write_role_arn"]
+            or sha(op.canonical(src)) != manifest["original_checkpoint_sha256"]
+            or type(storage_commit) is not dict
+            or sha(op.canonical(storage_commit)) !=
+                manifest["storage_commit_sha256"]):
+        hold()
+    if (not all(type(manifest.get(k)) is str and ROLE.fullmatch(manifest[k])
+                for k in ("readonly_checkpoint_role_arn","owner_ssm_role_arn",
+                          "owner_checkpoint_write_role_arn"))
+            or len({manifest["readonly_checkpoint_role_arn"],
+                    manifest["owner_ssm_role_arn"],
+                    manifest["owner_checkpoint_write_role_arn"]}) != 3
+            or type(manifest.get("gateway_uid")) is not int
+            or manifest["gateway_uid"] < 1000
+            or type(manifest.get("gateway_gid")) is not int
+            or manifest["gateway_gid"] <= 0):
+        hold()
+    text=service.decode("utf-8")
+    units=text.split("[Service]",1)
+    if (len(units)!=2 or "[Install]" in text or
+            "RequiresMountsFor=/var/lib/zog-graphical-owner-ledger"
+                not in units[0].splitlines() or
+            "RequiresMountsFor=/var/lib/zog-graphical-owner-authority"
+                not in units[0].splitlines() or
+            any(x.startswith("RequiresMountsFor=")
+                for x in units[1].splitlines()) or
+            "ReadOnlyPaths=/var/lib/zog-graphical-owner-authority"
+                not in units[1].splitlines() or
+            "LoadCredential=read-only-checkpoint.json:" not in text or
+            "LoadCredential=broker-private.key:" not in text or
+            any(x in text for x in (
+                "LoadCredential=aws-session.json",
+                "LoadCredential=checkpoint-session.json",
+                "ExecStartPost=", "WantedBy=")) or
+            "ssm:SendCommand" in text):
+        hold()
+    return {
+        "status":"V3_SOURCE_SELECTION_DISABLED",
+        "exact_root_module_sha256":owner_sha,
+        "exact_broker_module_sha256":broker_sha,
+        "registry_genesis_verified_native":False,
+        "external_anchor_verified_native":False,
+        "read_only_role_verified_native":False,
+        "socket_enabled":False,
+        "broker_admitted":False,
+        "ssm_authorized":False,
+    }
