@@ -78,6 +78,10 @@ def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
             or request["state_volume_id"]!=signed_pin["state_volume_id"]
             or (not installation_v3 and checkpoint.scope!=scope)):
         denied()
+    expected_pin_schema = (client.PIN_SCHEMA_V3 if installation_v3
+                           else client.PIN_SCHEMA_V2)
+    if signed_pin["schema"] != expected_pin_schema:
+        denied()
     if installation_v3:
         # A stable installation selects the remote history; a separate
         # signed operation scope selects what this IPC may observe. Neither
@@ -129,8 +133,10 @@ def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
     # Fresh read of exact existing immutable history: no bootstrap, listing,
     # cached last-seen value, PUT, credential fallback or discovery.
     head=checkpoint.current_witness(scope)
+    minimum_sequence = 0 if installation_v3 else 1
     if (type(head) is not dict or set(head)!={"sequence","history_sha256","revoked"}
-            or type(head["sequence"]) is not int or head["sequence"]<1
+            or type(head["sequence"]) is not int
+            or head["sequence"]<minimum_sequence
             or type(head["revoked"]) is not bool or head["revoked"]
             or not client.v2.match(head["history_sha256"],client.v2.SHA)):
         denied()
