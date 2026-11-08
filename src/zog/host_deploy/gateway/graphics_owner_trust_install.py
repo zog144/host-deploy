@@ -174,6 +174,7 @@ HOST_INSTALL_V2_SOURCES = frozenset((
     "zog.host_install.graphical_registry_identity_mapping",
     "zog.host_install.graphical_readonly_trust_broker_install",
     "zog.host_install.state_contract",
+    "zog.host_install.state_gate",
     "zog.host_install.state_inspect",
 ))
 
