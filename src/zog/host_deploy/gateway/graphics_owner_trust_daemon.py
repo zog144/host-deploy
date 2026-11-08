@@ -48,6 +48,7 @@ class InstalledReadOnlyAuthority:
     gateway_gid: int
     gateway_executable_sha256: str
     gateway_cgroup: str
+    backend_recheck: object = None
 
 
 def _activated_socket():
@@ -133,6 +134,23 @@ def serve_connection(connection, authority, *, now=None):
         hold()
     pid = _peer_identity(connection, authority)
     _native_peer_witness(pid, authority)
+    if authority.original_checkpoint.get("schema") == (
+            "zog-task-c-installation-storage-authority-v1"):
+        # The v3 trusted provider, not the gateway IPC, supplies this reader.
+        # A retained mapping signature alone does not attest mounted STATE.
+        if not callable(authority.backend_recheck):
+            hold()
+        observed = authority.backend_recheck()
+        if (type(observed) is not dict or
+                set(observed) != {
+                    "backend", "registry_sha256",
+                    "installation_scope_sha256", "mapping_sha256",
+                    "observation_sha256"}
+                or observed["installation_scope_sha256"] !=
+                    authority.checkpoint.scope or
+                observed["registry_sha256"] !=
+                    authority.checkpoint.registry_sha):
+            hold()
     frame = _request(connection)
     if now is None:
         now = int(time.time())
