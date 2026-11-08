@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/root-control
-          ref: 194c921f86bda7e64a820af2486503883ba84596
+          ref: dcaed223d01216d131ffe183c2b04f2a13588754
           path: companions/root-control
           persist-credentials: false
       - uses: actions/checkout@v4
@@ -55,7 +55,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/tests:${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/root-control/tests:${{ github.workspace }}/companions/host-install/src:${{ github.workspace }}/companions/host-install/tests:${{ github.workspace }}/companions/host-install/src:${{ github.workspace }}/companions/host-install/tests
         run: |
-          test "$(git -C companions/root-control rev-parse HEAD)" = 194c921f86bda7e64a820af2486503883ba84596
+          test "$(git -C companions/root-control rev-parse HEAD)" = dcaed223d01216d131ffe183c2b04f2a13588754
           test "$(git -C companions/host-install rev-parse HEAD)" = 8b4d9e00d3a9377eaf542c2fe503df82a87cda50
           test "$(git -C companions/host-install rev-parse HEAD)" = 8b4d9e00d3a9377eaf542c2fe503df82a87cda50
           python -m pytest -q -rs \
