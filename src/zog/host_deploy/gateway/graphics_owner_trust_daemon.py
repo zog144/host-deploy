@@ -144,7 +144,7 @@ def serve_connection(connection, authority, *, now=None):
         if (type(observed) is not dict or
                 set(observed) != {
                     "backend", "registry_sha256",
-                    "installation_scope_sha256", "native_observer_sha256",
+                    "installation_scope_sha256", "live_snapshot_sha256",
                     "observation_sha256"}
                 or observed["installation_scope_sha256"] !=
                     authority.checkpoint.scope or
