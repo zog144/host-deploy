@@ -167,12 +167,21 @@ V3_SCHEMA = "zog-graphical-trust-broker-disabled-install-v3"
 V3_FIELDS = (FIELDS - {"root_source_revision"}) | {
     "root_source_sha256", "installation_scope_sha256",
     "registry_sha256", "storage_commit_sha256",
+    "native_host_install_source_sha256",
 }
+HOST_INSTALL_V2_SOURCES = frozenset((
+    "zog.host_install.graphical_registry_identity_mapping_v2",
+    "zog.host_install.graphical_registry_identity_mapping",
+    "zog.host_install.graphical_readonly_trust_broker_install",
+    "zog.host_install.state_contract",
+    "zog.host_install.state_inspect",
+))
 
 
 def validate_disabled_v3_selection(
     manifest, *, actual_modules, installed_root_modules,
-    service, socket_unit, installation_storage_record, storage_commit,
+    installed_host_install_modules, service, socket_unit,
+    installation_storage_record, storage_commit,
 ):
     """Proposed exact-byte v3 install only; never accepts mounted S3/IPC/IAM.
 
@@ -191,11 +200,16 @@ def validate_disabled_v3_selection(
             or set(actual_modules) != SOURCES
             or type(installed_root_modules) is not dict
             or set(installed_root_modules) != set(authority.ROOT_V3_SOURCES)
+            or type(installed_host_install_modules) is not dict
+            or set(installed_host_install_modules) != HOST_INSTALL_V2_SOURCES
             or any(type(v) is not bytes or not v
                    for v in list(actual_modules.values()) +
-                             list(installed_root_modules.values()))
+                             list(installed_root_modules.values()) +
+                             list(installed_host_install_modules.values()))
             or any(not trust.v2.match(manifest.get(k),trust.v2.SHA) for k in
-                   ("root_source_sha256","installation_scope_sha256",
+                   ("root_source_sha256",
+                    "native_host_install_source_sha256",
+                    "installation_scope_sha256",
                     "registry_sha256","storage_commit_sha256",
                     "original_checkpoint_sha256",
                     "source_modules_sha256","service_sha256","socket_sha256",
@@ -217,7 +231,11 @@ def validate_disabled_v3_selection(
     broker_sha = sha(b"".join(
         name.encode("ascii")+b"\0"+actual_modules[name]+b"\0"
         for name in sorted(SOURCES)))
+    host_sha = sha(b"".join(
+        name.encode("ascii")+b"\0"+installed_host_install_modules[name]+b"\0"
+        for name in sorted(HOST_INSTALL_V2_SOURCES)))
     if (owner_sha != manifest["root_source_sha256"]
+            or host_sha != manifest["native_host_install_source_sha256"]
             or broker_sha != manifest["source_modules_sha256"]
             or broker_sha != manifest["installed_gateway_source_sha256"]
             or sha(service) != manifest["service_sha256"]
@@ -281,6 +299,7 @@ def validate_disabled_v3_selection(
     return {
         "status":"V3_SOURCE_SELECTION_DISABLED",
         "exact_root_module_sha256":owner_sha,
+        "exact_host_install_v2_source_sha256":host_sha,
         "exact_broker_module_sha256":broker_sha,
         "registry_genesis_verified_native":False,
         "external_anchor_verified_native":False,
