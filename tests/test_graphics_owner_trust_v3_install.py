@@ -23,18 +23,25 @@ def selection():
     modules={
         name:Path(importlib.util.find_spec(name).origin).read_bytes()
         for name in install.SOURCES}
+    host_modules={
+        name:Path(importlib.util.find_spec(name).origin).read_bytes()
+        for name in install.HOST_INSTALL_V2_SOURCES}
     owner_sha=install.sha(b"".join(
         name.encode()+b"\0"+root_files[name]+b"\0"
         for name in sorted(root_files)))
     broker_sha=install.sha(b"".join(
         name.encode()+b"\0"+modules[name]+b"\0"
         for name in sorted(modules)))
+    host_sha=install.sha(b"".join(
+        name.encode()+b"\0"+host_modules[name]+b"\0"
+        for name in sorted(host_modules)))
     unit=(BASE/"deploy/graphical-trust-broker/zog-graphical-trust.service").read_bytes()
     sock=(BASE/"deploy/graphical-trust-broker/zog-graphical-trust.socket").read_bytes()
     record=row["storage_record"]
     manifest={
         "schema":install.V3_SCHEMA,
         "root_source_sha256":owner_sha,
+        "native_host_install_source_sha256":host_sha,
         "gateway_source_revision":"f"*40,
         "host_id":row["root_row"]["host_id"],
         "installation_id":row["root_row"]["installation_id"],
@@ -67,13 +74,14 @@ def selection():
         "broker_admitted":False,"original_authority_admitted":False,
     }
     assert set(manifest)==install.V3_FIELDS
-    return manifest, modules, root_files, unit, sock,record,row["storage_commit"]
+    return manifest, modules, root_files, unit, sock,record,row["storage_commit"],host_modules
 
 
 def inspect(values):
-    manifest,modules,roots,unit,sock,record,commit=values
+    manifest,modules,roots,unit,sock,record,commit,host_modules=values
     return install.validate_disabled_v3_selection(
         manifest,actual_modules=modules,installed_root_modules=roots,
+        installed_host_install_modules=host_modules,
         service=unit,socket_unit=sock,
         installation_storage_record=record,storage_commit=commit)
 
@@ -87,24 +95,29 @@ def test_v3_installation_source_selects_correct_modules_and_both_mounts():
     assert result["ssm_authorized"] is False
     assert result["read_only_role_verified_native"] is False
     assert result["exact_root_module_sha256"]==row[0]["root_source_sha256"]
+    assert result["exact_host_install_v2_source_sha256"]==row[0][
+        "native_host_install_source_sha256"]
     assert result["exact_broker_module_sha256"]==row[0]["source_modules_sha256"]
 
 
 @pytest.mark.parametrize("tamper",(
-    "root_bytes","broker_bytes","role_swap","scope_swap",
+    "root_bytes","broker_bytes","host_install_bytes","role_swap","scope_swap",
     "commit_swap","genesis_swap","owner_mount_missing",
     "requires_in_service","socket_enable","privileged_ssm",
     "claimed_activation","missing_readonly_role",
 ))
 def test_exact_v3_disabled_install_blocks_mutated_source_or_authority(tamper):
     state=list(selection())
-    manifest,modules,roots,service,socket,record,commit=state
+    manifest,modules,roots,service,socket,record,commit,host_modules=state
     if tamper=="root_bytes":
         name=next(iter(roots))
         roots[name]+=b"malicious"
     elif tamper=="broker_bytes":
         name=next(iter(modules))
         modules[name]+=b"malicious"
+    elif tamper=="host_install_bytes":
+        name=next(iter(host_modules))
+        host_modules[name]+=b"malicious"
     elif tamper=="role_swap":
         manifest["readonly_checkpoint_role_arn"]=manifest[
             "owner_checkpoint_write_role_arn"]
