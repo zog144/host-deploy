@@ -28,6 +28,6 @@ AmbientCapabilities=
 PrivateDevices=yes
 UMask=0077
 ReadOnlyPaths=/etc/zog/graphical-owner
-ReadOnlyPaths=/var/lib/zog-graphical-owner-ledger
-ReadOnlyPaths=/var/lib/zog-graphical-owner-authority
+ReadOnlyPaths=/var/lib/zog-owner-ledger
+ReadOnlyPaths=/var/lib/zog-owner-authority
 # No checkpoint writer/SSM credentials. Broker remains hard-disabled in source.
