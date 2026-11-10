@@ -11,7 +11,8 @@ from test_graphics_owner_trust_v3_install import selection
 
 BASE=Path(__file__).resolve().parents[1]
 BROKER=BASE/"deploy/graphical-trust-broker/root-backed/zog-graphical-trust.service"
-VERIFY=BASE/"companions/host-install/src/zog/host_install/systemd/root-backed/zog-graphical-owner-storage-verified.service"
+import zog.host_install
+VERIFY=Path(zog.host_install.__file__).resolve().parent/"systemd/root-backed/zog-graphical-owner-storage-verified.service"
 
 
 def selected():
