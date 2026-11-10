@@ -1,0 +1,33 @@
+# Root-backed v4 disabled Task C trust/history broker; no activation target.
+[Unit]
+Description=Protected Zog graphical read-only original trust/history broker
+Requires=zog-graphical-trust.socket zog-graphical-owner-storage-verified.service
+After=zog-graphical-owner-storage-verified.service network-online.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/opt/zog/graphical-trust/venv/bin/python3 -I -m zog.host_deploy.gateway.graphics_owner_trust_daemon
+Sockets=zog-graphical-trust.socket
+LoadCredential=read-only-checkpoint.json:/var/lib/zog-graphical-trust-credential-source/read-only-checkpoint.json
+LoadCredential=broker-private.key:/etc/zog/graphical-owner/trust-broker-private.key
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+UMask=0077
+ReadOnlyPaths=/etc/zog/graphical-owner
+ReadOnlyPaths=/var/lib/zog-graphical-owner-ledger
+ReadOnlyPaths=/var/lib/zog-graphical-owner-authority
+# No checkpoint writer/SSM credentials. Broker remains hard-disabled in source.
