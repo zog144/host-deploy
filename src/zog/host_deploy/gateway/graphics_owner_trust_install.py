@@ -164,11 +164,17 @@ def validate_disabled_selection(manifest, *, actual_modules, service, socket_uni
 
 
 V3_SCHEMA = "zog-graphical-trust-broker-disabled-install-v3"
+V4_SCHEMA = "zog-graphical-trust-broker-root-backed-disabled-install-v4"
+V4_ROOT_MODE = "root-backed-application-directories"
 V3_FIELDS = (FIELDS - {"root_source_revision"}) | {
     "root_source_sha256", "installation_scope_sha256",
     "registry_sha256", "storage_commit_sha256",
     "native_host_install_source_sha256",
 }
+V4_FIELDS = V3_FIELDS | frozenset((
+    "root_storage_mode", "root_directory_plan_sha256",
+    "verified_unit_sha256",
+))
 HOST_INSTALL_V2_SOURCES = frozenset((
     "zog.host_install.state_contract",
     "zog.host_install.state_gate",
@@ -180,8 +186,14 @@ def validate_disabled_v3_selection(
     manifest, *, actual_modules, installed_root_modules,
     installed_host_install_modules, service, socket_unit,
     installation_storage_record, storage_commit,
+    root_directory_plan=None, verified_unit=None,
 ):
-    """Proposed exact-byte v3 install only; never accepts mounted S3/IPC/IAM.
+    """Versioned v3 or v4 source-only broker; never admits IAM/SSM.
+
+    Root-backed v4 is explicit and uses a separate signed installer receipt.
+    The historical v3 requires the prior exact two-mount unit. No fallback
+    from one schema to the other is permitted.
+
 
     Root modules and broker modules are installed-byte inputs of an independent
     installer, not a gateway manifest. The selected native root constructor
@@ -191,9 +203,19 @@ def validate_disabled_v3_selection(
     from zog.root_control import graphical_installation_storage_authority as root
     from zog.root_control import graphical_task_c_trust_authority as authority
     from zog.root_control import graphical_operation_owner_source as op
-
-    if (type(manifest) is not dict or set(manifest) != V3_FIELDS
-            or manifest.get("schema") != V3_SCHEMA
+    from zog.root_control import graphical_task_c_root_backed_storage as local
+    root_mode = type(manifest) is dict and manifest.get("schema") == V4_SCHEMA
+    if (type(manifest) is not dict
+            or set(manifest) != (V4_FIELDS if root_mode else V3_FIELDS)
+            or manifest.get("schema") not in (V3_SCHEMA, V4_SCHEMA)
+            or (root_mode and (
+                manifest.get("root_storage_mode") != V4_ROOT_MODE
+                or type(root_directory_plan) is not dict
+                or not isinstance(verified_unit, bytes)
+                or sha(op.canonical(root_directory_plan)) !=
+                    manifest.get("root_directory_plan_sha256")
+                or sha(verified_unit) !=
+                    manifest.get("verified_unit_sha256")))
             or type(actual_modules) is not dict
             or set(actual_modules) != SOURCES
             or type(installed_root_modules) is not dict
@@ -240,9 +262,22 @@ def validate_disabled_v3_selection(
             or sha(socket_unit) != manifest["socket_sha256"]):
         hold()
     src=installation_storage_record
-    if (type(src) is not dict or set(src)!=root.AUTHORITY_KEYS
-            or src.get("schema") != root.AUTHORITY_SCHEMA
-            or src.get("mode") != root.SOURCE_MODE
+    expected_fields = (local.AUTHORITY_KEYS if root_mode
+                       else root.AUTHORITY_KEYS)
+    expected_schema = (local.AUTHORITY_SCHEMA if root_mode
+                       else root.AUTHORITY_SCHEMA)
+    expected_mode = (local.MODE if root_mode else root.SOURCE_MODE)
+    if (type(src) is not dict or set(src)!=expected_fields
+            or src.get("schema") != expected_schema
+            or src.get("mode") != expected_mode
+            or (root_mode and (
+                src.get("ledger_directory") != local.LEDGER or
+                src.get("authority_directory") != local.AUTHORITY or
+                src.get("root_filesystem_uuid") !=
+                    root_directory_plan.get("root_filesystem_uuid") or
+                type(storage_commit) is not dict or
+                storage_commit.get("schema") != local.COMMIT_SCHEMA or
+                storage_commit.get("mode") != local.MODE))
             or src["installation_scope_sha256"] !=
                 manifest["installation_scope_sha256"]
             or src["registry_sha256"] != manifest["registry_sha256"]
@@ -272,16 +307,39 @@ def validate_disabled_v3_selection(
     except UnicodeError:
         hold()
     units=text.split("[Service]",1)
+    if root_mode:
+        try:
+            local_unit=verified_unit.decode("utf-8")
+        except UnicodeError:
+            hold()
+        section=local_unit.split("[Service]",1)
+        if (len(section) != 2 or "[Install]" in local_unit
+                or "[Install]" in text or
+                "Type=oneshot" not in section[1].splitlines()
+                or ("ExecStart=/opt/zog/graphical-owner/venv/bin/python3"
+                    " -I -m zog.root_control.graphical_task_c_root_storage_verify"
+                    ) not in section[1].splitlines()
+                or "NoNewPrivileges=yes" not in section[1].splitlines()
+                or "CapabilityBoundingSet=" not in section[1].splitlines()
+                or any("LoadCredential=" in line or "RequiresMountsFor="
+                       in line for line in local_unit.splitlines())
+                or "Requires=zog-graphical-trust.socket zog-graphical-owner-storage-verified.service"
+                   not in units[0].splitlines()
+                or "After=zog-graphical-owner-storage-verified.service network-online.target"
+                   not in units[0].splitlines()
+                or any("RequiresMountsFor=" in line for line in text.splitlines())):
+            hold()
     if (len(units)!=2 or "[Install]" in text or "[Install]" in sock or
             "ListenStream=" + daemon.SOCKET not in sock.splitlines() or
             "SocketMode=0660" not in sock.splitlines() or
             "Accept=no" not in sock.splitlines() or
             "NoNewPrivileges=yes" not in units[1].splitlines() or
             "CapabilityBoundingSet=" not in units[1].splitlines() or
-            "RequiresMountsFor=/var/lib/zog-graphical-owner-ledger"
-                not in units[0].splitlines() or
-            "RequiresMountsFor=/var/lib/zog-graphical-owner-authority"
-                not in units[0].splitlines() or
+            (not root_mode and (
+                "RequiresMountsFor=/var/lib/zog-graphical-owner-ledger"
+                    not in units[0].splitlines() or
+                "RequiresMountsFor=/var/lib/zog-graphical-owner-authority"
+                    not in units[0].splitlines())) or
             any(x.startswith("RequiresMountsFor=")
                 for x in units[1].splitlines()) or
             "ReadOnlyPaths=/var/lib/zog-graphical-owner-authority"
@@ -295,7 +353,8 @@ def validate_disabled_v3_selection(
             "ssm:SendCommand" in text):
         hold()
     return {
-        "status":"V3_SOURCE_SELECTION_DISABLED",
+        "status":("V4_ROOT_BACKED_SOURCE_DISABLED" if root_mode
+                  else "V3_SOURCE_SELECTION_DISABLED"),
         "exact_root_module_sha256":owner_sha,
         "exact_host_install_v2_source_sha256":host_sha,
         "exact_broker_module_sha256":broker_sha,
@@ -306,3 +365,11 @@ def validate_disabled_v3_selection(
         "broker_admitted":False,
         "ssm_authorized":False,
     }
+
+
+
+def validate_disabled_v4_selection(manifest, **kwargs):
+    """Require an *explicit* root-backed v4 signed source review, not v3."""
+    if type(manifest) is not dict or manifest.get("schema") != V4_SCHEMA:
+        hold()
+    return validate_disabled_v3_selection(manifest, **kwargs)
