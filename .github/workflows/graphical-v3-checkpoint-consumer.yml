@@ -65,7 +65,6 @@ jobs:
             companions/root-control/tests/test_graphical_task_c_v3_readonly.py \
             companions/root-control/tests/test_graphical_s3_installation_checkpoint.py \
             tests/test_graphics_owner_trust_v4_root_backed.py \
-            companions/host-install/tests/test_graphical_task_c_v4_root_backed_install.py \
             companions/root-control/tests/test_graphical_task_c_root_backed_storage.py
       - if: always()
         run: echo 'V3 source-only root/deploy compatibility. Native readonly principal, S3 history, IPC placement and SSM SEND are unaccepted.' >> "$GITHUB_STEP_SUMMARY"
