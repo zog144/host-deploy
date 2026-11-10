@@ -342,7 +342,8 @@ def validate_disabled_v3_selection(
                     not in units[0].splitlines())) or
             any(x.startswith("RequiresMountsFor=")
                 for x in units[1].splitlines()) or
-            "ReadOnlyPaths=/var/lib/zog-graphical-owner-authority"
+            ("ReadOnlyPaths=" + (local.AUTHORITY if root_mode
+                                  else "/var/lib/zog-graphical-owner-authority"))
                 not in units[1].splitlines() or
             "LoadCredential=read-only-checkpoint.json:" not in text or
             "LoadCredential=broker-private.key:" not in text or
