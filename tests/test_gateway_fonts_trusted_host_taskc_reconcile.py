@@ -24,7 +24,7 @@ def _deny(reason):
     raise TrustedRouteMismatch("trusted-Host Fonts source NO-GO: " + reason)
 
 
-def inspect_pipeline(generic, trusted, intent, catalogue, *, selected_task, selected_owner):
+def inspect_pipeline(generic, trusted, intent, catalogue, selected_owner):
     if not all(word in generic for word in (
         "def advance(", "send_intent.claim(", "send_intent.record_command(",
         "trusted.submit_once(", "_protected_original_identifiers(",
