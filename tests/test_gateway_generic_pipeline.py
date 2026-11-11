@@ -65,6 +65,11 @@ def mock_environment(monkeypatch, *, wrong_capability=None, lost_reply=False):
     monkeypatch.setattr(generic,"_base",lambda root,ident: (
         {"request":{"operation":"build.submit"},"states":{"admission":"admitted"}},
         binding))
+    monkeypatch.setattr(generic,"_protected_original_identifiers",lambda root,b,s:{
+        "request_id":b["request_id"],
+        "original_request_sha256":"a"*64,
+        "operation_id":s["operation_id"],
+    })
     monkeypatch.setattr(generic,"_stage_binding",
                         lambda b,step:{
                             "request_id":step["operation_id"],
