@@ -9,6 +9,8 @@ This adapter never accepts an SSM document, instance, shell text, or
 credentials from a GitHub request. An uncertain SendCommand reply is NOT a
 reason to try again.
 """
+import re
+
 from .image_build_execution import CONTROL_TIMEOUT_SECONDS, remote_script
 from .image_build_dispatch import verify_current_target
 
@@ -46,12 +48,14 @@ def selected_command(gateway_root, binding, step, stage_binding):
     target = verify_current_target(gateway_root, binding)
     if (type(target) is not dict
             or type(target.get("instance_id")) is not str
-            or not target["instance_id"].startswith("i-")
+            or not re.fullmatch(r"i-[0-9a-f]{8,17}",target["instance_id"])
             or type(target.get("region")) is not str
-            or not target["region"]):
+            or not re.fullmatch(r"[a-z]{2}-[a-z]+-[0-9]",target["region"])
+            or type(target.get("account_id")) is not str
+            or not re.fullmatch(r"[0-9]{12}",target["account_id"])):
         raise TrustedSubmissionDenied("selected compiler host unavailable")
     script = remote_script(stage_binding)
-    if type(script) is not str or not script:
+    if type(script) is not str or not script or len(script.encode("utf-8")) > 32768:
         raise TrustedSubmissionDenied("invalid derived image-build command")
     return target, script
 
