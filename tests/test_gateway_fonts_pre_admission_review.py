@@ -1,7 +1,7 @@
 """Source-only first Fonts pre-admission audit of immutable producer and GitHub queue.
 
 Runs against separately checked out exact Git refs. It does not read native
-STATE, AWS IAM, real S3 receipts, accepted rights, or authorize submission.
+STATE, AWS IAM, real SSM results, accepted rights, or authorize submission.
 """
 import ast
 import json
@@ -14,7 +14,7 @@ from zog.host_deploy.gateway import task_catalogue
 SOURCE="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 PR17="324b1469cb490a571d428cadd9ce72bbec5507b4"
 READER="1616f192ef9d8964a8f37f32a86c69c0242a213c"
-SELECTED_TASK_C="02db124609b92396ff89fa628d8ddc9383e05f4b"
+SELECTED_TASK_C="0fd2db17698423d4cd30b296fc9f78e83cee145c"
 LEGACY_PR17_FONTS="78a772a6542dba660ddaa4223b28593c0251f810"
 LEGACY_PR17_TASK_C="c46c6b5819b1f4496de1b860aa2785812244493e"
 TARGETS=("libpng-final","freetype-final","fontconfig-final")
@@ -78,37 +78,20 @@ def test_exact_archive_license_notice_evidence_is_declared_not_release_clearance
     assert recipe["status"]=="authored" and recipe["stages"]==["final"]
 
 
-def test_pr17_legacy_preparation_is_held_not_reinterpreted_as_current_approval():
-    record=json.loads((prepared()/"project/graphics-first-workspace/first-fonts-github-preparation-v1.json").read_text())
-    assert record["schema"]=="zog-fonts-github-trigger-preparation-v1"
-    assert record["status"]=="PREPARED_NOT_SUBMITTABLE"
-    assert record["task"]==fonts.TASK
-    assert record["producer"]["source_revision"]==SOURCE
-    assert record["submission"]=={
-        "enabled":False, "auto_retry":False, "manual_direct_ssm_allowed":False,
-        "github_issue_created":False, "submitted_sqs_message":False,
-        "acceptance_claimed":False,
-    }
-    assert record["budget"]=={
-        "work_bytes":30*1024**3,"external_bytes":2*1024**3,
-        "total_bytes":32*1024**3,"execution_limit_seconds":21600,
-    }
-    assert all(x is None for x in record["native_gates"].values())
-    assert all(x is None for x in (
-        record["gateway"]["request_id"],record["gateway"]["issue_number"],
-        record["gateway"]["queue_receipt"],
-        record["task_catalogue"]["selected_base_generation"],
-        record["task_catalogue"]["installed_catalogue_sha256"]))
-    # This earlier source-only audit explicitly predates the signed dual-kind
-    # compiler acceptance and current Task C owner; it cannot certify PR7 HEAD.
-    assert record["reviewer"]=={
-        "host_deploy_fonts_catalogue_revision":LEGACY_PR17_FONTS,
-        "host_deploy_task_c_revision":LEGACY_PR17_TASK_C,
-    }
-    assert LEGACY_PR17_FONTS!="c01d7eb2ccc3de6f11252801f606a03cb84cad1f"
-    assert LEGACY_PR17_TASK_C!=SELECTED_TASK_C
-    assert record["native_gates"]["accepted_self_hosted_toolchain_generation"] is None
-
+def test_fonts_catalogue_review_is_not_github_request_authority():
+    # PR17's moving head independently pins the selected *PR7* exact source.
+    # PR7 must not pin PR17's moving head back, which creates a circular
+    # Git commit dependency. This check uses the actual local catalogue.
+    assert fonts.TASK=="graphics-fonts-image-v1"
+    assert fonts.SOURCE==SOURCE
+    assert fonts.READER_SOURCE==READER
+    owner=(root()/"src/zog/host_deploy/gateway/graphics_catalogue_owner.py").read_text()
+    assert '"compiler_authorized": False' in owner
+    assert '"compiler_base": bound_base["accepted_receipt_sha256"]' in owner
+    assert "send_command(" not in owner
+    assert "create_issue(" not in owner
+    assert "ssm:SendCommand" not in owner
+    assert SELECTED_TASK_C!="02db124609b92396ff89fa628d8ddc9383e05f4b"
 
 def test_oidc_single_attempt_fifo_contract_is_separate_from_protected_owner():
     workflow=(root()/".github/workflows/gateway-issue-dispatch.yml").read_text()
@@ -146,29 +129,31 @@ def test_owner_route_remains_separately_protected_and_no_native_claim():
     assert "historical-gap-declared" in route
 
 
-def test_actual_selected_task_c_cannot_send_graphical_ssm_without_owner():
+def test_actual_selected_task_c_is_trusted_host_single_attempt_not_s3_broker():
     current=root()/"dependencies/host-deploy-taskc"
     pipeline=(current/"src/zog/host_deploy/gateway/generic_pipeline.py").read_text()
-    ipc=(current/"src/zog/host_deploy/gateway/graphics_owner_ipc.py").read_text()
-    trust=(current/"src/zog/host_deploy/gateway/graphics_owner_trust_history.py").read_text()
-    for needle in ("def _selected_protected_owner_preflight(",
-                   "def _selected_protected_owner_sender(",
-                   "protected_preflight = _selected_protected_owner_preflight(",
-                   "protected_sender = _selected_protected_owner_sender(",
-                   "return graphics_owner_ipc.submit_original(**original)"):
+    trusted=(current/"src/zog/host_deploy/gateway/trusted_host_submission.py").read_text()
+    intent=(current/"src/zog/host_deploy/gateway/graphics_operation_send_intent.py").read_text()
+    for needle in ("def _protected_original_identifiers(",
+                   "send_intent.claim(", "send_intent.record_command(",
+                   "trusted.submit_once("):
         assert needle in pipeline
-    assert "return host.submit_command(" not in pipeline
-    assert "Host.submit_command(" not in pipeline.split("def _selected_protected_owner_sender(",1)[1]
-    for needle in ("observe-original","preflight-original","submit-original",
-                   "SO_PEERCRED","original_request_sha256"):
-        assert needle in ipc
-    # The real installed trust and latest history are not selected by a
-    # repository checkout or positive synthetic preflight.
-    assert "APPROVED_PIN_SHA256 = None" in trust
-    assert "NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False" in (
-        current/"src/zog/host_deploy/gateway/graphics_owner_trust_daemon.py"
-    ).read_text()
-
+    for needle in ("def selected_command(", "def submit_once(",
+                   'DOCUMENT = "AWS-RunShellScript"',
+                   "verify_current_target("):
+        assert needle in trusted
+    assert 'return host.submit_command(script, seconds=seconds)' in trusted
+    assert "os.fsync(" in intent and "def refuse_if_claimed(" in intent
+    # Historical broker sources may still exist, but selected code neither
+    # imports their signed approvals nor depends on S3 or owner-only IAM.
+    import ast
+    for source in (pipeline,trusted):
+        modules=[node.module for node in ast.walk(ast.parse(source))
+                 if isinstance(node,ast.ImportFrom)]
+        assert all(not m or not any(old in m for old in (
+            "graphics_owner_ipc","graphics_owner_trust_history",
+            "storage_approval","owner_checkpoint"))
+            for m in modules)
 
 def test_real_recipe_dependency_edges_are_exact_and_no_host_substitution():
     packages=original()/"project/package"
