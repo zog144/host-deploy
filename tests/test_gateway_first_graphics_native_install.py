@@ -17,6 +17,29 @@ from zog.host_deploy.gateway import task_catalogue, fresh_native_owner
 from test_gateway_first_graphics_catalogue import example, accepted_pin_bytes, base_evidence
 
 
+
+def resource_observation(a):
+    return {
+        "schema":g.resource.SCHEMA,
+        "host_id":a["host_id"],"installation_id":a["installation_id"],
+        "lane":a["lane"],"root_filesystem_id":"a"*64,
+        "work":{"path":g.resource.WORK_ROOT,"filesystem_id":"a"*64,
+                "backend":"xfs-project-quota","project_id":12001,
+                "hard_bytes":g.resource.WORK_BYTES,
+                "quota_active":True,"inheritance_verified":True,
+                "real_directory":True,"same_host_root_filesystem":True,
+                "kernel_verified":True},
+        "external":{"path":g.resource.EXTERNAL_ROOT,"filesystem_id":"a"*64,
+                "backend":"xfs-project-quota","project_id":12002,
+                "hard_bytes":g.resource.EXTERNAL_BYTES,
+                "quota_active":True,"inheritance_verified":True,
+                "real_directory":True,"same_host_root_filesystem":True,
+                "kernel_verified":True},
+        "worker_writable_roots":[g.resource.WORK_ROOT,g.resource.EXTERNAL_ROOT],
+        "deadline_seconds":21600,"deadline_enforced":True,
+        "observation_status":"live-kernel-observed",
+    }
+
 @pytest.fixture
 def protected_tmp():
     # /tmp is world writable even when the fixture child is root-owned;
@@ -43,12 +66,6 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
     monkeypatch.setattr(g, "RECEIPT", state/"graphics-foundation-catalogue-receipt-v1.json")
     g.APPROVAL.write_text(json.dumps(a),encoding="ascii")
     g.APPROVAL.chmod(0o600)
-    monkeypatch.setattr(g.quota,"inspect",lambda: {
-        "capacity_bytes":30*1024**3-4096})
-    monkeypatch.setattr(g.aggregate,"inspect_external_pool_native",lambda: {
-        "limit_bytes":2*1024**3-4096,
-        "mount_verified":True,"allocation_verified":True,
-        "budget_scope":g.aggregate.BUDGET_SCOPE})
     observed=[]
     def attested_source(revision):
         assert revision in (g.SOURCE, g.READER_SOURCE)
@@ -91,7 +108,11 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
             read_compiler_base_binding=attested_native,
             read_installed_pin=attested_pin,
             attest_installed_source=attested_source,
-            attest_host_identity=attested_host)
+            attest_host_identity=attested_host,
+            read_resource_observation=lambda:resource_observation(a),
+            installed_host_id=a["host_id"],
+            installed_installation_id=a["installation_id"],
+            installed_lane=a["lane"])
     receipt=install()
     assert observed == ["source","reader","host","lane","base",
                         "signed-receipt","issuer","canonical-binding","pin"]
@@ -102,6 +123,8 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
     assert receipt["accepted_base_inventory_sha256"] == producer_binding["generation_inventory_sha256"]
     assert receipt["accepted_base_generation_record_sha256"] == producer_binding["generation_record_sha256"]
     assert receipt["dedicated_storage_bytes"]==32*1024**3
+    assert receipt["resource_backend"]=="existing-root-filesystem-project-quota"
+    assert receipt["root_filesystem_id"]=="a"*64
     for file in (g.APPROVAL,g.CATALOGUE,g.RECEIPT):
         st=file.lstat()
         assert st.st_uid == 0
@@ -130,10 +153,6 @@ def test_partial_original_catalogue_cannot_be_repaired(protected_tmp,monkeypatch
     g.CATALOGUE.write_bytes(b"interrupted-first-write")
     g.CATALOGUE.chmod(0o600)
     original=g.CATALOGUE.read_bytes()
-    monkeypatch.setattr(g.quota,"inspect",lambda:{"capacity_bytes":30*1024**3-4096})
-    monkeypatch.setattr(g.aggregate,"inspect_external_pool_native",lambda:{
-        "limit_bytes":2*1024**3-4096,"mount_verified":True,
-        "allocation_verified":True,"budget_scope":g.aggregate.BUDGET_SCOPE})
     with pytest.raises(g.GraphicalCatalogueBlocked):
         g.install_native(
             read_managed_lane=lambda _:pytest.fail("no lane read after interrupt"),
