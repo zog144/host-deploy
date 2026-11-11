@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/host-install
-          ref: dbc0095a1197c0bf540ae536d5ea8e56a585e686
+          ref: 68785adc4d859d5f0d7d88a367515e34e0cf2952
           path: companions/host-install
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -52,7 +52,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/tests:${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/root-control/tests:${{ github.workspace }}/companions/host-install/src:${{ github.workspace }}/companions/host-install/tests
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = f2c765cc38a666b60a09729cd16ab63102ca1dd5
-          test "$(git -C companions/host-install rev-parse HEAD)" = dbc0095a1197c0bf540ae536d5ea8e56a585e686
+          test "$(git -C companions/host-install rev-parse HEAD)" = 68785adc4d859d5f0d7d88a367515e34e0cf2952
           python -m pytest -q -rs \
             tests/test_graphics_owner_trust_v3_installation.py \
             tests/test_graphics_owner_trust_v3_backend_observation.py \
