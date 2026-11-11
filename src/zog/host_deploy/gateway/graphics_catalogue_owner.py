@@ -157,6 +157,10 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
         "arguments": {
             "mode": "image",
             "selection": a["accepted_base_generation_id"],
+            # This is a frozen *receipt identity*, not a new task approval.
+            # The actual producer checks independent issuer, retained bytes
+            # and original kind=image/toolchain again at pipeline submission.
+            "compiler_base": bound_base["accepted_receipt_sha256"],
             "targets": list(fixed["targets"]),
         },
     }
