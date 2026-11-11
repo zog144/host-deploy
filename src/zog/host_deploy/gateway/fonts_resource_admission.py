@@ -36,7 +36,7 @@ def checked(readback, *, current_host_id, current_installation_id, expected_lane
     """
     expected={
         "schema","host_id","installation_id","lane","root_filesystem_id",
-        "work","external","worker_writable_roots","deadline_seconds",
+        "work","external","available_bytes","worker_writable_roots","deadline_seconds",
         "deadline_enforced","observation_status"}
     if type(readback) is not dict or set(readback)!=expected or readback["schema"]!=SCHEMA:
         hold()
@@ -48,6 +48,8 @@ def checked(readback, *, current_host_id, current_installation_id, expected_lane
             hold()
     if (type(readback["root_filesystem_id"]) is not str or
             HEX.fullmatch(readback["root_filesystem_id"]) is None
+            or type(readback["available_bytes"]) is not int
+            or readback["available_bytes"] < TOTAL_BYTES
             or readback["deadline_seconds"]!=TIME_SECONDS
             or readback["deadline_enforced"] is not True
             or readback["observation_status"]!="live-kernel-observed"):
@@ -134,6 +136,10 @@ def inspect_native(*, host_id, installation_id, lane,
         if options.intersection({"pqnoenforce","prjquotanoenforce"}):
             hold()
         root_stat=os.stat("/")
+        fs=os.statvfs("/")
+        free_bytes=fs.f_bavail*fs.f_frsize
+        if free_bytes<TOTAL_BYTES:
+            hold()
         # Each root is a real, root-owned directory on the same filesystem
         # without any nested independent mount or symlink substitution.
         observed={}
@@ -210,6 +216,7 @@ def inspect_native(*, host_id, installation_id, lane,
             "installation_id":installation_id,"lane":lane,
             "root_filesystem_id":format(root_stat.st_dev,"064x"),
             "work":observed["work"],"external":observed["external"],
+            "available_bytes":free_bytes,
             "worker_writable_roots":worker_writable_roots,
             "deadline_seconds":TIME_SECONDS,
             "deadline_enforced":deadline_enforced,
