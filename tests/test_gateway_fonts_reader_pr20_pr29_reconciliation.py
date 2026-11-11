@@ -70,8 +70,12 @@ def validate(producer, isolation, upstream_consumer, local_consumer,
             "Zog native target ABI no longer permitted by current consumer")
     require(local_consumer==upstream_consumer,
             "first-Fonts catalogue uses a consumer different from reviewed PR29")
-    require(local_owner==upstream_owner,
-            "first-Fonts catalogue source is not reviewed PR29 owner")
+    # PR7 owns the *one-task* catalogue producer. PR29 owns the shared
+    # compiler receipt consumer; only the latter must remain byte-identical.
+    # The PR7 owner must additionally bind the accepted compiler SHA into
+    # the original Fonts pipeline.submit arguments.
+    require('"compiler_base": bound_base["accepted_receipt_sha256"]' in local_owner,
+            "first-Fonts owner omitted the accepted compiler-base receipt")
     require(_tree_constant(local_owner,"SOURCE")==IMAGE_SOURCE,
             "original compiler recipe producer silently repinned")
     require(_tree_constant(local_owner,"PIN_SHA256")==OCTOBER_PIN,
@@ -128,7 +132,7 @@ def test_exact_producer_reader_consumer_and_original_monthly_pin():
 
 @pytest.mark.parametrize("mutation",[
  "old_reader","legacy_isolation","removed_worker_binding",
- "changed_pseudo_mounts","changed_consumer","changed_owner",
+ "changed_pseudo_mounts","changed_consumer","changed_owner", "missing_compiler_digest",
  "changed_producer","changed_month_pin","wrong_abi","missing_witness"
 ])
 def test_selected_source_drift_denied_even_when_string_looks_plausible(mutation):
@@ -148,6 +152,8 @@ def test_selected_source_drift_denied_even_when_string_looks_plausible(mutation)
         "selected-root-kernel-mounts-v1","no-host-mounts-v1")
     elif mutation=="changed_owner":s[5]=s[5].replace(
         READER_SOURCE,"bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6")
+    elif mutation=="missing_compiler_digest":s[5]=s[5].replace(
+        '"compiler_base": bound_base["accepted_receipt_sha256"]',"")
     elif mutation=="changed_producer":s[5]=s[5].replace(
         IMAGE_SOURCE,"a"*40)
     elif mutation=="changed_month_pin":pin=b"synthetic-replaced-monthly-pin"
