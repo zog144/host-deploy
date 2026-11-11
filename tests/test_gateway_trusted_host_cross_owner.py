@@ -66,7 +66,14 @@ def test_host_install_selects_one_gateway_service_and_no_broker_or_s3():
     assert "zog.host_deploy.gateway.generic_pipeline" in install.MODULES
     assert "zog.host_deploy.gateway.trusted_host_submission" in install.MODULES
     assert "zog.host_deploy.gateway.graphics_operation_send_intent" in install.MODULES
-    assert "zog.root_control.task_c_trusted_host" in install.MODULES
+    # Root-control's source-only companion journal is NOT a second installed
+    # sender nor a requirement for the selected direct gateway runtime.
+    assert "zog.root_control.task_c_trusted_host" not in install.MODULES
+    assert install.MODULES == (
+        "zog.host_deploy.gateway.generic_pipeline",
+        "zog.host_deploy.gateway.trusted_host_submission",
+        "zog.host_deploy.gateway.graphics_operation_send_intent",
+    )
     assert not any("trust_daemon" in x or "broker" in x for x in install.MODULES)
     source=inspect.getsource(install)
     assert '"s3_required": False' in source
