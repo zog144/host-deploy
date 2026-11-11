@@ -73,46 +73,6 @@ def _protected_original_identifiers(root, binding, step):
     }
 
 
-def _selected_protected_owner_preflight(root, binding, step, stage_binding):
-    """Selected root owner must separately claim every original preflight."""
-    from . import graphics_owner_ipc
-    original = _protected_original_identifiers(root, binding, step)
-    # This deterministic, domain-separated ID MUST be independently approved
-    # and immutably mapped by the root service; the gateway cannot mint it.
-    preflight_operation_id = hashlib.sha256(
-        ("zog-graphical-original-preflight-v1:" +
-         original["request_id"] + ":" + original["operation_id"]).encode("ascii")
-    ).hexdigest()[:32]
-
-    def preflight():
-        return graphics_owner_ipc.preflight_original(
-            **{**original, "operation_id": preflight_operation_id})
-    return preflight
-
-
-def _selected_protected_owner_sender(root, binding, step):
-    """Root-only IPC request; no direct SSM or gateway-selected command bytes."""
-    from . import graphics_owner_ipc
-    try:
-        original = _protected_original_identifiers(root, binding, step)
-    except (OSError, KeyError, TypeError, ValueError, RuntimeError):
-        # Fail closed before Host/SSM access if the original GitHub request
-        # or immutable stage selection cannot be independently reopened.
-        # Never let a missing original become a first-seen owner grant.
-        raise RuntimeError(
-            "protected graphical operation owner required; original identity unavailable"
-        ) from None
-
-    def sender(_script, *, seconds):
-        # Source-only compatibility with the existing stage caller. Neither
-        # script nor timeout travels to IPC or selects the owner's payload.
-        # No automatic fallback to Host.submit_command is permitted.
-        if type(_script) is not str or type(seconds) is not int:
-            raise RuntimeError("invalid graphical original command witness")
-        return graphics_owner_ipc.submit_original(**original)
-    return sender
-
-
 def _operation_id(gateway_id, name, ordinal=0):
     return hashlib.sha256(
         ("zog-generic-pipeline-v1:" + gateway_id + ":" + name +
@@ -460,6 +420,9 @@ def advance(root, request_id, *, host_factory=Host):
             # The locally fsynced stage journal + exclusive send intent below
             # remain the single-attempt authority; no S3/signer/broker grant.
             from . import trusted_host_submission as trusted
+            # Verify the persisted original authorized GitHub issue/request,
+            # not merely the new stage's local checksum or SQS message.
+            _protected_original_identifiers(root, binding, step)
             configuration, script = trusted.selected_command(
                 root, binding, step, stage_binding)
             host = host_factory(configuration)
