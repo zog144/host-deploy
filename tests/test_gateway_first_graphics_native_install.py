@@ -22,7 +22,7 @@ def resource_observation(a):
     return {
         "schema":g.resource.SCHEMA,
         "host_id":a["host_id"],"installation_id":a["installation_id"],
-        "lane":a["lane"],"root_filesystem_id":"a"*64,
+        "lane":a["lane"],"root_filesystem_id":"a"*64,"available_bytes":40*1024**3,
         "work":{"path":g.resource.WORK_ROOT,"filesystem_id":"a"*64,
                 "backend":"xfs-project-quota","project_id":12001,
                 "hard_bytes":g.resource.WORK_BYTES,
