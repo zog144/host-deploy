@@ -245,12 +245,6 @@ def test_missing_native_readers_and_host_denial_precede_any_write(monkeypatch):
     a,l,b,r=example()
     seen=[]
     monkeypatch.setattr(graphics.os,"geteuid",lambda:0)
-    monkeypatch.setattr(graphics.quota,"inspect",
-                        lambda:{"capacity_bytes":30*1024**3-4096})
-    monkeypatch.setattr(graphics.aggregate,"inspect_external_pool_native",
-                        lambda:{"limit_bytes":2*1024**3-4096,
-                                "mount_verified":True,"allocation_verified":True,
-                                "budget_scope":graphics.aggregate.BUDGET_SCOPE})
     monkeypatch.setattr(fresh_budget_guard,"_protected_root",lambda _:True)
     monkeypatch.setattr(fresh_native_owner,"_read_json",lambda _:a)
     def source(revision):
