@@ -23,6 +23,14 @@ from . import graphics_owner_trust_service as attest
 
 SOCKET = protocol.SOCKET
 FRAME_MAX = protocol.MAX_FRAME
+# V3 two-mount and V4 root-backed are separately signed installations.
+# Both require a fresh protected STATE/Host readback before any broker reply.
+# Only the historical original-checkpoint schema has its own earlier contract.
+LEGACY_ORIGINAL_SCHEMA = "zog-task-c-original-checkpoint-installation-v1"
+BACKEND_BOUND_SCHEMAS = frozenset((
+    "zog-task-c-installation-storage-authority-v1",
+    "zog-task-c-root-backed-storage-authority-v2",
+))
 # Only an independently reviewed installed source change, NOT configuration,
 # can enable this. No environment variable/CLI flag/test fixture unlocks it.
 NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False
@@ -134,9 +142,13 @@ def serve_connection(connection, authority, *, now=None):
         hold()
     pid = _peer_identity(connection, authority)
     _native_peer_witness(pid, authority)
-    if authority.original_checkpoint.get("schema") == (
-            "zog-task-c-installation-storage-authority-v1"):
-        # The v3 trusted provider, not the gateway IPC, supplies this reader.
+    if type(authority.original_checkpoint) is not dict:
+        hold()
+    checkpoint_schema = authority.original_checkpoint.get("schema")
+    if checkpoint_schema not in BACKEND_BOUND_SCHEMAS | {LEGACY_ORIGINAL_SCHEMA}:
+        hold()  # An unknown new schema cannot silently bypass the live reader.
+    if checkpoint_schema in BACKEND_BOUND_SCHEMAS:
+        # Both v3 and v4 use the protected local reader, never gateway IPC.
         # A retained mapping signature alone does not attest mounted STATE.
         if not callable(authority.backend_recheck):
             hold()
