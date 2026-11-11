@@ -165,8 +165,18 @@ def validate(value):
                 raise TaskCatalogueError("invalid bootstrap stages")
             names = [v for stage in stages for v in stage]
         else:
-            if set(arguments) != {"mode", "selection", "targets"}:
-                raise TaskCatalogueError("generic mode requires exact targets")
+            # The first Fonts producer requires the ORIGINAL signed compiler
+            # receipt digest in its pipeline.submit arguments; the catalogue
+            # freezes it, never the GitHub issue. Other tasks retain their
+            # separately reviewed input/predecessor contracts.
+            required = {"mode", "selection", "targets"}
+            if name == "graphics-fonts-image-v1":
+                required.add("compiler_base")
+                if (type(arguments.get("compiler_base")) is not str or
+                        not _SHA.fullmatch(arguments["compiler_base"])):
+                    raise TaskCatalogueError("first Fonts compiler receipt missing or invalid")
+            if set(arguments) != required:
+                raise TaskCatalogueError("generic mode requires exact accepted compiler and targets")
             names = arguments["targets"]
             if type(names) is not list or not 1 <= len(names) <= 32:
                 raise TaskCatalogueError("invalid generic targets")
@@ -267,6 +277,11 @@ def select_retained(catalogue, task, *, retained_input_evidence,
         raise TaskCatalogueError("retained input receipt differs from frozen catalogue")
     if retained_input_evidence["generation_id"] != item["arguments"]["selection"]:
         raise TaskCatalogueError("accepted retained input differs from immutable catalogue")
+    if task == "graphics-fonts-image-v1" and (
+            type(retained_input_evidence["evidence"]) is not dict or
+            retained_input_evidence["evidence"].get("accepted_receipt_sha256") !=
+            item["arguments"].get("compiler_base")):
+        raise TaskCatalogueError("Fonts compiler receipt differs from original accepted evidence")
     try:
         retained_generation(
             task=task,
