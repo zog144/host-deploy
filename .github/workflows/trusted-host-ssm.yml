@@ -30,13 +30,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/root-control
-          ref: 6a545931a79e3f700dbf769b8a87fe33f9a6e620
+          ref: 7838c1ff51bc147521a5e38530a4aed8ff8bbf9a
           path: companions/root-control
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: zog144/host-install
-          ref: bdd6c449cf8943598bc0a269716d24c3982b24af
+          ref: 0b52eb50073477a1de8504009004eb27d2caa54b
           path: companions/host-install
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -47,8 +47,8 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/tests:${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/host-install/src
         run: |
-          test "$(git -C companions/root-control rev-parse HEAD)" = 6a545931a79e3f700dbf769b8a87fe33f9a6e620
-          test "$(git -C companions/host-install rev-parse HEAD)" = bdd6c449cf8943598bc0a269716d24c3982b24af
+          test "$(git -C companions/root-control rev-parse HEAD)" = 7838c1ff51bc147521a5e38530a4aed8ff8bbf9a
+          test "$(git -C companions/host-install rev-parse HEAD)" = 0b52eb50073477a1de8504009004eb27d2caa54b
           python -m pytest -q -rs \
             tests/test_gateway_trusted_host_ssm.py \
             tests/test_gateway_generic_pipeline.py \
