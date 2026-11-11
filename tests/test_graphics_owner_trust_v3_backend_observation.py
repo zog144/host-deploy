@@ -19,13 +19,13 @@ def proof():
     }
 
 
-def fixture(monkeypatch,backend_guard):
+def fixture(monkeypatch,backend_guard, *, schema="zog-task-c-installation-storage-authority-v1"):
     original=selected()
     checkpoint=SimpleNamespace(
         scope="sha256:"+"3"*64, registry_sha="sha256:"+"2"*64)
     auth=replace(original,
         original_checkpoint={
-            "schema":"zog-task-c-installation-storage-authority-v1"},
+            "schema":schema},
         checkpoint=checkpoint, backend_recheck=backend_guard)
     monkeypatch.setattr(daemon,"_native_peer_witness",lambda pid,policy:None)
     calls=[]
@@ -70,6 +70,39 @@ def test_native_observer_denial_prevents_v3_history_signature(monkeypatch):
     def deny():
         raise protocol.TrustUnavailable("native selected /state changed")
     authority,peer,calls=fixture(monkeypatch,deny)
+    with pytest.raises(protocol.TrustUnavailable):
+        daemon.serve_connection(peer,authority,now=123)
+    assert calls==[] and peer.sent==[]
+
+
+@pytest.mark.parametrize("schema",(
+    "zog-task-c-installation-storage-authority-v1",
+    "zog-task-c-root-backed-storage-authority-v2",
+))
+def test_both_approved_storage_modes_require_live_backend_readback(monkeypatch,schema):
+    checked=[]
+    def recheck():
+        checked.append(schema)
+        return proof()
+    authority,peer,calls=fixture(monkeypatch,recheck,schema=schema)
+    assert daemon.serve_connection(peer,authority,now=123)["status"]=="synthetic-only"
+    assert checked==[schema] and len(calls)==1 and len(peer.sent)==1
+
+
+@pytest.mark.parametrize("schema",(
+    "zog-task-c-root-backed-storage-authority-v2",
+    "zog-task-c-installation-storage-authority-v1",
+))
+def test_v4_or_v3_cannot_sign_with_missing_observer(monkeypatch,schema):
+    authority,peer,calls=fixture(monkeypatch,None,schema=schema)
+    with pytest.raises(protocol.TrustUnavailable):
+        daemon.serve_connection(peer,authority,now=123)
+    assert calls==[] and peer.sent==[]
+
+
+def test_unknown_future_storage_schema_fails_closed(monkeypatch):
+    authority,peer,calls=fixture(monkeypatch,lambda:proof(),
+        schema="zog-task-c-storage-unsupported-v999")
     with pytest.raises(protocol.TrustUnavailable):
         daemon.serve_connection(peer,authority,now=123)
     assert calls==[] and peer.sent==[]
