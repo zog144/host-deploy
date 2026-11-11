@@ -1,4 +1,4 @@
-"""Signed compiler-base PR18 consumer source tests (synthetic keys only)."""
+"""Observed-isolation PR20 signed compiler consumer source tests (synthetic keys only)."""
 import base64
 import copy
 import json
@@ -166,6 +166,7 @@ def test_signed_toolchain_and_image_keep_original_identity():
         assert task["retained_acceptance_sha256"]==data["retained_acceptance_sha256"]
         assert task["arguments"]=={
             "mode":"image","selection":a["accepted_base_generation_id"],
+            "compiler_base":a["accepted_base_receipt_sha256"],
             "targets":["libpng-final","freetype-final","fontconfig-final"]}
         assert set(cat["tasks"])=={graphics.TASK}
         assert data["accepted_base_historical_provenance"]["status"]==(
