@@ -91,3 +91,16 @@ def test_no_graphical_owner_broker_signing_or_s3_on_active_gateway_route():
                       "signed_approval","S3AppendOnlyCheckpoint",
                       "GetObjectOnly","broker-private.key"):
         assert forbidden not in adapter
+
+
+def test_real_ssm_adapter_fixes_document_and_disables_sdk_mutation_retry():
+    from zog.host_deploy.runner import Host
+    code=inspect.getsource(Host)
+    assert "DocumentName='AWS-RunShellScript'" in code
+    assert "retries={'total_max_attempts':1}" in code
+    assert "InstanceIds=[self.instance]" in code
+    # Every selected target was reopened against original managed lane.
+    selected=inspect.getsource(trusted.selected_command)
+    assert "verify_current_target(gateway_root, binding)" in selected
+    assert 'target.get("account_id")' in selected
+    assert "remote_script(stage_binding)" in selected
