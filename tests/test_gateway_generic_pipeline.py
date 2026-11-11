@@ -114,18 +114,13 @@ def mock_environment(monkeypatch, *, wrong_capability=None, lost_reply=False):
                     "pipeline_id":PIPELINE}
         return {"result":result}
     monkeypatch.setattr(generic,"parse_receipt",parse)
-    # Explicit fixture-only substitute for the independently protected owner.
-    # The real gateway default has NO direct SendCommand fallback.
+    # The trusted local Host selection still derives the command from the
+    # exact stage. No AWS client is created by this in-memory fixture.
+    from zog.host_deploy.gateway import trusted_host_submission as trusted
     monkeypatch.setattr(
-        generic,"_selected_protected_owner_preflight",
-        lambda root,binding,step,stage_binding: (
-            lambda: {"contract":"zog-protected-graphical-preflight-observation-v1",
-                     "ready":True,"mutation":False,"authenticated":True}))
-    monkeypatch.setattr(
-        generic,"_selected_protected_owner_sender",
-        lambda root,binding,step: (
-            lambda script, seconds: Host({}).submit_command(
-                script,seconds=seconds)))
+        trusted,"selected_command",lambda root,binding,step,stage_binding:(
+            {"instance_id":"i-0123456789abcdef0","region":"us-east-1"},
+            stage_binding["remote_request"]["operation"]))
     return Host,seen
 
 def test_four_separate_durable_operations(tmp_path,monkeypatch):
