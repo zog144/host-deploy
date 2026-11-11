@@ -53,22 +53,16 @@ jobs:
           assert "bf0b37fea1767bf7ab02ca2d1c5d1a0d5487d4b6" not in Path(
              'src/zog/host_deploy/gateway/graphics_catalogue_owner.py').read_text()
           PY
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          repository: zog144/image-build
-          ref: 324b1469cb490a571d428cadd9ce72bbec5507b4
-          path: dependencies/image-build-prepared
-          persist-credentials: false
-      - name: Verify original reviewed PR17 preparation is held, not native-authority evidence
-        run: test "$(git -C dependencies/image-build-prepared rev-parse HEAD)" = 324b1469cb490a571d428cadd9ce72bbec5507b4
+      # PR17 pins the selected PR7 exact head from the producer side. Do not
+      # create a circular immutable ref between two independently changing PRs.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/host-deploy
-          ref: 02db124609b92396ff89fa628d8ddc9383e05f4b
+          ref: 0fd2db17698423d4cd30b296fc9f78e83cee145c
           path: dependencies/host-deploy-taskc
           persist-credentials: false
-      - name: Pin reviewed protected-owner dispatch source independently
-        run: test "$(git -C dependencies/host-deploy-taskc rev-parse HEAD)" = 02db124609b92396ff89fa628d8ddc9383e05f4b
+      - name: Pin November 11 single trusted Host gateway and local send-once source
+        run: test "$(git -C dependencies/host-deploy-taskc rev-parse HEAD)" = 0fd2db17698423d4cd30b296fc9f78e83cee145c
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/host-deploy
@@ -96,7 +90,7 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py tests/test_gateway_fonts_pre_admission_review.py tests/test_gateway_fonts_reader_pr20_pr29_reconciliation.py
+          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py tests/test_gateway_fonts_pre_admission_review.py tests/test_gateway_fonts_reader_pr20_pr29_reconciliation.py tests/test_gateway_fonts_trusted_host_taskc_reconcile.py
           python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_owner.py src/zog/host_deploy/gateway/graphics_base_acceptance.py src/zog/host_deploy/gateway/task_catalogue.py src/zog/host_deploy/gateway/image_build_dispatch.py
 
       - name: Verify real root-owned one-shot catalogue file, mode and receipt on ephemeral CI
