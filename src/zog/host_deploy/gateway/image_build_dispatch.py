@@ -375,6 +375,10 @@ def prepare_image_build_dispatch(
         task_catalogue_identity=task_catalogue_identity,
         retained_input_evidence=retained_input_evidence,
     )
+    # Both admin and supervisor pass this durable admission boundary.
+    if binding.get("task") is not None:
+        from .graphics_stage_once import reserve
+        reserve(gateway_root, request_id, binding)
     return prepare_dispatch(
         gateway_root,
         request_id,
