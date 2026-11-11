@@ -5,7 +5,7 @@ from zog.host_deploy.gateway import fonts_resource_admission as quota
 
 def valid():
     return {"schema":quota.SCHEMA,"host_id":"host","installation_id":"install",
-            "lane":"fonts","root_filesystem_id":"a"*64,
+            "lane":"fonts","root_filesystem_id":"a"*64,"available_bytes":40*1024**3,
             "work":{"path":quota.WORK_ROOT,"filesystem_id":"a"*64,
                     "backend":"xfs-project-quota","project_id":1001,
                     "hard_bytes":quota.WORK_BYTES,
@@ -41,6 +41,7 @@ def test_exact_ceiling_no_extra_ebs_or_loop():
     lambda x:x.update(observation_status="source-claimed"),
     lambda x:x.update(deadline_enforced=False),
     lambda x:x.update(deadline_seconds=21601),
+    lambda x:x.update(available_bytes=31*1024**3),
     lambda x:x.update(host_id="other"),
     lambda x:x["work"].update(backend="fallocate-only"),
     lambda x:x["work"].update(backend="separate-ebs-volume"),
