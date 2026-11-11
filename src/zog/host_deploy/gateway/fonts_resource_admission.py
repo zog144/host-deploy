@@ -94,11 +94,130 @@ def checked(readback, *, current_host_id, current_installation_id, expected_lane
             "status":"native-observation-shape-checked"}
 
 
-def inspect_native():
-    """No invented universal inspector: native provider must verify quotas.
+def inspect_native(*, host_id, installation_id, lane,
+                   worker_writable_roots, deadline_enforced):
+    """Read XFS project quotas directly from the Linux kernel, without writes.
 
-    In particular, free-space and fallocate reports alone do not prove
-    actual limits. Native installation may call checked() only after obtaining
-    its independent quota/namespace/Host evidence from a reviewed provider.
+    This reader supports XFS root filesystems with prjquota active. Other
+    backends are deliberately unsupported until separately reviewed. The
+    trusted controller must independently report every worker writable root
+    and the installed execution deadline: neither comes from GitHub/SQS.
     """
-    hold()
+    import ctypes
+    import fcntl
+    import os
+    import struct
+    import stat
+
+    if os.geteuid() != 0:
+        hold()
+    # The actual current root mount, not a supplied mount identity or a
+    # caller-selected device. Do not treat overlay or nested bind mounts as
+    # independent quota enforcement.
+    try:
+        lines=Path("/proc/self/mountinfo").read_text().splitlines()
+        mounts=[]
+        for line in lines:
+            left,sep,right=line.partition(" - ")
+            if not sep:
+                hold()
+            a,b=left.split(),right.split()
+            if len(a)<6 or len(b)<3:
+                hold()
+            mounts.append((a[4],a[2],a[5],b[0],b[1],b[2]))
+        roots=[entry for entry in mounts if entry[0]=="/"]
+        if len(roots)!=1 or roots[0][3]!="xfs":
+            hold()
+        options=set((roots[0][2]+","+roots[0][5]).split(","))
+        if not options.intersection({"prjquota","pquota"}):
+            hold()
+        if options.intersection({"pqnoenforce","prjquotanoenforce"}):
+            hold()
+        root_stat=os.stat("/")
+        # Each root is a real, root-owned directory on the same filesystem
+        # without any nested independent mount or symlink substitution.
+        observed={}
+        mount_points={m[0] for m in mounts}
+        # Linux FS_IOC_FSGETXATTR, struct fsxattr (28 bytes).
+        FS_IOC_FSGETXATTR=0x801c581f
+        FS_XFLAG_PROJINHERIT=0x00000200
+        class DiskQuota(ctypes.Structure):
+            _fields_=[
+                ("d_version",ctypes.c_int8),("d_flags",ctypes.c_int8),
+                ("d_fieldmask",ctypes.c_uint16),("d_id",ctypes.c_uint32),
+                ("d_blk_hardlimit",ctypes.c_uint64),
+                ("d_blk_softlimit",ctypes.c_uint64),
+                ("d_ino_hardlimit",ctypes.c_uint64),
+                ("d_ino_softlimit",ctypes.c_uint64),
+                ("d_bcount",ctypes.c_uint64),("d_icount",ctypes.c_uint64),
+                ("d_itimer",ctypes.c_int32),("d_btimer",ctypes.c_int32),
+                ("d_iwarns",ctypes.c_uint16),("d_bwarns",ctypes.c_uint16),
+                ("d_itimer_hi",ctypes.c_int8),("d_btimer_hi",ctypes.c_int8),
+                ("d_rtbtimer_hi",ctypes.c_int8),("d_padding2",ctypes.c_int8),
+                ("d_rtb_hardlimit",ctypes.c_uint64),
+                ("d_rtb_softlimit",ctypes.c_uint64),
+                ("d_rtbcount",ctypes.c_uint64),
+                ("d_rtbtimer",ctypes.c_int32),
+                ("d_rtbwarns",ctypes.c_uint16),
+                ("d_padding3",ctypes.c_int16),
+                ("d_padding4",ctypes.c_char*8),
+            ]
+        libc=ctypes.CDLL(None,use_errno=True)
+        quotactl=libc.quotactl
+        quotactl.argtypes=[ctypes.c_int,ctypes.c_char_p,
+                           ctypes.c_int,ctypes.c_void_p]
+        quotactl.restype=ctypes.c_int
+        # QCMD(Q_XGETQUOTA, PRJQUOTA) from linux/quota.h and dqblk_xfs.h.
+        cmd=(((ord("X")<<8)+3)<<8)|2
+        for name,path,limit in (("work",WORK_ROOT,WORK_BYTES),
+                                ("external",EXTERNAL_ROOT,EXTERNAL_BYTES)):
+            directory=Path(path)
+            if not directory.is_dir() or directory.is_symlink():
+                hold()
+            # No symlinked ancestors; check all source directories.
+            if any(parent.is_symlink() for parent in directory.parents):
+                hold()
+            st=directory.stat()
+            if (st.st_dev!=root_stat.st_dev or st.st_uid!=0 or
+                    not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o022 or
+                    path in mount_points):
+                hold()
+            fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|
+                       os.O_NOFOLLOW|os.O_CLOEXEC)
+            try:
+                raw=fcntl.ioctl(fd,FS_IOC_FSGETXATTR,b"\0"*28)
+            finally:
+                os.close(fd)
+            flags,_,_,project_id,_,_=struct.unpack("=IIIII8s",raw)
+            if not flags & FS_XFLAG_PROJINHERIT or project_id<=0:
+                hold()
+            dq=DiskQuota()
+            if quotactl(cmd, b"/",project_id,ctypes.byref(dq))!=0:
+                hold()
+            # fs_disk_quota block hard limit uses 512-byte basic blocks.
+            hard_bytes=int(dq.d_blk_hardlimit)*512
+            if dq.d_id!=project_id or hard_bytes!=limit:
+                hold()
+            observed[name]={
+                "path":path,"filesystem_id":format(root_stat.st_dev,"064x"),
+                "backend":"xfs-project-quota","project_id":project_id,
+                "hard_bytes":hard_bytes,
+                "quota_active":True,"inheritance_verified":True,
+                "real_directory":True,"same_host_root_filesystem":True,
+                "kernel_verified":True}
+        receipt={
+            "schema":SCHEMA,"host_id":host_id,
+            "installation_id":installation_id,"lane":lane,
+            "root_filesystem_id":format(root_stat.st_dev,"064x"),
+            "work":observed["work"],"external":observed["external"],
+            "worker_writable_roots":worker_writable_roots,
+            "deadline_seconds":TIME_SECONDS,
+            "deadline_enforced":deadline_enforced,
+            "observation_status":"live-kernel-observed",
+        }
+        checked(receipt,current_host_id=host_id,
+                current_installation_id=installation_id,
+                expected_lane=lane)
+        return receipt
+    except (OSError,ValueError,TypeError,IndexError,OverflowError) as exc:
+        raise FontsResourceHold("native kernel quota observation unavailable") from exc
