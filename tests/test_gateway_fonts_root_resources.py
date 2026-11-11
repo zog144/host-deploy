@@ -34,7 +34,8 @@ def test_exact_ceiling_no_extra_ebs_or_loop():
     assert a["execution_limit_seconds"]==21600
     assert a["backend"]=="existing-root-filesystem-project-quota"
     with pytest.raises(quota.FontsResourceHold):
-        quota.inspect_native()
+        quota.inspect_native(host_id="host",installation_id="install",lane="fonts",
+                             worker_writable_roots=[],deadline_enforced=False)
 
 @pytest.mark.parametrize("mutation",[
     lambda x:x.update(observation_status="source-claimed"),
@@ -59,3 +60,22 @@ def test_unsafe_or_unenforced_resource_admission_denied(mutation):
     mutation(value)
     with pytest.raises(quota.FontsResourceHold):
         check(value)
+
+
+def test_native_root_inspector_denies_nonroot_without_touching_kernel(monkeypatch):
+    import os
+    monkeypatch.setattr(os,"geteuid",lambda:1000)
+    with pytest.raises(quota.FontsResourceHold):
+        quota.inspect_native(host_id="host",installation_id="install",lane="fonts",
+                             worker_writable_roots=[],deadline_enforced=False)
+
+def test_native_observer_has_no_quota_mutation_or_mount_provisioning():
+    import inspect
+    source=inspect.getsource(quota.inspect_native)
+    assert "FS_IOC_FSGETXATTR" in source
+    assert "Q_XGETQUOTA" in source
+    assert "d_blk_hardlimit" in source
+    assert 'b"/",project_id' in source
+    for denied in ("Q_XSETQLIM","mkfs","losetup","mount(","os.system(",
+                   "subprocess.run","fallocate","sudo"):
+        assert denied not in source
