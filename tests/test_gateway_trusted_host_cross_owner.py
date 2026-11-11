@@ -57,3 +57,19 @@ def test_shared_host_submission_and_root_journal_deny_automatic_retry():
     assert "submit_once(" in inspect.getsource(gateway)
     assert "graphics_owner_ipc" not in active
     assert "S3" not in inspect.getsource(gateway)
+
+
+def test_host_install_selects_one_gateway_service_and_no_broker_or_s3():
+    from zog.host_install import task_c_local_install as install
+    assert install.SCHEMA == "zog-task-c-local-installation-v1"
+    assert install.UNITS == ("zog-task-c-gateway.service",)
+    assert "zog.host_deploy.gateway.generic_pipeline" in install.MODULES
+    assert "zog.host_deploy.gateway.trusted_host_submission" in install.MODULES
+    assert "zog.host_deploy.gateway.graphics_operation_send_intent" in install.MODULES
+    assert "zog.root_control.task_c_trusted_host" in install.MODULES
+    assert not any("trust_daemon" in x or "broker" in x for x in install.MODULES)
+    source=inspect.getsource(install)
+    assert '"s3_required": False' in source
+    assert '"signed_storage_approval_required": False' in source
+    assert '"separate_storage_volume_required": False' in source
+    assert '"service_activation": False' in source
