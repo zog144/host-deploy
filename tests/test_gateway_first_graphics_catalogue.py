@@ -124,7 +124,7 @@ def example(kind="toolchain"):
         "kind":kind,"acceptance_receipt_sha256":a["accepted_base_receipt_sha256"],
         "source_repository":graphics.REPOSITORY,
         "verified_source_revision":graphics.READER_SOURCE}
-    reservation={"scope":graphics.aggregate.BUDGET_SCOPE,
+    reservation={"scope":graphics.resource.SCHEMA,
                  "work_bytes":30*1024**3,"external_bytes":2*1024**3}
     return a,lane,selected,reservation
 
