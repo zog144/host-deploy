@@ -94,17 +94,12 @@ def base_evidence(a,lane,kind="toolchain"):
     return raw,issuer,binding
 
 def example(kind="toolchain"):
+    # Synthetic accepted-generation provenance for signed fixture creation;
+    # no policy/approval JSON is installed or consumed by the gateway.
     a={
-        "schema":graphics.APPROVAL_SCHEMA,"host_id":HOST,
-        "installation_id":"fixture-installation","lane":LANE,
-        "lane_owner":HOST,"project_root":"/home/owner/"+LANE,
+        "host_id":HOST,"installation_id":"fixture-installation",
         "accepted_base_generation_id":GEN,
         "accepted_base_receipt_sha256":"sha256:"+"f"*64,
-        "source_revision":graphics.SOURCE,
-        "monthly_pin_identity":"sha256:"+graphics.PIN_SHA256,
-        "task_allowlist":[graphics.TASK],
-        "dedicated_storage_bytes":32*1024**3,"work_bytes":30*1024**3,
-        "external_bytes":2*1024**3,"execution_limit_seconds":21600,
     }
     lane=image_build_lanes.specification(
         LANE,source_repository=graphics.REPOSITORY,
@@ -112,9 +107,9 @@ def example(kind="toolchain"):
         monthly_pin_repository_path=graphics.PIN_PATH,
         monthly_pin_identity="sha256:"+graphics.PIN_SHA256,
         provenance_host_id=HOST,provenance_project_id="test-project",
-        project_root=a["project_root"],memory_maximum_bytes=2*1024**3,
+        project_root="/home/owner/"+LANE,memory_maximum_bytes=2*1024**3,
         thread_count_maximum=16,cpu_weight=100,
-        disk_reservation_bytes=32*1024**3,
+        disk_reservation_bytes=1,
         execution_user_id=24302,execution_group_id=24302,
         python_executable="/usr/bin/python3")
     signed,issuer,binding=base_evidence(a,lane,kind)
@@ -124,16 +119,14 @@ def example(kind="toolchain"):
         "kind":kind,"acceptance_receipt_sha256":a["accepted_base_receipt_sha256"],
         "source_repository":graphics.REPOSITORY,
         "verified_source_revision":graphics.READER_SOURCE}
-    reservation={"scope":"compiler-host-only",
-                 "work_bytes":30*1024**3,"external_bytes":2*1024**3}
-    return a,lane,selected,reservation
+    return a,lane,selected
 
-def candidate(a,l,selected,reservation,*,evidence=None,pin=None):
+def candidate(a,l,selected,*,evidence=None,pin=None):
     if evidence is None:
         evidence=base_evidence(a,l,selected["kind"])
     raw,issuer,binding=evidence
     return graphics.prepare(
-        approval=a,lane_record=l,accepted_base=selected,
+        lane_record=l,accepted_base=selected,
         installed_pin_bytes=accepted_pin_bytes() if pin is None else pin,
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,compiler_base_binding=binding)
@@ -153,8 +146,8 @@ def test_original_producer_and_new_reader_sources_remain_distinct():
 
 def test_signed_toolchain_and_image_keep_original_identity():
     for kind in ("toolchain","image"):
-        a,l,b,r=example(kind)
-        data=candidate(a,l,b,r)
+        a,l,b=example(kind)
+        data=candidate(a,l,b)
         assert data["compiler_authorized"] is False
         assert data["accepted_base_kind"]==kind
         assert data["accepted_base_receipt_sha256"]==a["accepted_base_receipt_sha256"]
@@ -173,29 +166,27 @@ def test_signed_toolchain_and_image_keep_original_identity():
             "complete" if kind=="toolchain" else "historical-gap-declared")
 
 @pytest.mark.parametrize("mutation",[
-    lambda a,l,b,r:a.update(accepted_base_generation_id="0"*64),
-    lambda a,l,b,r:a.update(accepted_base_receipt_sha256="sha256:"+"0"*64),
-    lambda a,l,b,r:a.update(source_revision="0"*40),
-    lambda a,l,b,r:a.update(task_allowlist=[graphics.TASK,"graphics-xcb-core-image-v1"]),
-    lambda a,l,b,r:a.update(execution_limit_seconds=21601),
-    lambda a,l,b,r:a.update(work_bytes=29*1024**3),
-    lambda a,l,b,r:a.update(lane_owner="other"),
-    lambda a,l,b,r:l.update(source_revision="0"*40),
-    lambda a,l,b,r:b.update(kind="image" if b["kind"]=="toolchain" else "toolchain"),
-    lambda a,l,b,r:l["resource_policy"].update(disk_reservation_bytes=33*1024**3),
+    lambda a,l,b:a.update(accepted_base_generation_id="0"*64),
+    lambda a,l,b:b.update(acceptance_receipt_sha256="sha256:"+"0"*64),
+    lambda a,l,b:l.update(source_revision="0"*40),
+    lambda a,l,b:l.update(source_repository="unreviewed/repo"),
+    lambda a,l,b:l.update(monthly_pin_identity="sha256:"+"0"*64),
+    lambda a,l,b:l.update(provenance_host_id="foreign-host"),
+    lambda a,l,b:b.update(source_repository="unreviewed/repo"),
+    lambda a,l,b:b.update(kind="image" if b["kind"]=="toolchain" else "toolchain"),
 ])
-def test_independent_approval_lane_budget_or_kind_changes_deny(mutation):
-    a,l,b,r=example()
-    mutation(a,l,b,r)
+def test_wrong_compiler_source_lane_or_generation_denied(mutation):
+    a,l,b=example()
+    mutation(a,l,b)
     with pytest.raises((graphics.GraphicalCatalogueBlocked,
                         base.BaseAcceptanceDenied,ValueError)):
-        candidate(a,l,b,r)
+        candidate(a,l,b)
 
 @pytest.mark.parametrize("target",[
     "signature","key","receipt","manifest","probe","environment","kind",
     "history","state","abi","installed_paths","source_binding"])
 def test_signed_identity_or_native_binding_substitution_denied(target):
-    a,l,b,r=example("image")
+    a,l,b=example("image")
     raw,issuer,binding=base_evidence(a,l,"image")
     claim=json.loads(raw)["claim"]
     if target=="signature":
@@ -204,7 +195,7 @@ def test_signed_identity_or_native_binding_substitution_denied(target):
     elif target=="key":
         issuer={**issuer,"ed25519_public_key":"f"*64}
     elif target=="receipt":
-        a["accepted_base_receipt_sha256"]="sha256:"+"0"*64
+        b["acceptance_receipt_sha256"]="sha256:"+"0"*64
     elif target=="manifest":
         binding={**binding,"generation_manifest_sha256":"sha256:"+"0"*64}
     elif target=="probe":
@@ -225,39 +216,38 @@ def test_signed_identity_or_native_binding_substitution_denied(target):
     elif target=="source_binding":
         b["verified_source_revision"]="0"*40
     with pytest.raises((base.BaseAcceptanceDenied,graphics.GraphicalCatalogueBlocked)):
-        candidate(a,l,b,r,evidence=(raw,issuer,binding))
+        candidate(a,l,b,evidence=(raw,issuer,binding))
 
 def test_wrong_pin_bytes_and_native_nonroot_denied(monkeypatch):
-    a,l,b,r=example()
+    a,l,b=example()
     with pytest.raises(graphics.GraphicalCatalogueBlocked):
-        candidate(a,l,b,r,pin=b"wrong")
+        candidate(a,l,b,pin=b"wrong")
     monkeypatch.setattr(graphics.os,"geteuid",lambda:1000)
     with pytest.raises(PermissionError):
         graphics.install_native(
+            lane_name=LANE,generation_id=GEN,
             read_managed_lane=lambda _:None,
             read_accepted_base=lambda _:None,
             read_installed_pin=lambda *_:None,
             attest_installed_source=lambda _:None,
             attest_host_identity=lambda *_:None)
 
-def test_missing_native_readers_and_host_denial_precede_any_write(monkeypatch):
-    from zog.host_deploy.gateway import fresh_budget_guard,fresh_native_owner
-    a,l,b,r=example()
-    seen=[]
-    monkeypatch.setattr(graphics.os,"geteuid",lambda:0)
-    monkeypatch.setattr(fresh_budget_guard,"_protected_root",lambda _:True)
-    monkeypatch.setattr(fresh_native_owner,"_read_json",lambda _:a)
-    def source(revision):
-        seen.append(revision)
-        return True
-    with pytest.raises(graphics.GraphicalCatalogueBlocked):
-        graphics.install_native(
-            read_managed_lane=lambda _:pytest.fail("lane"),
-            read_accepted_base=lambda _:pytest.fail("base"),
-            read_installed_pin=lambda *_:pytest.fail("pin"),
-            attest_installed_source=source,
-            attest_host_identity=lambda *_:False)
-    assert seen==[graphics.SOURCE,graphics.READER_SOURCE]
+def test_missing_installer_selection_or_native_reader_precedes_any_write(monkeypatch):
+    from zog.host_deploy.gateway import graphics_catalogue_owner as g
+    monkeypatch.setattr(g.os,"geteuid",lambda:0)
+    called=[]
+    with pytest.raises(g.GraphicalCatalogueBlocked):
+        g.install_native(
+            lane_name=LANE,generation_id=GEN,
+            read_managed_lane=lambda _:called.append("lane"),
+            read_accepted_base=lambda _:called.append("base"),
+            read_installed_pin=lambda *_:called.append("pin"),
+            attest_installed_source=lambda _:called.append("source"),
+            attest_host_identity=lambda *_:called.append("host"),
+            read_compiler_base_receipt=lambda _:called.append("receipt"),
+            read_compiler_base_issuer=None,
+            read_compiler_base_binding=lambda *_:called.append("binding"))
+    assert called==[]
 
 def test_no_implicit_compilation_or_authorization():
     import inspect
