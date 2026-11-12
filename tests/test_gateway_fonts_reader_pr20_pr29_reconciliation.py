@@ -170,6 +170,9 @@ def test_no_compiler_submission_granted_by_consumer_source():
     assert 'attest_installed_source(SOURCE)' in src
     assert '"compiler_authorized": False' in src
     assert 'O_EXCL' in src
-    assert '"work_bytes": 30 * 1024**3' in src
-    assert '"external_bytes": 2 * 1024**3' in src
-    assert '"execution_limit_seconds": 21600' in src
+    assert 'first-fonts-catalogue-v1.json' in src
+    assert 'graphics-foundation-approval-v1.json' not in src
+    assert '"compiler_authorized":False' in src
+    for obsolete in ("work_bytes", "external_bytes", "execution_limit_seconds",
+                     "actual_reservation", "read_resource_observation"):
+        assert obsolete not in src
