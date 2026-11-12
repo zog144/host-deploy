@@ -15,7 +15,6 @@ import stat
 from .. import image_build_lanes
 from . import task_catalogue
 from . import graphics_base_acceptance as base_acceptance
-from . import fonts_resource_admission as resource
 
 SOURCE = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 REPOSITORY = "zog144/image-build"
@@ -80,13 +79,14 @@ def _checked_approval(value):
 
 
 def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
-            actual_reservation, compiler_base_receipt_bytes=None,
+            compiler_base_receipt_bytes=None,
             compiler_base_issuer_policy=None, compiler_base_binding=None):
     """Pure candidate. Does not install or attest the caller's dictionaries.
 
     Root Work must independently verify signed/genuine accepted generation,
-    managed-lane installed Host provenance, installed image-build source and
-    monthly pin, and actual 30+2 GiB kernel-backed images BEFORE calling.
+    managed-lane provenance, accepted compiler source and monthly pin.
+    Actual 30+2 GiB runtime resource admission happens on the compiler Host,
+    never on the gateway catalogue filesystem.
     """
     a = _checked_approval(approval)
     lane = image_build_lanes.validate(lane_record)
@@ -130,12 +130,6 @@ def prepare(*, approval, lane_record, accepted_base, installed_pin_bytes,
         approved_input_generation_id=a["accepted_base_generation_id"])
     if (type(installed_pin_bytes) is not bytes
             or hashlib.sha256(installed_pin_bytes).hexdigest() != PIN_SHA256):
-        _fail()
-    if (type(actual_reservation) is not dict or
-            set(actual_reservation) != {"work_bytes", "external_bytes", "scope"}
-            or actual_reservation != {
-                "work_bytes": 30 * 1024**3, "external_bytes": 2 * 1024**3,
-                "scope": resource.SCHEMA}):
         _fail()
     fixed = task_catalogue.REVIEWED_IMAGE_TASKS[TASK]
     accepted_input = {
@@ -187,14 +181,12 @@ def install_native(*, read_managed_lane, read_accepted_base,
                    read_installed_pin, attest_installed_source,
                    attest_host_identity, read_compiler_base_receipt=None,
                    read_compiler_base_issuer=None,
-                   read_compiler_base_binding=None,
-                   read_resource_observation=None, installed_host_id=None,
-                   installed_installation_id=None, installed_lane=None):
+                   read_compiler_base_binding=None):
     """Root owner only; one non-replacing installation into existing STATE.
 
-    Native readers MUST come from the locally installed trusted Host administrator,
-    not SQS/GitHub JSON. Runtime quota observation is still a Work admission
-    prerequisite; this API does not create quotas, send SSM or enable jobs.
+    Native readers MUST come from trusted installed source, not SQS/GitHub JSON.
+    This installs ONLY a small hash-pinned file. The compiler Host (not the
+    gateway) must check storage and runtime resources before building.
     """
     if os.geteuid() != 0:
         raise PermissionError("protected graphical catalogue requires root")
@@ -203,18 +195,6 @@ def install_native(*, read_managed_lane, read_accepted_base,
     if (attest_installed_source(SOURCE) is not True or
             attest_installed_source(READER_SOURCE) is not True):
         _fail()
-    # Normal root-backed application directories: no loopback images,
-    # mounted quota disks, external S3 authority or signing approvals.
-    # The installed Host administrator must provide fresh quota/namespace
-    # evidence. A caller's "quota verified" Boolean is not sufficient.
-    if not callable(read_resource_observation):
-        _fail()
-    native = resource.checked(
-        read_resource_observation(), current_host_id=installed_host_id,
-        current_installation_id=installed_installation_id,
-        expected_lane=installed_lane)
-    if native["status"] != "native-observation-shape-checked":
-        _fail()
     root = STORE
     from .fresh_budget_guard import _protected_root
     from .fresh_native_owner import _read_json
@@ -222,9 +202,7 @@ def install_native(*, read_managed_lane, read_accepted_base,
     # Approval is ordinary preinstalled root-owned local policy: no external
     # signer/anchor; the gateway request cannot choose this policy or path.
     a = _checked_approval(_read_json(APPROVAL))
-    if ((a["host_id"], a["installation_id"], a["lane"]) !=
-            (installed_host_id, installed_installation_id, installed_lane)
-            or attest_host_identity(a["host_id"], a["installation_id"]) is not True):
+    if attest_host_identity(a["host_id"], a["installation_id"]) is not True:
         _fail()
     for target in (CATALOGUE, RECEIPT):
         if target.exists() or target.is_symlink():
@@ -241,14 +219,9 @@ def install_native(*, read_managed_lane, read_accepted_base,
         compiler_base_issuer_policy=read_compiler_base_issuer(),
         compiler_base_binding=read_compiler_base_binding(
             a["accepted_base_generation_id"], a["accepted_base_receipt_sha256"]),
-        installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
-        actual_reservation={
-            "work_bytes": resource.WORK_BYTES,
-            "external_bytes": resource.EXTERNAL_BYTES,
-            "scope": native["schema"],
-        })
+        installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH))
     # Existing root-owned catalogue loader verifies every ancestor is
-    # non-writable and root-owned, including the backing mount and STATE.
+    # non-writable and root-owned; no compiler quota evidence is read here.
     fd = os.open(CATALOGUE, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                  os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
@@ -288,9 +261,8 @@ def install_native(*, read_managed_lane, read_accepted_base,
         "task_allowlist": [TASK], "dedicated_storage_bytes": 32 * 1024**3,
         "work_bytes": 30 * 1024**3, "external_bytes": 2 * 1024**3,
         "execution_limit_seconds": 21600, "compiler_authorized": False,
-        "resource_admission_schema": native["schema"],
-        "resource_backend": native["backend"],
-        "root_filesystem_id": native["root_filesystem_id"],
+        "resource_admission_location": "compiler-host-before-build",
+        "compiler_resource_admitted": False,
         "status": "installed-catalogue-not-native-compiler-admission",
     }
     raw_receipt = _canonical(receipt)
