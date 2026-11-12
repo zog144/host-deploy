@@ -18,28 +18,6 @@ from test_gateway_first_graphics_catalogue import example, accepted_pin_bytes, b
 
 
 
-def resource_observation(a):
-    return {
-        "schema":g.resource.SCHEMA,
-        "host_id":a["host_id"],"installation_id":a["installation_id"],
-        "lane":a["lane"],"root_filesystem_id":"a"*64,"available_bytes":40*1024**3,
-        "work":{"path":g.resource.WORK_ROOT,"filesystem_id":"a"*64,
-                "backend":"xfs-project-quota","project_id":12001,
-                "hard_bytes":g.resource.WORK_BYTES,
-                "quota_active":True,"inheritance_verified":True,
-                "real_directory":True,"same_host_root_filesystem":True,
-                "kernel_verified":True},
-        "external":{"path":g.resource.EXTERNAL_ROOT,"filesystem_id":"a"*64,
-                "backend":"xfs-project-quota","project_id":12002,
-                "hard_bytes":g.resource.EXTERNAL_BYTES,
-                "quota_active":True,"inheritance_verified":True,
-                "real_directory":True,"same_host_root_filesystem":True,
-                "kernel_verified":True},
-        "worker_writable_roots":[g.resource.WORK_ROOT,g.resource.EXTERNAL_ROOT],
-        "deadline_seconds":21600,"deadline_enforced":True,
-        "observation_status":"live-kernel-observed",
-    }
-
 @pytest.fixture
 def protected_tmp():
     # /tmp is world writable even when the fixture child is root-owned;
@@ -108,11 +86,9 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
             read_compiler_base_binding=attested_native,
             read_installed_pin=attested_pin,
             attest_installed_source=attested_source,
-            attest_host_identity=attested_host,
-            read_resource_observation=lambda:resource_observation(a),
-            installed_host_id=a["host_id"],
-            installed_installation_id=a["installation_id"],
-            installed_lane=a["lane"])
+            attest_host_identity=attested_host)
+    # The gateway has no filesystem/quota space precondition: only a tiny
+    # root-owned metadata file is installed on this disposable test Host.
     receipt=install()
     assert observed == ["source","reader","host","lane","base",
                         "signed-receipt","issuer","canonical-binding","pin"]
@@ -123,8 +99,8 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
     assert receipt["accepted_base_inventory_sha256"] == producer_binding["generation_inventory_sha256"]
     assert receipt["accepted_base_generation_record_sha256"] == producer_binding["generation_record_sha256"]
     assert receipt["dedicated_storage_bytes"]==32*1024**3
-    assert receipt["resource_backend"]=="existing-root-filesystem-project-quota"
-    assert receipt["root_filesystem_id"]=="a"*64
+    assert receipt["resource_admission_location"]=="compiler-host-before-build"
+    assert receipt["compiler_resource_admitted"] is False
     for file in (g.APPROVAL,g.CATALOGUE,g.RECEIPT):
         st=file.lstat()
         assert st.st_uid == 0
