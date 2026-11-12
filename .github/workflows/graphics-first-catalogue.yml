@@ -58,11 +58,11 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/host-deploy
-          ref: 0fd2db17698423d4cd30b296fc9f78e83cee145c
+          ref: e4ac0873367cdb8a0ebe8aec34387c87d99c81e9
           path: dependencies/host-deploy-taskc
           persist-credentials: false
       - name: Pin November 11 single trusted Host gateway and local send-once source
-        run: test "$(git -C dependencies/host-deploy-taskc rev-parse HEAD)" = 0fd2db17698423d4cd30b296fc9f78e83cee145c
+        run: test "$(git -C dependencies/host-deploy-taskc rev-parse HEAD)" = e4ac0873367cdb8a0ebe8aec34387c87d99c81e9
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: zog144/host-deploy
