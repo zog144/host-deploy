@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 from .github_dispatch import (
-    AWS_REGION, GitHubDispatchError, load_authorized_actors, prepare_event,
+    AWS_REGION, FIRST_FONTS_TASK, GitHubDispatchError, load_authorized_actors, prepare_event,
     summary, validate_queue_url, write_prepared_request,
 )
 from .queues import queue_account_id
@@ -35,7 +35,13 @@ def configuration(env):
         operations = json.loads(required('ALLOWED_OPERATIONS'))
     except (ValueError, TypeError):
         raise GitHubDispatchError('deployment lists must be JSON') from None
-    allowed = {'host.status', 'build.status', 'build.submit', 'build.cancel', 'build.resume'}
+    # Static dispatchable protocol operations, NOT enabled deployment operations.
+    # A GitHub request still requires a separate explicit ZOG_GATEWAY_ALLOWED_OPERATIONS
+    # opt-in, trusted issue-opened actor, and host-side protected task/lane admission.
+    allowed = {
+        'host.status', 'build.status', 'build.submit', 'build.cancel', 'build.resume',
+        'toolchain.submit', 'toolchain.inspect', 'toolchain.resume',
+    }
     if (not isinstance(operations, list) or not operations
             or any(not isinstance(x, str) or x not in allowed for x in operations)
             or len(set(operations)) != len(operations)):
@@ -64,6 +70,13 @@ def prepare_configured(event_path, output, env):
         request = prepare_event(event, load_authorized_actors(actors))
     if request['operation'] not in settings['operations']:
         raise GitHubDispatchError('operation not enabled by deployment')
+    # Only the native trusted-Host catalogue may admit the compiler/base,
+    # but the repository administrator must separately opt in to forwarding
+    # a first-Fonts issue to the FIFO queue at all.
+    if (request['operation'] == 'build.submit'
+            and request['parameters']['task'] == FIRST_FONTS_TASK
+            and env.get('ZOG_GATEWAY_FONTS_ENABLED') != 'true'):
+        raise GitHubDispatchError('first Fonts issue forwarding is disabled')
     write_prepared_request(output, request)
     return summary(request)
 
