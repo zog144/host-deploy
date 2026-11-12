@@ -124,7 +124,7 @@ def example(kind="toolchain"):
         "kind":kind,"acceptance_receipt_sha256":a["accepted_base_receipt_sha256"],
         "source_repository":graphics.REPOSITORY,
         "verified_source_revision":graphics.READER_SOURCE}
-    reservation={"scope":graphics.resource.SCHEMA,
+    reservation={"scope":"compiler-host-only",
                  "work_bytes":30*1024**3,"external_bytes":2*1024**3}
     return a,lane,selected,reservation
 
@@ -135,7 +135,7 @@ def candidate(a,l,selected,reservation,*,evidence=None,pin=None):
     return graphics.prepare(
         approval=a,lane_record=l,accepted_base=selected,
         installed_pin_bytes=accepted_pin_bytes() if pin is None else pin,
-        actual_reservation=reservation,compiler_base_receipt_bytes=raw,
+        compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,compiler_base_binding=binding)
 
 def accepted_pin_bytes():
