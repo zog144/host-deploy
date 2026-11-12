@@ -175,6 +175,15 @@ def validate(value):
                 if (type(arguments.get("compiler_base")) is not str or
                         not _SHA.fullmatch(arguments["compiler_base"])):
                     raise TaskCatalogueError("first Fonts compiler receipt missing or invalid")
+            elif name in ("graphics-xcb-core-image-v1", "graphics-x11-core-image-v1"):
+                # Later reviewed images must still bind their distinct
+                # graphical predecessor, rather than the Fonts compiler receipt.
+                required.add("graphical_predecessor")
+                predecessor = arguments.get("graphical_predecessor")
+                if (type(predecessor) is not str
+                        or not _GENERATION.fullmatch(predecessor)
+                        or predecessor == arguments["selection"]):
+                    raise TaskCatalogueError("graphical predecessor must be a distinct immutable generation")
             if set(arguments) != required:
                 raise TaskCatalogueError("generic mode requires exact accepted compiler and targets")
             names = arguments["targets"]
