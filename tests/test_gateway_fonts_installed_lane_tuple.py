@@ -21,7 +21,7 @@ from zog.host_deploy.gateway import (
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
     "image_build_lanes.py": "998354c9ca6458c2df5d08a282c0a5c54c4ab01b",
-    "gateway/graphics_catalogue_owner.py": "b1446781fccba653ff0146a6d15f6cda35ad8ffa",
+    "gateway/graphics_catalogue_owner.py": "bdd2bb6bdf7f337a8e174be5f3dbea02819288d8",
     "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
 }
 
