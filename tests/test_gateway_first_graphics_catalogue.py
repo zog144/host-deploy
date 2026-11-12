@@ -182,7 +182,7 @@ def test_signed_toolchain_and_image_keep_original_identity():
     lambda a,l,b,r:a.update(lane_owner="other"),
     lambda a,l,b,r:l.update(source_revision="0"*40),
     lambda a,l,b,r:b.update(kind="image" if b["kind"]=="toolchain" else "toolchain"),
-    lambda a,l,b,r:r.update(external_bytes=1),
+    lambda a,l,b,r:l["resource_policy"].update(disk_reservation_bytes=33*1024**3),
 ])
 def test_independent_approval_lane_budget_or_kind_changes_deny(mutation):
     a,l,b,r=example()
