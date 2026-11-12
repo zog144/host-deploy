@@ -298,7 +298,7 @@ def test_exact_producer_signed_compiler_image_binding(tmp_path, target_abi):
     assert consumed["historical_provenance"]==claim["historical_provenance"]
     assert consumed["status"]==observed["status"]
     # Signatures and binding are separate; a changing issued receipt must
-    # never be accepted using the old immutable approval's hash.
+    # never be accepted using the previous accepted receipt's hash.
     with pytest.raises(base.BaseAcceptanceDenied):
         base.checked_base(bytes_+b" ",issuer,observed,approval=approval,lane=lane)
     with pytest.raises(base.BaseAcceptanceDenied):
@@ -307,7 +307,7 @@ def test_exact_producer_signed_compiler_image_binding(tmp_path, target_abi):
 
 
 def test_legacy_isolation_denied_despite_matching_signature_and_binding():
-    a,lane,_,_=example()
+    a,lane,_=example()
     raw,issuer,binding=base_evidence(a,lane)
     row=json.loads(raw)
     row["claim"]["native_probe"]["isolation"]={"pivot_root":True,"host_mounts_visible":False}
