@@ -32,6 +32,7 @@ def companion():
 def selected_binding():
     return {
         "schema": 3,
+        "project_root": PROJECT,
         "runtime_companion": companion(),
         "runtime_profile": {
             "schema": 1,
