@@ -32,6 +32,10 @@ def catalogue(task, generation):
         "arguments": {
             "mode": "image",
             "selection": BASE,
+            # Exact accepted compiler receipt remains fixture-only, not an
+            # authorization by this synthetic predecessor-chain test.
+            **({"compiler_base": "sha256:" + "4" * 64}
+               if task == chain.TASKS[0] else {}),
             **({"graphical_predecessor": generation}
                if task != chain.TASKS[0] else {}),
             "targets": list(fixed["targets"]),
