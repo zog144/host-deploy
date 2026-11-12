@@ -122,8 +122,11 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
     # identities separate: the immutable original issuer/producer binding
     # verifies the original project, and the new lane independently verifies
     # the current reviewed source revision, October pin, and Host.
-    origin = (image_build_lanes.validate(compiler_base_origin_lane)
-              if compiler_base_origin_lane is not None else lane)
+    try:
+        origin = (image_build_lanes.validate(compiler_base_origin_lane)
+                  if compiler_base_origin_lane is not None else lane)
+    except (ValueError, TypeError, KeyError):
+        _fail()
     if (origin["schema"] != image_build_lanes.SCHEMA
             or origin["mode"] != "managed"
             or origin["source_repository"] != REPOSITORY
