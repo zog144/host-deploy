@@ -92,7 +92,7 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
     assert observed == ["source","reader","base","lane",
                         "signed-receipt","issuer","canonical-binding","pin","host"]
     assert receipt["compiler_authorized"] is False
-    assert receipt["task_allowlist"]==[g.TASK]
+    assert set(task_catalogue.load(g.CATALOGUE,require_root_owned=True)[0]["tasks"])=={g.TASK}
     assert receipt["accepted_base_generation_id"] == base["generation_id"]
     assert receipt["retained_acceptance_sha256"].startswith("sha256:")
     assert receipt["status"]=="installed-catalogue-not-build-authorization"
