@@ -135,3 +135,29 @@ def test_only_original_task_will_be_selected_with_explicit_compiler_receipt():
     del fixture["tasks"][fonts.TASK]["arguments"]["compiler_base"]
     with pytest.raises(task_catalogue.TaskCatalogueError):
         task_catalogue.validate(fixture)
+
+
+def test_task_c_status_runtime_uses_exact_compiler_build_record_checkpoint():
+    """The catalogue does not install the library: the compiler lane does."""
+    lanes=(TASK_C/"src/zog/host_deploy/image_build_lanes.py").read_text()
+    runtime=(GATEWAY/"image_build_execution.py").read_text()
+    checked=(
+        'FIRST_FONTS_PRODUCER_REVISION = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"',
+        'FIRST_FONTS_BUILD_RECORD_COMPATIBILITY = TOOLCHAIN_BUILD_RECORD_COMPATIBILITY',
+        'TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"',
+        'FIRST_FONTS_BUILD_RECORD_COMPATIBILITY',
+        'companions/build-record',
+    )
+    assert all(item in lanes for item in checked)
+    assert all(item in runtime for item in (
+        'image_build_lanes.FIRST_FONTS_PRODUCER_REVISION',
+        'def producer_runtime_preflight(',
+        'required_components = report.get("requirements", {}).get("components")',
+        'producer preflight omitted pinned build-record requirement',
+        'status --porcelain=v1 --untracked-files=all',
+    ))
+    # No quota, separate approval file, or status-side source installation.
+    catalogue=(ROOT/"graphics_catalogue_owner.py").read_text()
+    assert "fonts_resource_admission" not in catalogue
+    assert "graphics-foundation-approval-v1.json" not in catalogue
+    assert "git clone" not in runtime
