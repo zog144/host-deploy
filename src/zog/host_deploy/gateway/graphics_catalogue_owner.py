@@ -107,7 +107,8 @@ def _selection(lane_record, accepted_base, issuer):
 
 def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             compiler_base_receipt_bytes=None,
-            compiler_base_issuer_policy=None, compiler_base_binding=None):
+            compiler_base_issuer_policy=None, compiler_base_binding=None,
+            compiler_base_origin_lane=None):
     """Pure catalogue candidate from native-selected lane and compiler evidence.
 
     This does not read, write, or require a Fonts approval file. The monthly
@@ -116,11 +117,30 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
     """
     lane, selection = _selection(
         lane_record, accepted_base, compiler_base_issuer_policy)
-    # The original generation kind is immutable; only a verified Ed25519
-    # acceptance plus protected canonical producer binding can select it.
+    # The original compiler generation may have been accepted in an older
+    # project, while the Fonts build uses a distinct managed lane. Keep these
+    # identities separate: the immutable original issuer/producer binding
+    # verifies the original project, and the new lane independently verifies
+    # the current reviewed source revision, October pin, and Host.
+    try:
+        origin = (image_build_lanes.validate(compiler_base_origin_lane)
+                  if compiler_base_origin_lane is not None else lane)
+    except (ValueError, TypeError, KeyError):
+        _fail()
+    if (origin["schema"] != image_build_lanes.SCHEMA
+            or origin["mode"] != "managed"
+            or origin["source_repository"] != REPOSITORY
+            or origin["provenance_host_id"] != lane["provenance_host_id"]
+            or (origin["lane"] != lane["lane"]
+                and (origin["project_root"] == lane["project_root"]
+                     or origin["provenance_project_id"] ==
+                        lane["provenance_project_id"]))):
+        _fail()
+    # Signed Ed25519 receipt and independently authenticated producer
+    # binding are still required; no cloned or reissued compiler evidence.
     bound_base = base_acceptance.checked_base(
         compiler_base_receipt_bytes, compiler_base_issuer_policy,
-        compiler_base_binding, approval=selection, lane=lane)
+        compiler_base_binding, approval=selection, lane=origin)
     if (bound_base["kind"] != accepted_base["kind"]
             or bound_base["generation_id"] != accepted_base["generation_id"]
             or bound_base["accepted_receipt_sha256"] !=
@@ -185,7 +205,8 @@ def install_native(*, lane_name, generation_id,
                    read_installed_pin, attest_installed_source,
                    attest_host_identity, read_compiler_base_receipt=None,
                    read_compiler_base_issuer=None,
-                   read_compiler_base_binding=None):
+                   read_compiler_base_binding=None,
+                   read_compiler_base_origin_lane=None):
     """Install the small catalogue and receipt once, without extra policy files.
 
     Work selects a managed lane and compiler generation through this trusted
@@ -195,6 +216,9 @@ def install_native(*, lane_name, generation_id,
     """
     if os.geteuid() != 0:
         raise PermissionError("protected graphical catalogue requires root")
+    if (read_compiler_base_origin_lane is not None
+            and not callable(read_compiler_base_origin_lane)):
+        _fail()
     if (type(lane_name) is not str or not lane_name
             or type(generation_id) is not str
             or _HEX64.fullmatch(generation_id) is None
@@ -225,6 +249,9 @@ def install_native(*, lane_name, generation_id,
         compiler_base_issuer_policy=read_compiler_base_issuer(),
         compiler_base_binding=read_compiler_base_binding(
             generation_id, accepted["acceptance_receipt_sha256"]),
+        compiler_base_origin_lane=(
+            read_compiler_base_origin_lane(generation_id)
+            if read_compiler_base_origin_lane is not None else None),
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
     )
     if (candidate["lane"] != lane_name
