@@ -105,7 +105,8 @@ def _binding(record):
         if (binding["source"]["revision"] in (
                     image_build_lanes.TOOLCHAIN_PRODUCER_REVISION,
                     image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
-                    image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
+                    image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION,
+                    image_build_lanes.FIRST_FONTS_PRODUCER_REVISION)
                 and companion["revision"] != image_build_lanes.expected_build_record_revision(
                     binding["source"]["revision"])):
             raise RuntimeError("new producer requires its exact build-record companion")
@@ -621,6 +622,22 @@ sys.stdout.buffer.write(observed.stdout)
                 "external_observed_state": profile["external_observed_state"],
             }):
         raise RuntimeError("producer preflight differs from frozen profile")
+    # A claimed ready result is not enough: the exact dependency must appear
+    # in image-build's requirements for this operation, independently of an
+    # optional provenance flag. The shell already verifies the Git checkout
+    # revision and clean tree before invoking the read-only API smoke.
+    required_components = report.get("requirements", {}).get("components")
+    if (not isinstance(required_components, list)
+            or not any(
+                isinstance(item, dict)
+                and item.get("component") == "build-record"
+                and item.get("repository") == image_build_lanes.BUILD_RECORD_REPOSITORY
+                and item.get("validated_revision") == companion["revision"]
+                and item.get("version") == "0.8.2"
+                and item.get("source_subdir") == "src"
+                for item in required_components
+            )):
+        raise RuntimeError("producer preflight omitted pinned build-record requirement")
     checks = report.get("checks")
     if not isinstance(checks, list) or not any(
         isinstance(item, dict) and item.get("component") == "build-record"
