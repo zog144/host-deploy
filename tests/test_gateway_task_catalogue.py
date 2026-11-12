@@ -93,6 +93,8 @@ def item(name):
             "mode": "image",
             "selection": "e" * 64,
             "targets": list(spec["targets"]),
+            **({"compiler_base": "sha256:" + "c" * 64}
+               if name == "graphics-fonts-image-v1" else {}),
         },
     }
 
@@ -210,3 +212,22 @@ def test_catalogue_refuses_symlink(tmp_path):
     link.symlink_to(src)
     with pytest.raises(TaskCatalogueError, match="regular file"):
         load(link)
+
+@pytest.mark.parametrize("bad", [None, "sha256:" + "a" * 63, "b" * 64, 2])
+def test_first_fonts_requires_exact_immutable_compiler_receipt(bad):
+    value=catalogue("graphics-fonts-image-v1")
+    args=value["tasks"]["graphics-fonts-image-v1"]["arguments"]
+    if bad is None:
+        del args["compiler_base"]
+    else:
+        args["compiler_base"]=bad
+    with pytest.raises(TaskCatalogueError,match="compiler receipt"):
+        validate(value)
+
+
+def test_first_fonts_rejects_unreviewed_extra_native_authority_fields():
+    value=catalogue("graphics-fonts-image-v1")
+    args=value["tasks"]["graphics-fonts-image-v1"]["arguments"]
+    args["ssm_owner"]="separate-owner-role"
+    with pytest.raises(TaskCatalogueError):
+        validate(value)
