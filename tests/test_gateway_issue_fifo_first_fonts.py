@@ -27,7 +27,7 @@ ISSUE_NUMBER = 101
 REQUEST_ID = github_dispatch.first_fonts_request_id(ISSUE_NUMBER)
 REGION = "us-east-1"
 ACCOUNT = "123456789012"
-REVIEWED_PR7 = "3ee7f24b0869feead798e35d75722d63e2e5b7c9"
+REVIEWED_PR7 = "4956d926b56def821e6a57025b803ef21f2ca330"
 
 
 def intent():
@@ -230,7 +230,7 @@ def test_selected_pr7_files_match_exact_source_review():
     current = selected.read_text()
     assert 'required.add("compiler_base")' in current
     assert 'required.add("graphical_predecessor")' in current
-    assert REVIEWED_PR7 == "3ee7f24b0869feead798e35d75722d63e2e5b7c9"
+    assert REVIEWED_PR7 == "4956d926b56def821e6a57025b803ef21f2ca330"
 
 
 def test_workflow_issue_opened_and_actions_to_sqs_only():
