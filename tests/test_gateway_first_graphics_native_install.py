@@ -105,6 +105,7 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
     assert digest==receipt["catalogue_sha256"]
     assert set(data["tasks"])=={g.TASK}
     assert json.loads(g.RECEIPT.read_text())==receipt
+    assert sorted(p.name for p in state.iterdir())==sorted((g.CATALOGUE.name,g.RECEIPT.name))
     with pytest.raises(g.GraphicalCatalogueBlocked):
         install()
     assert task_catalogue.load(g.CATALOGUE,require_root_owned=True)[1]==digest
