@@ -25,9 +25,9 @@ TASK = "graphics-fonts-image-v1"
 EVIDENCE_SCHEMA = "host-deploy-reviewed-compiler-base-selection-v1"
 READER_SOURCE = "1616f192ef9d8964a8f37f32a86c69c0242a213c"
 RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v1"
-STORE = Path("/var/lib/zog/fonts")
-CATALOGUE = STORE / "graphics-foundation-catalogue-v1.json"
-RECEIPT = STORE / "graphics-foundation-catalogue-receipt-v1.json"
+STORE = Path("/var/lib/host-deploy-gateway")
+CATALOGUE = STORE / "first-fonts-catalogue-v1.json"
+RECEIPT = STORE / "first-fonts-catalogue-receipt-v1.json"
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -46,6 +46,21 @@ def _canonical(value):
 
 def _sha(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _protected_store(root):
+    """Reuse the installed root-owned gateway StateDirectory (no new store)."""
+    if not root.is_absolute() or root == Path("/"):
+        _fail()
+    cursor = Path("/")
+    for component in root.parts[1:]:
+        cursor = cursor / component
+        st = cursor.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid != 0
+                or st.st_mode & 0o022):
+            _fail()
+    if stat.S_IMODE(root.stat().st_mode) & 0o077:
+        _fail()
 
 
 def _selection(lane_record, accepted_base, issuer):
@@ -193,8 +208,7 @@ def install_native(*, lane_name, generation_id,
             or attest_installed_source(READER_SOURCE) is not True):
         _fail()
     root = STORE
-    from .fresh_budget_guard import _protected_root
-    _protected_root(root)
+    _protected_store(root)
     # Refuse partial/replayed installations before reading further inputs.
     for target in (CATALOGUE, RECEIPT):
         if target.exists() or target.is_symlink():
