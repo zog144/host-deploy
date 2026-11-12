@@ -317,3 +317,62 @@ def test_legacy_isolation_denied_despite_matching_signature_and_binding():
     binding["acceptance_receipt_sha256"]=base.digest(raw)
     binding["native_probe_sha256"]=base.digest(base.canonical(row["claim"]["native_probe"]))
     with pytest.raises(base.BaseAcceptanceDenied):base.checked_base(raw,issuer,binding,approval=a,lane=lane)
+
+
+def test_retained_compiler_project_and_distinct_fonts_lane_are_separately_bound():
+    """A new execution lane must not rewrite the producer's accepted history."""
+    old_identity, old_lane, accepted = example("image")
+    # Original retained compiler provenance is authentic to the old project,
+    # even when its managed source revision differs from current Fonts source.
+    original=copy.deepcopy(old_lane)
+    original["source_revision"]="a"*40
+    source_lane=copy.deepcopy(old_lane)
+    source_lane["lane"]="compiler-fonts"
+    source_lane["project_root"]="/home/owner/compiler-fonts"
+    source_lane["provenance_project_id"]="new-independent-compiler-fonts-project"
+    # A second lane selection is not authorized until separately reviewed and
+    # prepared by image_build_lanes. No such write occurs in this pure test.
+    raw,issuer,binding=base_evidence(old_identity,original,"image")
+    accepted["acceptance_receipt_sha256"]=base.digest(raw)
+    from zog.host_deploy.gateway.graphics_catalogue_owner import GraphicalCatalogueBlocked
+    # The old same-project assumption must not silently bind new project IDs.
+    with pytest.raises((base.BaseAcceptanceDenied, GraphicalCatalogueBlocked)):
+        graphics.prepare(
+            lane_record=source_lane,accepted_base=accepted,
+            installed_pin_bytes=accepted_pin_bytes(),
+            compiler_base_receipt_bytes=raw,
+            compiler_base_issuer_policy=issuer,
+            compiler_base_binding=binding)
+    selected=graphics.prepare(
+        lane_record=source_lane,accepted_base=accepted,
+        installed_pin_bytes=accepted_pin_bytes(),
+        compiler_base_receipt_bytes=raw,
+        compiler_base_issuer_policy=issuer,
+        compiler_base_binding=binding,
+        compiler_base_origin_lane=original)
+    assert selected["accepted_base_kind"]=="image"
+    assert selected["lane"]=="compiler-fonts"
+    assert selected["host_id"]==original["provenance_host_id"]
+    assert selected["accepted_base_generation_id"]==old_identity["accepted_base_generation_id"]
+    assert selected["catalogue"]["tasks"][graphics.TASK]["source_revision"]==graphics.SOURCE
+    assert selected["catalogue"]["tasks"][graphics.TASK]["arguments"]["compiler_base"]==base.digest(raw)
+    # Invalid source/project or identity coupling must fail without
+    # weakening issuer verification.
+    for mutation in ("host","project","project_root"):
+        wrong=copy.deepcopy(original)
+        if mutation=="host":
+            wrong["provenance_host_id"]="other-host"
+        elif mutation=="project":
+            wrong["provenance_project_id"]=source_lane["provenance_project_id"]
+        else:
+            wrong["project_root"]=source_lane["project_root"]
+        with pytest.raises((base.BaseAcceptanceDenied,GraphicalCatalogueBlocked)):
+            graphics.prepare(
+                lane_record=source_lane,accepted_base=accepted,
+                installed_pin_bytes=accepted_pin_bytes(),
+                compiler_base_receipt_bytes=raw,
+                compiler_base_issuer_policy=issuer,compiler_base_binding=binding,
+                compiler_base_origin_lane=wrong)
+    assert original["source_revision"]=="a"*40
+    assert source_lane["source_revision"]==graphics.SOURCE
+
