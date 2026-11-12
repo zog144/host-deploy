@@ -131,13 +131,13 @@ def test_later_image_batch_retains_image_kind_with_exact_native_receipt():
 
 def test_initial_fonts_can_keep_signed_compiler_image_original_kind():
     selection,lane,accepted=example("image")
-    catalogue=candidate(approval,lane,accepted,reservation)["catalogue"]
-    receipt,issuer,binding=base_evidence(approval,lane,kind="image")
-    selected=base.checked_base(receipt,issuer,binding,approval=approval,lane=lane)
+    catalogue=candidate(selection,lane,accepted)["catalogue"]
+    receipt,issuer,binding=base_evidence(selection,lane,kind="image")
+    selected=base.checked_base(receipt,issuer,binding,approval=selection,lane=lane)
     retained={"generation_id":selection["accepted_base_generation_id"],
               "kind":"image","evidence":selected}
     req={"operation":"build.submit","request_id":"1"*32,
-         "parameters":{"task":graphics.TASK,"lane":approval["lane"]},
+         "parameters":{"task":graphics.TASK,"lane":lane["lane"]},
          "source":{"repository":graphics.REPOSITORY,"commit":graphics.SOURCE}}
     _,choice=run(req,lane,catalogue,retained)
     assert choice["task"]["arguments"]["selection"]==selected["generation_id"]
