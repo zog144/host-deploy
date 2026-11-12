@@ -401,6 +401,11 @@ TOOLCHAIN_PRODUCER_REVISION = "857bb454e64102afa51a93ce0b9f8cce5924b67c"
 # record is rewritten. The producer's runtime requirements were byte-identical.
 RESTORED_TOOLCHAIN_PRODUCER_REVISION = "31e6121cdf9fd05336286529666e2c35cdbe0831"
 TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
+# The original first-Fonts recipe source already declares build-record 0.8.2
+# at this exact checkpoint. Do not use the older historical fallback for a
+# newly bound Fonts lane; never silently rewrite a retained lane binding.
+FIRST_FONTS_PRODUCER_REVISION = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
+FIRST_FONTS_BUILD_RECORD_COMPATIBILITY = TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
 TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
 # Separate fresh-only tuple. Historical source/companion bindings above remain
 # valid for readback and recovery; no prior lane may be silently promoted.
@@ -413,6 +418,8 @@ CONTROLLER_COMPANION_SCHEMA = 1
 
 
 def expected_build_record_revision(producer_revision):
+    if producer_revision == FIRST_FONTS_PRODUCER_REVISION:
+        return FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BUILD_RECORD_REVISION
     if producer_revision in (
@@ -576,6 +583,13 @@ def validate_runtime_companion(value, *, project_root=None):
         PurePosixPath(root).is_relative_to(PurePosixPath(project_root) / "companions")
     ):
         raise ValueError("runtime companion must be below the owned lane companions directory")
+    if value["producer_revision"] == FIRST_FONTS_PRODUCER_REVISION:
+        if value["revision"] != FIRST_FONTS_BUILD_RECORD_COMPATIBILITY:
+            raise ValueError("first Fonts requires the producer-pinned build-record revision")
+        if project_root is not None and root != str(
+            PurePosixPath(project_root) / "companions/build-record"
+        ):
+            raise ValueError("first Fonts requires the canonical lane build-record checkout")
     return json.loads(json.dumps(value, sort_keys=True))
 
 
