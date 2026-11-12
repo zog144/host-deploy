@@ -12,6 +12,7 @@ env:
   ZOG_GATEWAY_AWS_REGION: ${{ vars.ZOG_GATEWAY_AWS_REGION }}
   ZOG_GATEWAY_ROLE_ARN: ${{ vars.ZOG_GATEWAY_ROLE_ARN }}
   ZOG_GATEWAY_QUEUE_URL: ${{ vars.ZOG_GATEWAY_QUEUE_URL }}
+  ZOG_GATEWAY_FONTS_ENABLED: ${{ vars.ZOG_GATEWAY_FONTS_ENABLED }}
 jobs:
   validate:
     if: github.run_attempt == 1 && contains(github.event.issue.body, '<!-- zog-gateway-request:v1 -->') && contains(fromJSON(vars.ZOG_GATEWAY_AUTHORIZED_ACTORS || '[]'), github.actor)
@@ -41,7 +42,9 @@ jobs:
           python -B -m zog.host_deploy.gateway.github_configuration --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/zog-gateway-request.json"
   submit:
     needs: validate
-    if: github.run_attempt == 1 && vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'
+    # Deployment hold: no FIFO messages until a separate source-reviewed activation.
+    # This is intentionally FALSE even when repository variables already enable submission.
+    if: github.run_attempt == 1 && vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true' && false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -1,6 +1,7 @@
 """GitHub issue authorization, request extraction, and bounded SQS submission."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,6 +22,21 @@ from .protocol import (
 
 
 ISSUE_MARKER = "<!-- zog-gateway-request:v1 -->"
+# Exact original producer, not a moving repository branch or an issue field.
+FIRST_FONTS_TASK = "graphics-fonts-image-v1"
+FIRST_FONTS_SOURCE = {
+    "repository": "zog144/image-build",
+    "commit": "1f07e83dbd80dacb9bed0d6494c697375f0e26cd",
+}
+
+
+def first_fonts_request_id(issue_number):
+    """Stable identity for one original issue-opened event, across reruns."""
+    if type(issue_number) is not int or not 1 <= issue_number <= 2_147_483_647:
+        raise GitHubDispatchError("first Fonts issue number is invalid")
+    domain = f"zog-first-fonts-issue-opened-v1:{ORIGIN_REPOSITORY}:{issue_number}"
+    return hashlib.sha256(domain.encode("ascii")).hexdigest()[:32]
+
 MAXIMUM_ISSUE_BODY_BYTES = 24 * 1024
 AWS_REGION = "us-east-1"
 QUEUE_NAME = PRIMARY_QUEUE_NAME
@@ -123,6 +139,17 @@ def prepare_event(event, authorized_actors):
         raise GitHubDispatchError("GitHub issue number is invalid")
     intent = extract_issue_intent(issue.get("body"))
     request = dict(intent)
+    if (intent.get("operation") == "build.submit"
+            and isinstance(intent.get("parameters"), dict)
+            and intent["parameters"].get("task") == FIRST_FONTS_TASK):
+        # The issue selects a lane and workspace only. Its source and request
+        # identity are immutable reviewed dispatch decisions, never user text.
+        if "source" in intent or "request_id" in intent:
+            raise GitHubDispatchError(
+                "first Fonts issue must omit source and request_id"
+            )
+        request["source"] = dict(FIRST_FONTS_SOURCE)
+        request["request_id"] = first_fonts_request_id(issue_number)
     request["origin"] = {
         "repository": ORIGIN_REPOSITORY,
         "issue_number": issue_number,
