@@ -210,11 +210,26 @@ def test_selected_pr7_files_match_exact_source_review():
     if base is None:
         pytest.skip("cross-repository source pin is exercised by trusted-host CI")
     root = Path(base)
-    for name in ("task_catalogue.py", "graphics_base_acceptance.py",
-                 "graphics_catalogue_owner.py"):
+    for name in ("graphics_base_acceptance.py", "graphics_catalogue_owner.py"):
         relative = Path("src/zog/host_deploy/gateway") / name
         selected = Path("src/zog/host_deploy/gateway") / name
         assert (root / relative).read_bytes() == selected.read_bytes()
+    # PR30 also retains the preexisting reviewed XCB/X11 predecessor argument.
+    # It must match PR7's finite task map and Fonts receipt checks.
+    import ast
+    def reviewed_tasks(path):
+        tree = ast.parse(path.read_text())
+        value = next(node.value for node in tree.body
+                     if isinstance(node, ast.Assign) and
+                     any(isinstance(t, ast.Name) and t.id == "REVIEWED_IMAGE_TASKS"
+                         for t in node.targets))
+        return ast.literal_eval(value)
+    selected = Path("src/zog/host_deploy/gateway/task_catalogue.py")
+    original = root / "src/zog/host_deploy/gateway/task_catalogue.py"
+    assert reviewed_tasks(selected) == reviewed_tasks(original)
+    current = selected.read_text()
+    assert 'required.add("compiler_base")' in current
+    assert 'required.add("graphical_predecessor")' in current
     assert REVIEWED_PR7 == "3ee7f24b0869feead798e35d75722d63e2e5b7c9"
 
 
