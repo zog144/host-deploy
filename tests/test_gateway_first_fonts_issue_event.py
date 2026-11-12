@@ -65,6 +65,7 @@ def settings():
 def prepared(tmp_path, *, event=None, env=None):
     event = issue_event() if event is None else event
     env = settings() if env is None else env
+    tmp_path.mkdir(parents=True, exist_ok=True)
     event_path = tmp_path / "opened.json"
     event_path.write_text(json.dumps(event))
     output = tmp_path / "prepared.json"
