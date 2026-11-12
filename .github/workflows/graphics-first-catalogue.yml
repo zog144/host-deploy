@@ -90,7 +90,7 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
-          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py tests/test_gateway_fonts_pre_admission_review.py tests/test_gateway_fonts_reader_pr20_pr29_reconciliation.py tests/test_gateway_fonts_trusted_host_taskc_reconcile.py
+          PYTHONPATH=src python -m pytest -q tests/test_gateway_first_graphics_catalogue.py tests/test_gateway_task_catalogue.py tests/test_gateway_graphical_retained_base_selection.py tests/test_gateway_fonts_pre_admission_review.py tests/test_gateway_fonts_reader_pr20_pr29_reconciliation.py tests/test_gateway_fonts_trusted_host_taskc_reconcile.py tests/test_gateway_first_fonts_build_record_runtime.py
           python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_owner.py src/zog/host_deploy/gateway/graphics_base_acceptance.py src/zog/host_deploy/gateway/task_catalogue.py src/zog/host_deploy/gateway/image_build_dispatch.py
 
       - name: Verify real root-owned one-shot catalogue file, mode and receipt on ephemeral CI
