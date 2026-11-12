@@ -138,3 +138,22 @@ def test_partial_original_catalogue_cannot_be_repaired(protected_tmp,monkeypatch
             attest_host_identity=lambda *_:True)
     assert g.CATALOGUE.read_bytes()==original
     assert not g.RECEIPT.exists()
+
+
+@pytest.mark.skipif(os.geteuid()!=0, reason="root-only disposable test")
+def test_gateway_catalogue_never_reads_compiler_host_resource_admission(protected_tmp,monkeypatch):
+    """Prevent accidentally moving compiler quota/free-space checks to gateway."""
+    from zog.host_deploy.gateway import fonts_resource_admission as resources
+    def forbidden(*args,**kwargs):
+        pytest.fail("gateway must not inspect compiler Host resources")
+    monkeypatch.setattr(resources,"checked",forbidden)
+    monkeypatch.setattr(resources,"inspect_native",forbidden)
+    # The disposable root installation test above invokes the same genuine
+    # install_native() entrypoint with these functions absent from its call.
+    import inspect
+    src=inspect.getsource(g.install_native)
+    assert "read_resource_observation" not in src
+    assert "resource.checked" not in src
+    assert "inspect_native" not in src
+    assert "actual_reservation" not in src
+    assert "compiler_resource_admitted" in src
