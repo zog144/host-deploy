@@ -1,8 +1,8 @@
 """Privileged TEST-ONLY root O_EXCL catalogue writer. No native host mounts.
 
-The test substitutes only the four independently trusted native attesters
-and uses a temporary root-owned directory. It does not provision or enable
-the real 30+2 GiB worker, compiler gateway, SSM, PID1 or selected generation.
+The test substitutes installed native readers and uses a temporary root-owned
+directory. It does not provision compiler storage, enable the gateway, invoke
+SSM, change PID1 or select a real compiler generation.
 """
 import json
 import os
