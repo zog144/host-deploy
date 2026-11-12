@@ -147,3 +147,61 @@ def test_gateway_catalogue_has_no_budget_quota_deadline_or_approval_file():
         assert forbidden not in source
     assert "os.O_EXCL" in source
     assert "accepted_base_receipt_sha256" in source
+
+
+@pytest.mark.skipif(os.geteuid()!=0, reason="root-only disposable test")
+def test_distinct_fonts_lane_installs_from_original_compiler_project(protected_tmp,monkeypatch):
+    """Two-file install uses native original project, without rewriting its lane."""
+    import copy
+    from zog.host_deploy.gateway import graphics_base_acceptance as base
+    original_identity,old_lane,selected=example("image")
+    old_lane=copy.deepcopy(old_lane)
+    old_lane["source_revision"]="a"*40
+    target=copy.deepcopy(old_lane)
+    target["lane"]="compiler-fonts"
+    target["project_root"]="/home/owner/compiler-fonts"
+    target["provenance_project_id"]="new-unique-fonts-project"
+    target["source_revision"]=g.SOURCE
+    raw,issuer,binding=base_evidence(original_identity,old_lane,"image")
+    selected["acceptance_receipt_sha256"]=base.digest(raw)
+
+    store=protected_tmp/"existing-gateway-state"
+    store.mkdir(mode=0o700)
+    monkeypatch.setattr(g,"STORE",store)
+    monkeypatch.setattr(g,"CATALOGUE",store/"first-fonts-catalogue-v1.json")
+    monkeypatch.setattr(g,"RECEIPT",store/"first-fonts-catalogue-receipt-v1.json")
+    with pytest.raises(base.BaseAcceptanceDenied):
+        g.install_native(
+            lane_name=target["lane"],generation_id=selected["generation_id"],
+            read_managed_lane=lambda _:target,read_accepted_base=lambda _:selected,
+            read_installed_pin=lambda *_:accepted_pin_bytes(),
+            attest_installed_source=lambda _:True,
+            attest_host_identity=lambda *_:True,
+            read_compiler_base_receipt=lambda _:raw,
+            read_compiler_base_issuer=lambda:issuer,
+            read_compiler_base_binding=lambda *_:binding,
+        )
+    assert list(store.iterdir())==[]
+    receipt=g.install_native(
+        lane_name=target["lane"],generation_id=selected["generation_id"],
+        read_managed_lane=lambda _:target,read_accepted_base=lambda _:selected,
+        read_installed_pin=lambda *_:accepted_pin_bytes(),
+        attest_installed_source=lambda _:True,
+        attest_host_identity=lambda host,installation: (
+            host==original_identity["host_id"]
+            and installation==original_identity["installation_id"]),
+        read_compiler_base_receipt=lambda _:raw,
+        read_compiler_base_issuer=lambda:issuer,
+        read_compiler_base_binding=lambda *_:binding,
+        read_compiler_base_origin_lane=lambda _:old_lane,
+    )
+    assert receipt["lane"]==target["lane"]
+    assert receipt["accepted_base_generation_id"]==selected["generation_id"]
+    assert receipt["catalogue_sha256"]==task_catalogue.load(
+        g.CATALOGUE,require_root_owned=True)[1]
+    assert sorted(x.name for x in store.iterdir())==[
+        "first-fonts-catalogue-receipt-v1.json",
+        "first-fonts-catalogue-v1.json",
+    ]
+    assert old_lane["source_revision"]=="a"*40
+    assert target["source_revision"]==g.SOURCE
