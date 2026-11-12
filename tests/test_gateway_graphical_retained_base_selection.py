@@ -12,14 +12,14 @@ from test_gateway_first_graphics_catalogue import example, candidate, base_evide
 
 
 def fixture():
-    approval,lane,accepted,reservation=example()
-    cat=candidate(approval,lane,accepted,reservation)["catalogue"]
+    selection,lane,accepted=example()
+    cat=candidate(selection,lane,accepted)["catalogue"]
     selected=cat["tasks"][graphics.TASK]["arguments"]["selection"]
-    receipt,issuer,binding=base_evidence(approval,lane)
-    bound=base.checked_base(receipt,issuer,binding,approval=approval,lane=lane)
+    receipt,issuer,binding=base_evidence(selection,lane)
+    bound=base.checked_base(receipt,issuer,binding,approval=selection,lane=lane)
     retained={"generation_id":selected,"kind":"toolchain","evidence":bound}
     request={"operation":"build.submit","request_id":"1"*32,
-             "parameters":{"task":graphics.TASK,"lane":approval["lane"]},
+             "parameters":{"task":graphics.TASK,"lane":lane["lane"]},
              "source":{"repository":graphics.REPOSITORY,
                        "commit":graphics.SOURCE}}
     return request,lane,cat,retained
@@ -130,11 +130,11 @@ def test_later_image_batch_retains_image_kind_with_exact_native_receipt():
 
 
 def test_initial_fonts_can_keep_signed_compiler_image_original_kind():
-    approval,lane,accepted,reservation=example("image")
+    selection,lane,accepted=example("image")
     catalogue=candidate(approval,lane,accepted,reservation)["catalogue"]
     receipt,issuer,binding=base_evidence(approval,lane,kind="image")
     selected=base.checked_base(receipt,issuer,binding,approval=approval,lane=lane)
-    retained={"generation_id":approval["accepted_base_generation_id"],
+    retained={"generation_id":selection["accepted_base_generation_id"],
               "kind":"image","evidence":selected}
     req={"operation":"build.submit","request_id":"1"*32,
          "parameters":{"task":graphics.TASK,"lane":approval["lane"]},
