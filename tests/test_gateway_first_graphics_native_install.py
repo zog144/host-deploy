@@ -51,7 +51,7 @@ def test_root_owned_one_shot_receipt_and_no_replacement(protected_tmp, monkeypat
         observed.append("host")
         return True
     def attested_lane(name):
-        assert name == a["lane"]
+        assert name == lane["lane"]
         observed.append("lane")
         return lane
     def attested_base(identity):
