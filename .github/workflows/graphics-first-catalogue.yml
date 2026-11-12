@@ -71,6 +71,32 @@ jobs:
           persist-credentials: false
       - name: Confirm independent reviewed PR29 consumer checkout
         run: test "$(git -C dependencies/host-deploy-reviewed-pr29 rev-parse HEAD)" = b3ac93cd92df1b280f087fbb748263d3371750aa
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/image-build
+          ref: 40b6e88a005298924a9369f3c1131efcae36c67d
+          path: companions/image-build-compiler-runtime
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/build-record
+          ref: a866c9c4b0dd385045f00ce2de7d809f5b67c104
+          path: companions/build-record
+          persist-credentials: false
+      - name: Prove actual first-Fonts runtime and build-record dependency compatibility
+        run: |
+          test "$(git -C companions/image-build-compiler-runtime rev-parse HEAD)" = 40b6e88a005298924a9369f3c1131efcae36c67d
+          test "$(git -C companions/build-record rev-parse HEAD)" = a866c9c4b0dd385045f00ce2de7d809f5b67c104
+          PYTHONPATH=companions/image-build-compiler-runtime/src:companions/build-record/src python -B - <<'PY'
+          from zog.image_build.runtime_requirements import requirements_for, BUILD_RECORD
+          import zog.build_record as actual
+          contract = requirements_for("pipeline.inspect", external_observed_state=True)
+          assert [c["component"] for c in contract["components"]] == ["build-record"]
+          assert contract["bindings"]["provenance"] is False
+          assert BUILD_RECORD["validated_revision"] == "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
+          assert BUILD_RECORD["version"] == actual.__version__ == "0.8.2"
+          assert callable(actual.make_record) and callable(actual.Store)
+          PY
       - name: Pin exact source tree and original October pin bytes
         run: |
           python - <<'PY'
