@@ -12,6 +12,7 @@ env:
   ZOG_GATEWAY_AWS_REGION: ${{ vars.ZOG_GATEWAY_AWS_REGION }}
   ZOG_GATEWAY_ROLE_ARN: ${{ vars.ZOG_GATEWAY_ROLE_ARN }}
   ZOG_GATEWAY_QUEUE_URL: ${{ vars.ZOG_GATEWAY_QUEUE_URL }}
+  ZOG_GATEWAY_FONTS_ENABLED: ${{ vars.ZOG_GATEWAY_FONTS_ENABLED }}
 jobs:
   validate:
     if: github.run_attempt == 1 && contains(github.event.issue.body, '<!-- zog-gateway-request:v1 -->') && contains(fromJSON(vars.ZOG_GATEWAY_AUTHORIZED_ACTORS || '[]'), github.actor)
