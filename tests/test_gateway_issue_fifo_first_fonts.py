@@ -20,11 +20,11 @@ from test_gateway_consumer import FakeSQS, PRIMARY_URL, PRIMARY_ARN, DLQ_ARN
 
 SOURCE = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 PIN = "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
-REQUEST_ID = "1" * 32
 WORKSPACE_ID = "2" * 32
 LANE = "first-fonts"
 ACTOR = "zog144"
 ISSUE_NUMBER = 101
+REQUEST_ID = github_dispatch.first_fonts_request_id(ISSUE_NUMBER)
 REGION = "us-east-1"
 ACCOUNT = "123456789012"
 REVIEWED_PR7 = "3ee7f24b0869feead798e35d75722d63e2e5b7c9"
@@ -32,9 +32,8 @@ REVIEWED_PR7 = "3ee7f24b0869feead798e35d75722d63e2e5b7c9"
 
 def intent():
     return {
-        "schema": 1, "request_id": REQUEST_ID, "workspace_id": WORKSPACE_ID,
+        "schema": 1, "workspace_id": WORKSPACE_ID,
         "operation": "build.submit",
-        "source": {"repository": "zog144/image-build", "commit": SOURCE},
         "parameters": {"lane": LANE, "task": "graphics-fonts-image-v1"},
     }
 
@@ -65,6 +64,7 @@ def actions_environment():
         "ZOG_GATEWAY_ROLE_ARN": f"arn:aws:iam::{ACCOUNT}:role/zog-github-sqs",
         "ZOG_GATEWAY_AUTHORIZED_ACTORS": json.dumps([ACTOR]),
         "ZOG_GATEWAY_ALLOWED_OPERATIONS": '["build.submit"]',
+        "ZOG_GATEWAY_FONTS_ENABLED": "true",
     }
 
 
@@ -122,7 +122,8 @@ def test_real_issue_configuration_fifo_receiver_round_trip_and_redelivery(tmp_pa
         "trigger_actor": ACTOR,
     }
     assert summary["issue_number"] == ISSUE_NUMBER
-    assert request["source"]["commit"] == SOURCE
+    assert request["source"] == github_dispatch.FIRST_FONTS_SOURCE
+    assert request["request_id"] == github_dispatch.first_fonts_request_id(ISSUE_NUMBER)
     client = CapturingFIFO()
     sent = github_dispatch.submit_request(PRIMARY_URL, request, client=client)
     assert sent["request_sha256"] == protocol.request_digest(request)
