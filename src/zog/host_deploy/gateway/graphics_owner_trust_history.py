@@ -20,6 +20,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from . import graphics_owner_observation_v2 as v2
 
 SCHEMA = "zog-graphical-task-c-trust-history-v1"
+# The wire framing remains v1; the installed pin names the history epoch.
+PIN_SCHEMA_V2 = "zog-graphical-task-c-gateway-trust-pin-v1"
+PIN_SCHEMA_V3 = "zog-graphical-task-c-gateway-trust-pin-v3"
 DOMAIN = b"zog-graphical-task-c-trust-history-v1\0"
 SOCKET = "/run/zog/graphical-owner-trust.sock"
 PIN = Path("/etc/zog/graphical-owner/gateway-trust-pin.json")
@@ -114,13 +117,16 @@ def selected_pin():
         deny()
     row=_decoded(raw)
     if (type(row) is not dict or set(row)!=PIN_KEYS or
-            row["schema"]!="zog-graphical-task-c-gateway-trust-pin-v1" or
+            row["schema"] not in (PIN_SCHEMA_V2,PIN_SCHEMA_V3) or
             any(not v2.match(row[k],HEX64) for k in
                 ("broker_public_key","owner_observation_public_key",
                  "installation_id","state_volume_id")) or
             not v2.match(row["scope_sha256"],v2.SHA) or
             not v2.match(row["original_checkpoint_sha256"],v2.SHA) or
-            row["installed_owner_source"]!="5ad7d5ed72d1b72edc767a658de28506791a74d4" or
+            (row["schema"]==PIN_SCHEMA_V2 and
+                row["installed_owner_source"]!="5ad7d5ed72d1b72edc767a658de28506791a74d4") or
+            (row["schema"]==PIN_SCHEMA_V3 and
+                not v2.match(row["installed_owner_source"],HEX64)) or
             not v2.match(row["installed_broker_source"],HEX64)):
         deny()
     return row,APPROVED_PIN_SHA256
@@ -171,7 +177,9 @@ def verify_broker_reply(raw, *, nonce, action, original, pin, pin_sha256):
                 trusted["scope_sha256"]!=pin["scope_sha256"]):
             deny()
         hist=row["current_history"]
-        if (type(hist["sequence"]) is not int or hist["sequence"]<1
+        minimum_sequence = 0 if pin["schema"]==PIN_SCHEMA_V3 else 1
+        if (type(hist["sequence"]) is not int
+                or hist["sequence"]<minimum_sequence
                 or not v2.match(hist["history_sha256"],v2.SHA)
                 or type(hist["revoked"]) is not bool or hist["revoked"]):
             deny()

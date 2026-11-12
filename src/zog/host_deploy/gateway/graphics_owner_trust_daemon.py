@@ -23,6 +23,14 @@ from . import graphics_owner_trust_service as attest
 
 SOCKET = protocol.SOCKET
 FRAME_MAX = protocol.MAX_FRAME
+# V3 two-mount and V4 root-backed are separately signed installations.
+# Both require a fresh protected STATE/Host readback before any broker reply.
+# Only the historical original-checkpoint schema has its own earlier contract.
+LEGACY_ORIGINAL_SCHEMA = "zog-task-c-original-checkpoint-installation-v1"
+BACKEND_BOUND_SCHEMAS = frozenset((
+    "zog-task-c-installation-storage-authority-v1",
+    "zog-task-c-root-backed-storage-authority-v2",
+))
 # Only an independently reviewed installed source change, NOT configuration,
 # can enable this. No environment variable/CLI flag/test fixture unlocks it.
 NATIVE_TRUST_BROKER_ADMISSION_IMPLEMENTED = False
@@ -48,6 +56,7 @@ class InstalledReadOnlyAuthority:
     gateway_gid: int
     gateway_executable_sha256: str
     gateway_cgroup: str
+    backend_recheck: object = None
 
 
 def _activated_socket():
@@ -133,6 +142,27 @@ def serve_connection(connection, authority, *, now=None):
         hold()
     pid = _peer_identity(connection, authority)
     _native_peer_witness(pid, authority)
+    if type(authority.original_checkpoint) is not dict:
+        hold()
+    checkpoint_schema = authority.original_checkpoint.get("schema")
+    if checkpoint_schema not in BACKEND_BOUND_SCHEMAS | {LEGACY_ORIGINAL_SCHEMA}:
+        hold()  # An unknown new schema cannot silently bypass the live reader.
+    if checkpoint_schema in BACKEND_BOUND_SCHEMAS:
+        # Both v3 and v4 use the protected local reader, never gateway IPC.
+        # A retained mapping signature alone does not attest mounted STATE.
+        if not callable(authority.backend_recheck):
+            hold()
+        observed = authority.backend_recheck()
+        if (type(observed) is not dict or
+                set(observed) != {
+                    "backend", "registry_sha256",
+                    "installation_scope_sha256", "live_snapshot_sha256",
+                    "observation_sha256"}
+                or observed["installation_scope_sha256"] !=
+                    authority.checkpoint.scope or
+                observed["registry_sha256"] !=
+                    authority.checkpoint.registry_sha):
+            hold()
     frame = _request(connection)
     if now is None:
         now = int(time.time())

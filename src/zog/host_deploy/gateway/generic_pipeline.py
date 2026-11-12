@@ -73,46 +73,6 @@ def _protected_original_identifiers(root, binding, step):
     }
 
 
-def _selected_protected_owner_preflight(root, binding, step, stage_binding):
-    """Selected root owner must separately claim every original preflight."""
-    from . import graphics_owner_ipc
-    original = _protected_original_identifiers(root, binding, step)
-    # This deterministic, domain-separated ID MUST be independently approved
-    # and immutably mapped by the root service; the gateway cannot mint it.
-    preflight_operation_id = hashlib.sha256(
-        ("zog-graphical-original-preflight-v1:" +
-         original["request_id"] + ":" + original["operation_id"]).encode("ascii")
-    ).hexdigest()[:32]
-
-    def preflight():
-        return graphics_owner_ipc.preflight_original(
-            **{**original, "operation_id": preflight_operation_id})
-    return preflight
-
-
-def _selected_protected_owner_sender(root, binding, step):
-    """Root-only IPC request; no direct SSM or gateway-selected command bytes."""
-    from . import graphics_owner_ipc
-    try:
-        original = _protected_original_identifiers(root, binding, step)
-    except (OSError, KeyError, TypeError, ValueError, RuntimeError):
-        # Fail closed before Host/SSM access if the original GitHub request
-        # or immutable stage selection cannot be independently reopened.
-        # Never let a missing original become a first-seen owner grant.
-        raise RuntimeError(
-            "protected graphical operation owner required; original identity unavailable"
-        ) from None
-
-    def sender(_script, *, seconds):
-        # Source-only compatibility with the existing stage caller. Neither
-        # script nor timeout travels to IPC or selects the owner's payload.
-        # No automatic fallback to Host.submit_command is permitted.
-        if type(_script) is not str or type(seconds) is not int:
-            raise RuntimeError("invalid graphical original command witness")
-        return graphics_owner_ipc.submit_original(**original)
-    return sender
-
-
 def _operation_id(gateway_id, name, ordinal=0):
     return hashlib.sha256(
         ("zog-generic-pipeline-v1:" + gateway_id + ":" + name +
@@ -401,7 +361,7 @@ def status(root, request_id):
                          "request_id": request_id, "stages": []}
 
 def advance(root, request_id, *, host_factory=Host):
-    """One supervised action per invocation; never auto-replay uncertain SSM."""
+    """One trusted-Host SSM stage per call; never replay uncertain SSM."""
     state, binding = _base(root, request_id)
     with request_lock(root, request_id) as directory:
         value = _read(directory, binding, request_id)
@@ -445,8 +405,8 @@ def advance(root, request_id, *, host_factory=Host):
 
         step = steps[-1]
         if step["phase"] == "prepared":
-            # Any prior intent (including after a journal-only rollback) is
-            # terminally uncertain, never a second authorization to send.
+            # Any prior local intent is terminally uncertain; never resend
+            # after loss of a command acknowledgement or a reboot.
             send_intent.refuse_if_claimed(root, request_id, binding, step)
         if step["phase"] in ("submitting", "uncertain"):
             value["phase"] = "uncertain"
@@ -454,47 +414,35 @@ def advance(root, request_id, *, host_factory=Host):
             return _save(directory, value)  # cannot infer lost SendCommand ID
         stage_binding = _stage_binding(binding, step)
         if step["phase"] == "prepared":
-            # This must precede *all* Host and preflight activity: the old
-            # producer_runtime_preflight(host, ...) invoked Host.command(),
-            # which itself performed an unfenced AWS SSM SendCommand.
-            protected_sender = _selected_protected_owner_sender(root, binding, step)
-            protected_preflight = _selected_protected_owner_preflight(
+            # Trusted host-registry uses its ordinary instance role. Validate
+            # every selected source/target/operation without issuing an SSM
+            # preflight: even a "read-only" remote shell is itself SendCommand.
+            # The locally fsynced stage journal + exclusive send intent below
+            # remain the single-attempt authority; no S3/signer/broker grant.
+            from . import trusted_host_submission as trusted
+            # Verify the persisted original authorized GitHub issue/request,
+            # not merely the new stage's local checksum or SQS message.
+            _protected_original_identifiers(root, binding, step)
+            configuration, script = trusted.selected_command(
                 root, binding, step, stage_binding)
-            if not callable(protected_sender) or not callable(protected_preflight):
-                raise RuntimeError("protected graphical owner transport unavailable")
-            # An independently preapproved preflight has its OWN irrevocable
-            # root-owned send claim and must not be reconstructed from local
-            # journal state. No native implementation exists in this branch.
-            preflight = protected_preflight()
-            if (type(preflight) is not dict or
-                    preflight.get("contract") !=
-                    "zog-protected-graphical-preflight-observation-v1" or
-                    preflight.get("ready") is not True or
-                    preflight.get("mutation") is not False or
-                    preflight.get("authenticated") is not True):
-                raise RuntimeError("protected graphical preflight evidence unavailable")
-            configuration = verify_current_target(root, binding)
             host = host_factory(configuration)
             if step["name"] == "submit":
                 _authenticate_snapshot_before_submit(
                     root, request_id, host, binding, value)
-            # Original script is only a local provenance witness; a native
-            # privileged sender must independently select command bytes.
-            script = remote_script(stage_binding)
+            # Script was derived exclusively from the validated frozen
+            # image-build stage, never from a SQS/GitHub caller.
             step["phase"] = "submitting"
             _save(directory, value)  # fsync before AWS mutation
-            # This separate exclusive fsynced identity is committed AFTER
-            # read-only preflight and BEFORE the first external SendCommand.
-            # A restored older prepared journal cannot erase it; no send
-            # occurs if claim exists, is partial or has a changed identity.
+            # The exclusive local operation ID is fsynced BEFORE the first
+            # external SendCommand. Duplicate, partial or uncertain claims
+            # always deny another send, including after a normal reboot.
             send_intent.claim(root, request_id, binding, step)
             try:
-                # No gateway-owned direct SendCommand fallback. The selected
-                # owner transport must independently authenticate the immutable
-                # original request, commit the protected claim, send once, and
-                # provide its original authenticated CommandId.
-                command_id = protected_sender(
-                    script, seconds=CONTROL_TIMEOUT_SECONDS)
+                # Ordinary AWS authentication under trusted host-registry.
+                # The SDK attempts one SendCommand, and a lost acknowledgement
+                # leaves the prewritten local claim permanently uncertain.
+                command_id = trusted.submit_once(
+                    host, script=script, seconds=CONTROL_TIMEOUT_SECONDS)
             except BaseException:
                 value["phase"] = "uncertain"
                 step["phase"] = "uncertain"

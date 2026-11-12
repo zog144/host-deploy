@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 
 from .github_dispatch import (
-    AWS_REGION, GitHubDispatchError, load_authorized_actors, prepare_event,
+    AWS_REGION, FIRST_FONTS_TASK, GitHubDispatchError, load_authorized_actors, prepare_event,
     summary, validate_queue_url, write_prepared_request,
 )
 from .queues import queue_account_id
@@ -70,6 +70,13 @@ def prepare_configured(event_path, output, env):
         request = prepare_event(event, load_authorized_actors(actors))
     if request['operation'] not in settings['operations']:
         raise GitHubDispatchError('operation not enabled by deployment')
+    # Only the native trusted-Host catalogue may admit the compiler/base,
+    # but the repository administrator must separately opt in to forwarding
+    # a first-Fonts issue to the FIFO queue at all.
+    if (request['operation'] == 'build.submit'
+            and request['parameters']['task'] == FIRST_FONTS_TASK
+            and env.get('ZOG_GATEWAY_FONTS_ENABLED') != 'true'):
+        raise GitHubDispatchError('first Fonts issue forwarding is disabled')
     write_prepared_request(output, request)
     return summary(request)
 

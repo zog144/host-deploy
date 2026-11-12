@@ -30,6 +30,11 @@ def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
     from zog.root_control import graphical_task_c_origin as origin
     from zog.root_control import graphical_operation_owner_source as owner
     from zog.root_control.graphical_s3_checkpoint import S3AppendOnlyCheckpoint
+    from zog.root_control.graphical_s3_installation_checkpoint import (
+        S3InstallationCheckpoint)
+    from zog.root_control.graphical_installation_storage_authority import (
+        AUTHORITY_SCHEMA as INSTALLATION_SCHEMA, AUTHORITY_KEYS as INSTALLATION_FIELDS,
+        SOURCE_MODE as INSTALLATION_MODE)
 
     if (os.geteuid()!=0 or type(frame) is not dict
             or set(frame)!={"schema","nonce","action","original","pin_sha256"}
@@ -67,16 +72,42 @@ def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
     item=registry.select(parsed)
     request=item["owner_request"]
     scope=owner.digest(owner.scope_from_request(request))
+    installation_v3=isinstance(checkpoint,S3InstallationCheckpoint)
     if (scope!=signed_pin["scope_sha256"]
             or request["installation_id"]!=signed_pin["installation_id"]
             or request["state_volume_id"]!=signed_pin["state_volume_id"]
-            or checkpoint.scope!=scope):
+            or (not installation_v3 and checkpoint.scope!=scope)):
         denied()
+    expected_pin_schema = (client.PIN_SCHEMA_V3 if installation_v3
+                           else client.PIN_SCHEMA_V2)
+    if signed_pin["schema"] != expected_pin_schema:
+        denied()
+    if installation_v3:
+        # A stable installation selects the remote history; a separate
+        # signed operation scope selects what this IPC may observe. Neither
+        # identity can substitute for the other.
+        if (scope not in checkpoint.approved
+                or checkpoint.approved[scope].get(
+                    request["operation_id"])!=owner.digest(request)):
+            denied()
 
     # Independent installer verifies local reservation and retained external
     # anchor first. A different prefix with the same genesis is NOT equivalent.
     source=independently_retained_original_checkpoint
-    if (type(source) is not dict or
+    if installation_v3:
+        if (type(source) is not dict or set(source)!=INSTALLATION_FIELDS
+                or source.get("schema")!=INSTALLATION_SCHEMA
+                or source.get("mode")!=INSTALLATION_MODE
+                or source["installation_scope_sha256"]!=checkpoint.scope
+                or source["registry_sha256"]!=checkpoint.registry_sha
+                or source["checkpoint_account_id"]!=checkpoint.account
+                or source["checkpoint_bucket"]!=checkpoint.bucket
+                or source["checkpoint_prefix"]!=checkpoint.prefix
+                or source["checkpoint_genesis_sha256"]!=checkpoint.genesis_sha
+                or "sha256:"+hashlib.sha256(client.canonical(source)).hexdigest()!=
+                   signed_pin["original_checkpoint_sha256"]):
+            denied()
+    elif (type(source) is not dict or
             set(source)!={
                 "schema","host_id","installation_id","state_volume_id",
                 "checkpoint_account_id","checkpoint_region",
@@ -102,8 +133,10 @@ def attest_original(frame, *, registry, issuer_evidence, issuer_public_key,
     # Fresh read of exact existing immutable history: no bootstrap, listing,
     # cached last-seen value, PUT, credential fallback or discovery.
     head=checkpoint.current_witness(scope)
+    minimum_sequence = 0 if installation_v3 else 1
     if (type(head) is not dict or set(head)!={"sequence","history_sha256","revoked"}
-            or type(head["sequence"]) is not int or head["sequence"]<1
+            or type(head["sequence"]) is not int
+            or head["sequence"]<minimum_sequence
             or type(head["revoked"]) is not bool or head["revoked"]
             or not client.v2.match(head["history_sha256"],client.v2.SHA)):
         denied()

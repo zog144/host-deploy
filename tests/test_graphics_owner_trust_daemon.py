@@ -18,7 +18,7 @@ def selected():
         registry=object(), issuer_evidence={}, issuer_public_key=b"a"*32,
         observation_public_key=b"b"*32, checkpoint=object(), signed_pin={},
         broker_signer=object(), installed_source_sha256="c"*64,
-        original_checkpoint={},gateway_uid=15310,gateway_gid=15311,
+        original_checkpoint={"schema":daemon.LEGACY_ORIGINAL_SCHEMA},gateway_uid=15310,gateway_gid=15311,
         gateway_executable_sha256="sha256:"+"d"*64,
         gateway_cgroup="/system.slice/zog-graphical-gateway.service")
 

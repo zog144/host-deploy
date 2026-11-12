@@ -1,9 +1,9 @@
 """Exclusive per-operation SSM send intent, separate from mutable pipeline journal.
 
-Source-only local owner fence: protects against replay of *generic-pipeline.json*
-while the separate send-intent directory survives. It is not independent
-antirollback storage. Protected native installation must bind a separately
-authenticated monotonic owner for full disk/reboot/authority rollback.
+Trusted-Host local send-once journal: protects against replay of the mutable
+pipeline record during ordinary process restarts and Host reboot. The Host
+administrator and filesystem are trusted. Whole-Host adversarial rollback is
+outside the selected threat model; this is not an S3 or cryptographic authority.
 """
 import hashlib
 import json
