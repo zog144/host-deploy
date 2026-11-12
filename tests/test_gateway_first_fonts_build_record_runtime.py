@@ -100,7 +100,7 @@ def test_first_fonts_producer_pins_real_build_record_082():
     assert lanes.BUILD_RECORD_COMPATIBILITY != PIN
 
 
-@pytest.mark.parametrize("change", ["revision", "source_root", "repository", "producer_revision"])
+@pytest.mark.parametrize("change", ["revision", "source_root", "repository"])
 def test_wrong_first_fonts_companion_never_binds(change):
     entry = companion()
     entry[change] = {
@@ -111,6 +111,15 @@ def test_wrong_first_fonts_companion_never_binds(change):
     }[change]
     with pytest.raises(ValueError):
         lanes.validate_runtime_companion(entry, project_root=PROJECT)
+
+
+def test_status_rejects_companion_bound_to_another_producer_before_host_execution():
+    binding = selected_binding()
+    binding["runtime_companion"]["producer_revision"] = "f" * 40
+    host = HostStub(ready_report())
+    with pytest.raises(RuntimeError, match="source-bound build-record"):
+        producer_runtime_preflight(host, binding)
+    assert host.commands == []
 
 
 def test_first_fonts_status_preflight_checks_git_and_python_source_without_provenance_flag():
