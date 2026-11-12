@@ -538,12 +538,12 @@ def producer_runtime_preflight(host, binding):
     """Run the pinned image-build read-only CLI, before SSM producer submission."""
     if binding["schema"] != 3:
         raise RuntimeError("producer preflight needs dependency-bound dispatch")
+    project_root = binding.get("project_root")
+    if (binding["source"]["revision"] == image_build_lanes.FIRST_FONTS_PRODUCER_REVISION
+            and not isinstance(project_root, str)):
+        raise RuntimeError("first Fonts preflight needs bound lane project root")
     companion = image_build_lanes.validate_runtime_companion(
-        binding["runtime_companion"], project_root=(
-            binding["runtime_companion"]["source_root"].removesuffix("/companions/build-record")
-            if binding["source"]["revision"] == image_build_lanes.FIRST_FONTS_PRODUCER_REVISION
-            else None
-        )
+        binding["runtime_companion"], project_root=project_root
     )
     if (companion["producer_revision"] != binding["source"]["revision"]
             or companion["revision"] != image_build_lanes.expected_build_record_revision(
