@@ -11,6 +11,13 @@ on:
       - tests/test_gateway_trusted_host_ssm.py
       - tests/test_gateway_generic_pipeline.py
       - tests/test_gateway_first_fonts_build_record_runtime.py
+      - tests/test_gateway_first_fonts_issue_event.py
+      - tests/test_gateway_github.py
+      - tests/test_gateway_configuration.py
+      - src/zog/host_deploy/gateway/github_dispatch.py
+      - src/zog/host_deploy/gateway/github_configuration.py
+      - .github/workflows/gateway-issue-dispatch.yml
+      - .github/ISSUE_TEMPLATE/first-fonts-gateway.md
       - src/zog/host_deploy/image_build_lanes.py
       - src/zog/host_deploy/gateway/image_build_execution.py
       - tests/test_gateway_graphical_submission_journal_review.py
@@ -84,6 +91,9 @@ jobs:
             tests/test_gateway_graphical_submission_journal_review.py \
             tests/test_gateway_trusted_host_cross_owner.py \
             tests/test_gateway_first_fonts_build_record_runtime.py \
+            tests/test_gateway_first_fonts_issue_event.py \
+            tests/test_gateway_github.py \
+            tests/test_gateway_configuration.py \
             tests/test_runner_ssm.py
       - if: always()
         run: echo 'Source-only trusted Host IAM SSM; no AWS calls or native submissions were performed.' >> "$GITHUB_STEP_SUMMARY"
