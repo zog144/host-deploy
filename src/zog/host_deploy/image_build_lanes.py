@@ -271,6 +271,8 @@ def _path(root, lane):
 
 def prepare(directory, spec):
     spec = validate(spec)
+    if spec["lane"] == "gateway-first-fonts-runtime":
+        raise ValueError("reserved first Fonts lane requires source-owned fonts-lane-prepare")
     with locked(directory) as root:
         path = _path(root, spec["lane"])
         others = []
@@ -687,12 +689,23 @@ def _capacity(host, project_root):
     return json.loads(host.command("python3 -c " + shlex.quote(code)))
 
 
-def activate(directory, lane):
+def activate(directory, lane, *, expected_specification_sha256=None):
     with locked(directory) as root:
         workspace, host_config = configuration(root)
         path = _path(root, lane)
         record = json.loads(path.read_text())
         spec = validate(record["specification"])
+        if lane == "gateway-first-fonts-runtime" or "fonts_lane_profile" in record:
+            from . import fonts_lane_profile
+            if lane != fonts_lane_profile.LANE or expected_specification_sha256 is None:
+                raise RuntimeError("first Fonts lane requires explicit digest-bound activation")
+            fonts_lane_profile.validate_activation(
+                root, record, spec, workspace, host_config,
+                expected_specification_sha256=expected_specification_sha256,
+            )
+        elif (expected_specification_sha256 is not None
+                and specification_sha256(spec) != expected_specification_sha256):
+            raise RuntimeError("lane activation specification digest differs")
         host = Host(host_config)
         if spec["schema"] == SCHEMA:
             runtime_preflight(host, spec["python_executable"])

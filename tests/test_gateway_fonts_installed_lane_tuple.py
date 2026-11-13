@@ -21,7 +21,7 @@ from zog.host_deploy.gateway import (
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
     # Successor lane-admission source from PR #32; PR30 pinned the predecessor at 998354c9... .
-    "image_build_lanes.py": "b267e2949d4ee3e8f127c94494059a6779e8d3db",
+    "image_build_lanes.py": "48abc6dca385b5d171b6fa00146d6edbefa26d50",
     "gateway/graphics_catalogue_owner.py": "bdd2bb6bdf7f337a8e174be5f3dbea02819288d8",
     "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
 }
@@ -32,7 +32,7 @@ def git_blob(path):
     return hashlib.sha1(b"blob "+str(len(raw)).encode("ascii")+bytes([0])+raw).hexdigest()
 
 
-def test_reviewed_installed_module_tuple_is_exact_pr32_successor_contract():
+def test_reviewed_installed_module_tuple_is_exact_fonts_profile_successor_contract():
     root=Path(__file__).resolve().parents[1]/"src/zog/host_deploy"
     for path,sha in EXPECTED_BLOBS.items():
         assert git_blob(root/path)==sha, path

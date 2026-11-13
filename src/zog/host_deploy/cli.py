@@ -93,6 +93,14 @@ def main():
             command.add_argument('--expected-specification-sha256',required=True)
         if name=='lane-command':
             command.add_argument('--request-path',required=True)
+    # Reviewed first-Fonts path: no caller-supplied spec or identity overrides.
+    for name in ('fonts-lane-profile', 'fonts-lane-verify',
+                 'fonts-lane-prepare', 'fonts-lane-activate'):
+        command = commands.add_parser(name)
+        if name != 'fonts-lane-profile':
+            command.add_argument('--workspace', required=True)
+        if name == 'fonts-lane-activate':
+            command.add_argument('--expected-specification-sha256', required=True)
     for name in ['artifact-init','artifact-publish','artifact-fetch','artifact-prune']:
         command=commands.add_parser(name)
         command.add_argument('--store',required=True)
@@ -102,7 +110,21 @@ def main():
             command.add_argument('--retention-seconds',type=int,default=604800)
         if name=='artifact-fetch': command.add_argument('--output',required=True)
     arguments=parser.parse_args()
-    if arguments.command.startswith('lane-'):
+    if arguments.command.startswith('fonts-lane-'):
+        from . import fonts_lane_profile
+        if arguments.command == 'fonts-lane-profile':
+            result = fonts_lane_profile.profile()
+        elif arguments.command == 'fonts-lane-verify':
+            result = fonts_lane_profile.verify(arguments.workspace)
+        elif arguments.command == 'fonts-lane-prepare':
+            result = fonts_lane_profile.prepare(arguments.workspace)
+        else:
+            from . import image_build_lanes
+            result = image_build_lanes.activate(
+                arguments.workspace, fonts_lane_profile.LANE,
+                expected_specification_sha256=arguments.expected_specification_sha256,
+            )
+    elif arguments.command.startswith('lane-'):
         from . import image_build_lanes
         if arguments.command=='lane-prepare':
             specification=json.loads(Path(arguments.spec).read_text())

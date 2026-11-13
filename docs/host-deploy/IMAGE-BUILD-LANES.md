@@ -156,3 +156,12 @@ does not copy, symlink or import retained pipeline evidence into the isolated la
 Historical schema-2 lanes remain executable without external observation state.
 Schema-1 lanes remain readable but cannot execute pass-4 remote operations because
 they lack the explicit monthly provenance-pin descriptor.
+
+## First Fonts source-owned profile
+
+The first Fonts managed-lane identity is reserved for the reviewed
+`fonts-lane-profile` / `fonts-lane-verify` / `fonts-lane-prepare` /
+`fonts-lane-activate` workflow; unlike a generic `lane-prepare --spec`, it
+never accepts a caller-generated full specification. See
+[the first Fonts source-owned preparation contract](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md).
+Preparation is local and does not activate a Host or prove worker resource limits.
