@@ -200,6 +200,46 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             "compiler_authorized": False}
 
 
+
+def _installed_file(path, root):
+    """Return protected exact bytes or None; never follow an existing symlink.
+
+    File existence and nonexistence are checked through a descriptor; unsafe,
+    partial, or foreign content is never removed to make retry succeed.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
+                or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o600
+                or st.st_dev != root.stat().st_dev or st.st_size > 1024 * 1024):
+            _fail()
+        with os.fdopen(fd, "rb") as stream:
+            fd = -1
+            return stream.read(1024 * 1024 + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _write_exclusive(path, content):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        view = memoryview(content)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short protected graphics installation write")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def install_native(*, lane_name, generation_id,
                    read_managed_lane, read_accepted_base,
                    read_installed_pin, attest_installed_source,
@@ -233,10 +273,10 @@ def install_native(*, lane_name, generation_id,
         _fail()
     root = STORE
     _protected_store(root)
-    # Refuse partial/replayed installations before reading further inputs.
-    for target in (CATALOGUE, RECEIPT):
-        if target.exists() or target.is_symlink():
-            _fail()
+    # Existing files are not trusted merely because they exist. Reauthenticate
+    # the source/lane/base first, then compare exact protected file bytes. A
+    # completed installation is idempotent, and an exact catalogue-only state
+    # can be completed without replacing the first file.
     accepted = read_accepted_base(generation_id)
     if (type(accepted) is not dict
             or accepted.get("generation_id") != generation_id
@@ -259,47 +299,49 @@ def install_native(*, lane_name, generation_id,
             or attest_host_identity(
                 candidate["host_id"], candidate["installation_id"]) is not True):
         _fail()
-    # Existing root-owned catalogue loader verifies every ancestor is
-    # non-writable and root-owned; no compiler quota evidence is read here.
-    fd = os.open(CATALOGUE, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    try:
-        written = os.write(fd, candidate["bytes"])
-        if written != len(candidate["bytes"]):
-            raise OSError("short protected graphical catalogue write")
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    st = CATALOGUE.lstat()
-    if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0
-            or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) != 0o600
-            or st.st_dev != root.stat().st_dev):
-        _fail()
-    reread, digest = task_catalogue.load(CATALOGUE, require_root_owned=True)
-    if reread != candidate["catalogue"] or digest != candidate["sha256"]:
-        _fail()
+    # Build the expected receipt from freshly authenticated native evidence.
     receipt = {
         "schema": RECEIPT_SCHEMA,
-        "catalogue_sha256": digest,
+        "catalogue_sha256": candidate["sha256"],
         "source_revision": SOURCE,
-        "accepted_base_generation_id":candidate["accepted_base_generation_id"],
-        "accepted_base_receipt_sha256":candidate["accepted_base_receipt_sha256"],
-        "retained_acceptance_sha256":candidate["retained_acceptance_sha256"],
-        "host_id":candidate["host_id"],
-        "installation_id":candidate["installation_id"],
-        "lane":candidate["lane"],
-        "compiler_authorized":False,
-        "status":"installed-catalogue-not-build-authorization",
+        "accepted_base_generation_id": candidate["accepted_base_generation_id"],
+        "accepted_base_receipt_sha256": candidate["accepted_base_receipt_sha256"],
+        "retained_acceptance_sha256": candidate["retained_acceptance_sha256"],
+        "host_id": candidate["host_id"],
+        "installation_id": candidate["installation_id"],
+        "lane": candidate["lane"],
+        "compiler_authorized": False,
+        "status": "installed-catalogue-not-build-authorization",
     }
     raw_receipt = _canonical(receipt)
-    fd = os.open(RECEIPT, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                 os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    try:
-        if os.write(fd, raw_receipt) != len(raw_receipt):
-            raise OSError("short protected graphics receipt write")
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    present = _installed_file(CATALOGUE, root)
+    installed_receipt = _installed_file(RECEIPT, root)
+    if present is None and installed_receipt is not None:
+        _fail()  # a receipt without its catalogue is not recoverable
+    if present is not None:
+        # Canonical bytes AND loader schema/hash must agree, not merely digest.
+        if present != candidate["bytes"]:
+            _fail()
+        reread, digest = task_catalogue.load(CATALOGUE, require_root_owned=True)
+        if reread != candidate["catalogue"] or digest != candidate["sha256"]:
+            _fail()
+    else:
+        _write_exclusive(CATALOGUE, candidate["bytes"])
+        # An interruption here leaves precisely the complete first file.
+        # A later call revalidates all inputs before creating only RECEIPT.
+        present = _installed_file(CATALOGUE, root)
+        if present != candidate["bytes"]:
+            _fail()
+        reread, digest = task_catalogue.load(CATALOGUE, require_root_owned=True)
+        if reread != candidate["catalogue"] or digest != candidate["sha256"]:
+            _fail()
+    if installed_receipt is not None:
+        if installed_receipt != raw_receipt:
+            _fail()
+        return receipt  # identical completed installation: do not rewrite
+    _write_exclusive(RECEIPT, raw_receipt)
+    if _installed_file(RECEIPT, root) != raw_receipt:
+        _fail()
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(directory)

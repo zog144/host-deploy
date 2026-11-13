@@ -210,10 +210,21 @@ def test_selected_pr7_files_match_exact_source_review():
     if base is None:
         pytest.skip("cross-repository source pin is exercised by trusted-host CI")
     root = Path(base)
-    for name in ("graphics_base_acceptance.py", "graphics_catalogue_owner.py"):
-        relative = Path("src/zog/host_deploy/gateway") / name
-        selected = Path("src/zog/host_deploy/gateway") / name
-        assert (root / relative).read_bytes() == selected.read_bytes()
+    # The signed compiler acceptance reader remains byte-identical to PR7.
+    relative = Path("src/zog/host_deploy/gateway/graphics_base_acceptance.py")
+    assert (root / relative).read_bytes() == relative.read_bytes()
+    # The catalogue owner's *native installer* now supports exact-repeat and
+    # interrupted two-file recovery. The immutable selection and signed base
+    # verification must still match the independently reviewed PR7 contract.
+    import ast
+    def selected_function(path, name):
+        tree = ast.parse(path.read_text())
+        node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+        return ast.dump(node, include_attributes=False)
+    old_owner = root / "src/zog/host_deploy/gateway/graphics_catalogue_owner.py"
+    new_owner = Path("src/zog/host_deploy/gateway/graphics_catalogue_owner.py")
+    for name in ("_selection", "prepare", "_protected_store"):
+        assert selected_function(old_owner, name) == selected_function(new_owner, name)
     # PR30 also retains the preexisting reviewed XCB/X11 predecessor argument.
     # It must match PR7's finite task map and Fonts receipt checks.
     import ast

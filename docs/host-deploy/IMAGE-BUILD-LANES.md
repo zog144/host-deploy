@@ -156,3 +156,19 @@ does not copy, symlink or import retained pipeline evidence into the isolated la
 Historical schema-2 lanes remain executable without external observation state.
 Schema-1 lanes remain readable but cannot execute pass-4 remote operations because
 they lack the explicit monthly provenance-pin descriptor.
+
+## First Fonts source-owned profile
+
+The first Fonts managed-lane identity is reserved for the reviewed
+`fonts-lane-profile` / `fonts-lane-verify` / `fonts-lane-prepare` /
+`fonts-lane-activate` workflow, bound to the **original retained** prepared
+lane specification at `/home/certbot-build-owner/gateway-first-fonts-runtime`.
+The v3 compatibility reader requires the approved full specification digest,
+workspace/Host identity and independent installed controller inspection; it
+does not assemble a replacement JSON specification or move an older Project.
+See [first Fonts retained-lane recovery](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md).
+The retained `fonts-lane-prepare` is read-only and idempotent. Activation is
+explicit and recoverable after complete remote configuration. The generic
+disk-admission check remains. The retired Fonts-specific worker-space and
+fixed-duration acceptance gates stay removed; runtime memory enforcement is
+investigated separately and is not an additional Fonts blocker.
