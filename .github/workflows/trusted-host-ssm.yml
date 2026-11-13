@@ -130,5 +130,33 @@ jobs:
             tests/test_gateway_github.py \
             tests/test_gateway_configuration.py \
             tests/test_runner_ssm.py
+      # Source archive for native Work: the exact PR head, not GitHub's synthetic merge ref.
+      # This is a CI artifact, never a committed bundle or an installation authorization.
+      - name: Checkout exact PR head for source handoff
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: reviewed-source
+          persist-credentials: false
+      - name: Package audited source identity for Work
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          test "$(git -C reviewed-source rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          # The selected source modules exercised above must match the exported head.
+          cmp reviewed-source/src/zog/host_deploy/image_build_lanes.py src/zog/host_deploy/image_build_lanes.py
+          cmp reviewed-source/tests/test_image_build_lanes.py tests/test_image_build_lanes.py
+          mkdir -p source-handoff
+          git -C reviewed-source archive --format=tar HEAD > source-handoff/host-deploy-source.tar
+          (cd source-handoff && sha256sum host-deploy-source.tar > SHA256SUMS)
+          git -C reviewed-source rev-parse HEAD > source-handoff/SOURCE_COMMIT
+      - name: Publish exact source archive (seven-day retention)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reviewed-host-deploy-source-${{ github.event.pull_request.head.sha }}
+          path: source-handoff/
+          if-no-files-found: error
+          retention-days: 7
       - if: always()
         run: echo 'Source-only trusted Host IAM SSM; no AWS calls or native submissions were performed.' >> "$GITHUB_STEP_SUMMARY"
