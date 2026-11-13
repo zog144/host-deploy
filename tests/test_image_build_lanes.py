@@ -161,21 +161,88 @@ def test_activate_admission_and_controller_policy_without_aws(tmp_path, monkeypa
     assert any("install -d" in command for command in commands)
 
 
-def test_activate_rejects_overcommitted_memory(tmp_path, monkeypatch):
+@pytest.mark.parametrize("observed_capacity", [
+    {"memory_bytes": 1, "disk_free_bytes": 100_000_000_000},
+    {"disk_free_bytes": 100_000_000_000},
+])
+def test_activate_ignores_host_ram_and_other_lane_memory_values(
+    tmp_path, monkeypatch, observed_capacity
+):
     root = workspace(tmp_path)
-    lanes.prepare(root, spec(memory=7_000_000_000))
-    monkeypatch.setattr(lanes, "configuration", lambda directory: ({}, {"instance_id": "i-test"}))
+    work = lanes.specification(
+        "work-leading",
+        mode="reservation",
+        source_repository="zog144/image-build",
+        source_revision="c" * 40,
+        monthly_pin_repository_path="project/pins/2026-10-01/commit-pin.py",
+        monthly_pin_identity="sha256:" + "d" * 64,
+        provenance_host_id="host-fixture",
+        provenance_project_id="zog-compiler-view",
+        memory_maximum_bytes=9_000_000_000_000,
+        thread_count_maximum=128,
+        cpu_weight=200,
+        disk_reservation_bytes=10_000_000_000,
+        execution_user_id=1001,
+        execution_group_id=1001,
+        project_root="/var/lib/station-access/zog-compiler-view",
+    )
+    lanes.prepare(root, work)
+    managed = lanes.prepare(root, spec(memory=8_000_000_000_000))
+    original_digest = lanes.specification_sha256(managed["specification"])
     monkeypatch.setattr(
-        lanes,
-        "_capacity",
-        lambda host, project_root: {
-            "memory_bytes": 4_000_000_000,
-            "disk_free_bytes": 100_000_000_000,
-        },
+        lanes, "configuration",
+        lambda directory: ({}, {"instance_id": "i-test"}),
+    )
+    monkeypatch.setattr(lanes, "_capacity", lambda host, project_root: observed_capacity)
+
+    uploads = {}
+    class FakeHost:
+        def __init__(self, config):
+            assert config["instance_id"] == "i-test"
+        def command(self, command, **kwargs):
+            assert "install -d" in command
+            return ""
+        def upload(self, data, path):
+            uploads[path] = data
+    monkeypatch.setattr(lanes, "Host", FakeHost)
+
+    assert lanes.activate(root, "work-leading")["state"] == "active"
+    assert lanes.inspect(root, "rebuild-oct1")["state"] == "prepared"
+    activated = lanes.activate(root, "rebuild-oct1")
+    assert activated["state"] == "active"
+    assert activated["capacity"] == observed_capacity
+    assert lanes.specification_sha256(activated["specification"]) == original_digest
+    assert activated["specification"] == managed["specification"]
+    controller = json.loads(uploads[activated["controller_config"]])
+    assert controller["resource_limits"]["memory-maximum-bytes"] == 8_000_000_000_000
+
+
+def test_capacity_probe_never_reads_host_ram():
+    class FakeHost:
+        def command(self, command):
+            assert "/proc/meminfo" not in command
+            assert "MemTotal" not in command
+            assert "statvfs" in command
+            return '{"disk_free_bytes": 1000000}'
+    assert lanes._capacity(FakeHost(), Path("/var/lib/zog/image-build-lanes/new")) == {
+        "disk_free_bytes": 1000000
+    }
+
+
+def test_activate_still_rejects_aggregate_disk_overcommit(tmp_path, monkeypatch):
+    root = workspace(tmp_path)
+    lanes.prepare(root, spec(disk=10_000))
+    monkeypatch.setattr(
+        lanes, "configuration",
+        lambda directory: ({}, {"instance_id": "i-test"}),
+    )
+    monkeypatch.setattr(
+        lanes, "_capacity", lambda host, project_root: {"disk_free_bytes": 9_999},
     )
     monkeypatch.setattr(lanes, "Host", lambda config: object())
-    with pytest.raises(RuntimeError, match="memory reservations"):
+    with pytest.raises(RuntimeError, match="disk reservations"):
         lanes.activate(root, "rebuild-oct1")
+    assert lanes.inspect(root, "rebuild-oct1")["state"] == "prepared"
 
 
 def test_reservation_lane_accounts_for_existing_work_without_remote_mutation(tmp_path, monkeypatch):

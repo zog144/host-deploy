@@ -1,6 +1,6 @@
 # Concurrent image-build lanes
 
-Host-deploy can reserve multiple independent image-build/box-control projects on one
+Host-deploy can track multiple independent image-build/box-control projects on one
 development host. A lane is an execution namespace, not a compiler stage.
 
 Each lane binds:
@@ -33,12 +33,13 @@ shared.
 ## Existing Work lane
 
 An already-running Work-owned project can be represented without host-deploy
-modifying it. Use lane `mode: "reservation"` with that project's actual absolute
-root and reserve the memory/disk budget that leading-edge work may need.
+modifying it. Use the historical lane `mode: "reservation"` with that project's
+actual absolute root and the disk reservation it needs. The mode name is retained
+for compatibility; it does not reserve host RAM.
 
-Activating a reservation-only lane performs admission accounting only: it does not
-create directories, upload `controller.json`, change the Work source checkout, or
-enable remote operations for that lane. This is the recommended transition for the
+Activating a reservation-only lane checks disk admission and retains the identity
+record only: it does not create directories, upload `controller.json`, change the
+Work source checkout, or enable remote operations for that lane. This is the recommended transition for the
 current `zog-compiler-view` project while the regular-chat rebuild uses a new
 `mode: "managed"` lane.
 
@@ -56,9 +57,11 @@ Activate it after capacity admission:
 host-deploy lane-activate --workspace HOST --lane rebuild-oct1
 ```
 
-Activation checks active lane memory/disk reservations against the observed host,
-creates the project/state/source directories and installs a nonsecret controller
-configuration. It does not fetch source or start a compiler.
+Activation checks the active lane disk reservations against observed filesystem free
+space; it does not sum per-lane memory values, measure host RAM or use either to deny
+activation. Managed-lane activation creates project/state/source directories and
+installs a nonsecret controller configuration. It does not fetch source or start a
+compiler.
 
 Inspect or retire admission:
 
@@ -81,11 +84,31 @@ command checkpoints, per-job weight provides the initial lane scheduling priorit
 
 A normal policy for concurrent development is:
 
-- leading Work lane: larger CPU weight and memory reservation;
-- clean/rebuild lane: lower CPU weight, bounded memory and lower compiler parallelism.
+- leading Work lane: independently reviewed CPU and runtime-memory policy;
+- clean/rebuild lane: lower CPU weight, a separately verified runtime memory limit
+  where the controller actually applies one, and lower compiler parallelism.
 
 CPUWeight is work-conserving: the rebuild may use idle CPU but yields relative share
 when leading-edge work is active.
+
+### Compatibility and runtime-limit boundary
+
+There is **no lane schema migration**. Schemas 1-4 retain their exact
+`resource_policy.memory_maximum_bytes` key, validation, serialized bytes and
+specification SHA-256 identity. It is deprecated **as an aggregate reservation
+or host-capacity guarantee**. Managed lanes still pass it unmodified as
+`resource_limits["memory-maximum-bytes"]` to the controller; that is a
+*requested per-execution setting*, whose actual systemd/cgroup enforcement must
+be verified by the execution-control owner on the selected runtime. On
+reservation-only lanes the value is legacy bookkeeping and cannot constrain
+the separately owned Work project. Neither value gates lane activation.
+
+Existing lane files are never rewritten by this source update. Historical
+`record.capacity.memory_bytes` values remain readable; new activation capacity
+snapshots contain `disk_free_bytes` only. Disk reservation checks remain.
+Do not confuse the configured controller request with evidence that a live
+compilation was limited. Observe the actual transient service/cgroup's
+`MemoryMax`/`memory.max` (and applicable job/scope identity) during native acceptance.
 
 Disk remains separately admitted because independent lanes retain independent roots,
 attempts and generations. Cross-lane source-byte reuse should happen through

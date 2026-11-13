@@ -158,6 +158,9 @@ def validate(spec):
         "disk_reservation_bytes",
     }:
         raise ValueError("invalid lane resource policy")
+    # Retained in schemas 1-4 for exact specification/digest compatibility.
+    # Managed lanes forward this as a requested controller runtime limit;
+    # it is NOT a host-RAM reservation or a lane-activation safeguard.
     _positive(policy["memory_maximum_bytes"], "memory_maximum_bytes")
     _positive(policy["thread_count_maximum"], "thread_count_maximum", 2**31 - 1)
     _positive(policy["cpu_weight"], "cpu_weight", 10000)
@@ -676,11 +679,10 @@ def _capacity(host, project_root):
     code = (
         "import json,os;"
         "from pathlib import Path;"
-        "m=int(open('/proc/meminfo').read().split('MemTotal:')[1].split()[0])*1024;"
         f"p=Path({str(project_root.parent)!r});"
         "p=next((x for x in (p,*p.parents) if x.exists()),Path('/'));"
         "v=os.statvfs(p);"
-        "print(json.dumps({'memory_bytes':m,'disk_free_bytes':v.f_bavail*v.f_frsize}))"
+        "print(json.dumps({'disk_free_bytes':v.f_bavail*v.f_frsize}))"
     )
     return json.loads(host.command("python3 -c " + shlex.quote(code)))
 
@@ -700,17 +702,11 @@ def activate(directory, lane):
             for item in _active_records(root)
             if item["lane"] != lane
         ]
-        reserved_memory = sum(
-            item["specification"]["resource_policy"]["memory_maximum_bytes"]
-            for item in active
-        )
         reserved_disk = sum(
             item["specification"]["resource_policy"]["disk_reservation_bytes"]
             for item in active
         )
         policy = spec["resource_policy"]
-        if reserved_memory + policy["memory_maximum_bytes"] > capacity["memory_bytes"]:
-            raise RuntimeError("image-build lane memory reservations exceed host capacity")
         if reserved_disk + policy["disk_reservation_bytes"] > capacity["disk_free_bytes"]:
             raise RuntimeError("image-build lane disk reservations exceed free capacity")
         project = Path(spec["project_root"])
