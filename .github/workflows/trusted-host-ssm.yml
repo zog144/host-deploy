@@ -19,6 +19,7 @@ on:
       - .github/workflows/gateway-issue-dispatch.yml
       - .github/ISSUE_TEMPLATE/first-fonts-gateway.md
       - src/zog/host_deploy/image_build_lanes.py
+      - tests/test_image_build_lanes.py
       - src/zog/host_deploy/gateway/image_build_execution.py
       - src/zog/host_deploy/gateway/graphics_catalogue_owner.py
       - src/zog/host_deploy/gateway/graphics_base_acceptance.py
@@ -120,6 +121,7 @@ jobs:
             tests/test_gateway_first_fonts_build_record_runtime.py \
             tests/test_gateway_issue_fifo_first_fonts.py \
             tests/test_gateway_fonts_installed_lane_tuple.py \
+            tests/test_image_build_lanes.py \
             tests/test_gateway_github.py \
             tests/test_gateway_protocol.py \
             tests/test_gateway_consumer.py \
