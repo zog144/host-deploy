@@ -72,6 +72,19 @@ def stage(directory, *, project_root):
     """Save an immutable review candidate; never migrate a prepared/active lane."""
     candidate = preview(directory, project_root=project_root)
     with locked(directory) as root:
+        # Recheck the original record *under this write lock*. It may have
+        # changed between the read-only preview and staging; never persist a
+        # stale migration as though it were bound to the current workspace.
+        workspace, host = fonts._owner(root)
+        original, _, old_digest = fonts._approved(root)
+        if (old_digest != candidate["historical_specification_sha256"]
+                or original["state"] != candidate["historical_state"]
+                or fonts._binding(workspace, host) != candidate["binding"]):
+            raise RuntimeError("original first Fonts lane changed before migration staging")
+        for other in fonts._retained(root):
+            if (other["lane"] != fonts.LANE and
+                    other["specification"]["project_root"] == candidate["candidate_specification"]["project_root"]):
+                raise RuntimeError("migration destination became owned by another lane")
         path = Path(root) / FILE
         if path.is_symlink():
             raise RuntimeError("unsafe existing Fonts migration staging file")
