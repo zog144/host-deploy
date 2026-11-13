@@ -4,7 +4,7 @@
 
 A host-deploy **image-build lane** is a reserved execution namespace with its own box-control/image-build project and durable state, not a compiler stage in the recipe graph. Each lane binds a unique name, exact repository revision, original monthly provenance pin path and digest, host/project provenance identity, resource limits and disk reservation. The same EC2 machine and root-control daemon may host several lanes, but mutable pipeline, attempt, generation and controller state **must not be shared**.
 
-Reservation-only lanes represent pre-existing owner-controlled projects for admission accounting; selecting a reservation does not entitle the gateway to manage that project. A managed lane requires deliberate owner admission and source binding. See [concurrent lanes](../IMAGE-BUILD-LANES.md).
+Reservation-only lanes represent pre-existing owner-controlled projects for disk admission and identity bookkeeping, not host-RAM reservations; selecting one does not entitle the gateway to manage that project. A managed lane requires deliberate owner admission and source binding. See [concurrent lanes](../IMAGE-BUILD-LANES.md).
 
 ## Finite compiler execution and command identity
 
@@ -24,7 +24,7 @@ Separate source/test output identities, temporary uploads, frozen result archive
 
 ## Resource and cost boundaries
 
-Lane admission tracks memory/tasks/CPU weight, durable disk reservation, root-control socket and command deadlines. A shared host can still be exhausted by incorrectly accounted workloads, so resource plans must be reviewed globally before admitting concurrent jobs. The guest's uptime timer protects against some abandoned runs but is not AWS-guaranteed cost enforcement; the future cloud-side shutdown plan is separate. Stopping a host with active or uncertain jobs requires explicit safety handling.
+Lane admission preserves the source/pin, ownership, project identity and durable disk checks; it does **not** compare recorded memory values with host RAM or sum memory across lanes. The unchanged `memory_maximum_bytes` field in schemas 1-4 is no longer a reservation guarantee: for managed lanes it is forwarded as the controller's requested runtime `memory-maximum-bytes`, and for reservation-only lanes it is legacy metadata. Per-compilation enforcement must be independently inspected on the selected runtime by the execution-control owners. A shared host may still be exhausted by concurrent work, so operational concurrency planning remains necessary. The guest's uptime timer protects against some abandoned runs but is not AWS-guaranteed cost enforcement; the future cloud-side shutdown plan is separate. Stopping a host with active or uncertain jobs requires explicit safety handling.
 
 ## Exact reference material
 
