@@ -118,3 +118,18 @@ def test_old_active_lane_cannot_bypass_migration_through_gateway(tmp_path,monkey
                "controller_config":old["project_root"]+"/controller.json"})
     with pytest.raises(RuntimeError,match="requires a reviewed inherited-identity"):
         _load_lane_locked(root,fonts.LANE)
+
+
+def test_migration_stage_rechecks_source_under_write_lock(tmp_path,monkeypatch):
+    root,path,old,digest=owner(tmp_path,monkeypatch)
+    real_preview=migration.preview
+    def raced(*args,**kwargs):
+        candidate=real_preview(*args,**kwargs)
+        changed=json.loads(path.read_text())
+        changed["state"]="active"
+        save(path,changed)
+        return candidate
+    monkeypatch.setattr(migration,"preview",raced)
+    with pytest.raises(RuntimeError,match="changed before migration staging"):
+        migration.stage(root,project_root="/srv/zog/gateway-first-fonts-runtime")
+    assert not (root/migration.FILE).exists()
