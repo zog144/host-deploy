@@ -15,6 +15,10 @@ def test_gateway_submission_requires_prior_validation_and_explicit_configuration
     assert "id-token:" not in validate
     assert "needs: validate" in submit
     assert "vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'" in submit
+    # The source-level literal HOLD is removed; deployment remains opt-in.
+    assert "&& false" not in submit
+    assert "ZOG_GATEWAY_SUBMIT_ENABLED" in submit
+    assert "ZOG_GATEWAY_FONTS_ENABLED" in text
     assert "id-token: write" in submit
     assert "github.run_attempt == 1" in validate and "github.run_attempt == 1" in submit
     assert "github_configuration --event" in validate and "github_configuration --event" in submit
