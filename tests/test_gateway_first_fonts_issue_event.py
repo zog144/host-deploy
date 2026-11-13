@@ -210,8 +210,9 @@ def test_existing_gateway_default_branch_event_workflow_and_template():
     assert 'retries={"total_max_attempts": 1}' in source
 
 
-def test_first_fonts_submission_is_held_on_deployed_default_branch():
+def test_first_fonts_default_branch_sender_is_admin_opt_in_not_literal_disabled():
     workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/gateway-issue-dispatch.yml").read_text()
     assert "types: [opened]" in workflow
-    assert "vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true' && false" in workflow
+    assert "vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'" in workflow
+    assert "&& false" not in workflow
     assert "ZOG_GATEWAY_FONTS_ENABLED: ${{ vars.ZOG_GATEWAY_FONTS_ENABLED }}" in workflow
