@@ -20,9 +20,9 @@ from zog.host_deploy.gateway import (
 
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
-    # Successor lane-admission source from PR #32; PR30 pinned the predecessor at 998354c9... .
-    "image_build_lanes.py": "48abc6dca385b5d171b6fa00146d6edbefa26d50",
-    "gateway/graphics_catalogue_owner.py": "bdd2bb6bdf7f337a8e174be5f3dbea02819288d8",
+    # Source-owned retained-lane activation + recoverable two-file installer.
+    "image_build_lanes.py": "0c4d44a41abeaa2ebd79e2f93876dc2ee5098b91",
+    "gateway/graphics_catalogue_owner.py": "0cb322bf35a66b15700e9f7036421e1459b856df",
     "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
 }
 

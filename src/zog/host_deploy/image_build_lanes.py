@@ -689,6 +689,63 @@ def _capacity(host, project_root):
     return json.loads(host.command("python3 -c " + shlex.quote(code)))
 
 
+
+def _activate_retained_fonts(root, path, record, spec, workspace, host_config):
+    """Idempotent exact old-lane activation with durable interrupted-write recovery.
+
+    An active lane is only reported successful after read-only installed
+    controller readback. The original specification is never rewritten.
+    """
+    from . import fonts_lane_profile, fonts_lane_runtime
+    host = Host(host_config)
+    runtime_preflight(host, spec["python_executable"])
+    observed = fonts_lane_runtime.inspect(host, spec)
+    if record["state"] == "active":
+        if observed["status"] != "complete":
+            raise RuntimeError("active first Fonts installed controller differs or is incomplete")
+        return record  # absolutely no workspace file rewrite, no remote upload
+    if record["state"] != "prepared":
+        raise RuntimeError("first Fonts must be prepared or already active")
+    intent_path = Path(root) / fonts_lane_profile.INTENT_FILE
+    if intent_path.exists() or intent_path.is_symlink():
+        # Verify the exact previously authorized intent, not its mere presence.
+        expected = {"schema": "host-deploy-first-fonts-activation-intent-v1",
+                    "specification_sha256": specification_sha256(spec),
+                    "binding": fonts_lane_profile._binding(workspace, host_config)}
+        if fonts_lane_profile._read_regular(intent_path) != expected:
+            raise RuntimeError("retained first Fonts activation intent is foreign")
+        if observed["status"] != "complete":
+            raise RuntimeError("previous first Fonts remote activation unresolved; inspect original SSM command before retry")
+    elif observed["status"] == "absent":
+        # Normal disk admission survives PR32's independent RAM-gate removal.
+        capacity = _capacity(host, Path(spec["project_root"]))
+        used = sum(item["specification"]["resource_policy"]["disk_reservation_bytes"]
+                   for item in _active_records(root) if item["lane"] != spec["lane"])
+        if used + spec["resource_policy"]["disk_reservation_bytes"] > capacity["disk_free_bytes"]:
+            raise RuntimeError("image-build lane disk reservations exceed free capacity")
+        # Persist the exact identity before the first remote mutation; a lost
+        # SSM result is not permission to submit a replacement command.
+        fonts_lane_profile.activation_intent(root, workspace, host_config, spec)
+        fonts_lane_runtime.install(host, spec)
+        observed = fonts_lane_runtime.inspect(host, spec)
+    elif observed["status"] == "partial":
+        raise RuntimeError("pre-existing partial Fonts controller needs inspected recovery, not overwrite")
+    if observed["status"] != "complete":
+        raise RuntimeError("first Fonts controller failed installed readback")
+    project = Path(spec["project_root"])
+    record.update(
+        controller_config=str(project / "controller.json"),
+        source_root=str(project / "source"),
+        package_dir=str(project / "source" / "project" / "package"),
+        state_dir=str(project / "state"),
+        state="active",
+    )
+    # On a recovered complete remote installation, capacity was previously
+    # checked before writing; do not impose fresh unreviewed admission limits.
+    save(path, record)
+    return record
+
+
 def activate(directory, lane, *, expected_specification_sha256=None):
     with locked(directory) as root:
         workspace, host_config = configuration(root)
@@ -703,6 +760,10 @@ def activate(directory, lane, *, expected_specification_sha256=None):
                 root, record, spec, workspace, host_config,
                 expected_specification_sha256=expected_specification_sha256,
             )
+            # The approved retained lane is a different compatibility path.
+            # Never call the generic mkdir/upload implementation: it can
+            # replace an already installed controller.json after lost ACK.
+            return _activate_retained_fonts(root, path, record, spec, workspace, host_config)
         elif (expected_specification_sha256 is not None
                 and specification_sha256(spec) != expected_specification_sha256):
             raise RuntimeError("lane activation specification digest differs")

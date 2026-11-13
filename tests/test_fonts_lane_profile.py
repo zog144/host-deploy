@@ -1,318 +1,274 @@
-"""Source-owned first-Fonts lane profile; all Host responses are synthetic."""
+"""Retained first Fonts profile: synthetic owner workspace and compiler Host only."""
+import copy
 import json
 from pathlib import Path
 
 import pytest
 
 from zog.host_deploy import fonts_lane_profile as fonts
+from zog.host_deploy import fonts_lane_runtime as runtime
 from zog.host_deploy import image_build_lanes as lanes
 from zog.host_deploy import runner
-from zog.host_deploy.gateway import fonts_lane_review
 from zog.host_deploy.workspace import initialize, save
 
 
-COMPILER = "i-00ad300038a599044"
-
-
-def workspace(tmp_path):
-    root = tmp_path / "owner-workspace"
+def workspace(tmp_path, monkeypatch):
+    root = tmp_path / "owner"
     w = initialize(root, "image-build-toolchain", "zog-development", "us-east-1")
-    save(root / "host.json", {
+    host = {
         "region": w["region"], "profile": w["profile"],
-        "instance_id": COMPILER, "workspace_id": w["workspace_id"],
+        "instance_id": fonts.COMPILER_INSTANCE, "workspace_id": w["workspace_id"],
         "account_id": "123456789012",
-    })
-    return root, w
-
-
-def facts(w, *, host_id="host-fixture", project_id="first-fonts-project", **changes):
-    record = {
-        "schema": fonts.REMOTE_CONFIG_SCHEMA,
-        "workspace_id": w["workspace_id"],
-        "account_id": "123456789012",
-        "region": w["region"], "instance_id": COMPILER,
-        "provenance_host_id": host_id,
-        "provenance_project_id": project_id,
-        "observed_state_dir": None,
-        "python_executable": "/usr/bin/python3.12",
-        "controller": {
-            "socket_path": "/run/zog/root-control.sock",
-            "execution_user_id": 24202, "execution_group_id": 24202,
-            "startup_timeout_seconds": 30, "execution_timeout_seconds": 14400,
-            "termination_grace_seconds": 10, "wait_timeout_seconds": 0,
-            "transport_timeout_seconds": 45,
-        },
-        "resource_policy": {
-            "memory_maximum_bytes": 8 * 1024**3,
-            "thread_count_maximum": 32, "cpu_weight": 100,
-            "disk_reservation_bytes": 1024**3,
-        },
     }
-    for name, val in changes.items():
-        record[name] = val
-    return record
+    save(root / "host.json", host)
+    candidate = lanes.specification(
+        fonts.LANE, mode="managed", project_root=fonts.RETAINED_PROJECT_ROOT,
+        source_repository=fonts.fonts.REPOSITORY, source_revision=fonts.fonts.SOURCE,
+        monthly_pin_repository_path=fonts.fonts.PIN_PATH,
+        monthly_pin_identity="sha256:" + fonts.fonts.PIN_SHA256,
+        provenance_host_id="existing-verified-host-uuid",
+        provenance_project_id="existing-verified-project-id",
+        memory_maximum_bytes=2 * 1024**3, thread_count_maximum=16,
+        cpu_weight=100, disk_reservation_bytes=1024**3,
+        execution_user_id=24202, execution_group_id=24202,
+        startup_timeout_seconds=30, execution_timeout_seconds=14400,
+        python_executable="/usr/bin/python3.12",
+    )
+    # Synthetic test record is not the historical approved record. Require
+    # the runtime's full digest comparison, with a local fixture-specific pin.
+    digest = lanes.specification_sha256(candidate)
+    monkeypatch.setattr(fonts, "RETAINED_SPECIFICATION_SHA256", digest)
+    path = root / "image-build-lanes" / (fonts.LANE + ".json")
+    record = {"schema": 4, "lane": fonts.LANE, "specification": candidate,
+              "state": "prepared"}
+    save(path, record)
+    return root, w, host, path, record, digest
 
 
-def observe(root, w, monkeypatch, *, observed=None, timestamp=1000):
-    result = observed if observed is not None else facts(w)
-    calls = []
-    class FakeHost:
+def installed(spec, status="absent"):
+    return {
+        "status": status,
+        "project_root": spec["project_root"],
+        "socket_path": spec["controller"]["socket_path"],
+        "execution_user_id": spec["controller"]["execution_user_id"],
+        "execution_group_id": spec["controller"]["execution_group_id"],
+        "python_executable": spec["python_executable"],
+        "controller_sha256": runtime.expected_controller_sha256(spec),
+    }
+
+
+def verify(root, monkeypatch, record, status="absent", now=1000):
+    observed = installed(record["specification"], status)
+    class Host:
         def __init__(self, config):
-            assert config["workspace_id"] == w["workspace_id"]
-            assert config["instance_id"] == COMPILER
-        def command(self, script):
-            calls.append(script)
-            assert "os.O_NOFOLLOW" in script
-            assert fonts.REMOTE_CONFIG in script
-            assert "os.lstat(socket)" in script
-            return json.dumps(result)
-    monkeypatch.setattr(runner, "Host", FakeHost)
-    recorded = fonts.verify(root, now=timestamp)
-    assert recorded["verified_facts_sha256"] == fonts._digest(result)
-    assert len(calls) == 1
-    return recorded
+            assert config["instance_id"] == fonts.COMPILER_INSTANCE
+        def command(self, code):
+            assert "/etc/zog/first-fonts-controller-facts" not in code
+            assert "os.O_NOFOLLOW" in code
+            assert "getpwuid" in code
+            return json.dumps(observed)
+    monkeypatch.setattr(runner, "Host", Host)
+    result = fonts.verify(root, now=now)
+    assert result["installed"] == observed
+    return result
 
 
-def test_profile_fixes_original_source_pin_and_companion_revision():
+def test_reviewed_retained_identity_is_unchanged():
+    assert fonts.RETAINED_SPECIFICATION_SHA256 == (
+        "sha256:c7ab129937330fab5f74ae37b16a0b3e8de35cf87cef1fdda33d18bbcf1779f2"
+    )
     p = fonts.profile()
-    assert p["schema"] == "host-deploy-first-fonts-managed-lane-v2"
-    assert p["lane"] == "gateway-first-fonts-runtime"
-    assert p["project_root"] == "/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime"
-    assert p["source_revision"] == lanes.FIRST_FONTS_PRODUCER_REVISION
+    assert p["retained_specification_sha256"] == fonts.RETAINED_SPECIFICATION_SHA256
+    assert p["retained_project_root"] == "/home/certbot-build-owner/gateway-first-fonts-runtime"
+    assert p["compiler_instance_id"] == "i-00ad300038a599044"
     assert p["source_revision"] == "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
-    assert p["monthly_pin_repository_path"] == "project/pins/2026-10-01/commit-pin.py"
-    assert p["monthly_pin_identity"] == "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
-    assert p["build_record_revision"] == lanes.expected_build_record_revision(p["source_revision"])
+    assert p["monthly_pin_identity"] == (
+        "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
+    )
     assert p["build_record_revision"] == "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
-    # No historical Fonts-specific work/external/worker-deadline prerequisite.
-    # Generic lane resource_policy is still validated separately by lane schema.
-    assert set(p) == {
-        "schema", "lane", "project_root", "source_repository", "source_revision",
-        "monthly_pin_repository_path", "monthly_pin_identity",
-        "build_record_revision", "remote_configuration",
-    }
+    assert "worker_resource_gate" not in p
+    assert "remote_configuration" not in p
 
 
-def test_fonts_profile_uses_generic_lane_disk_and_controller_settings_without_special_envelope(tmp_path):
-    root, w = workspace(tmp_path)
-    host = json.loads((root / "host.json").read_text())
-    candidate = facts(w)
-    candidate["resource_policy"]["disk_reservation_bytes"] = 128 * 1024**2
-    candidate["controller"]["execution_timeout_seconds"] = 2700
-    approved = fonts.validate_remote_facts(candidate, w, host)
-    spec = fonts._spec(approved)
-    assert lanes.validate(spec) == spec
-    assert spec["resource_policy"]["disk_reservation_bytes"] == 128 * 1024**2
-    assert spec["controller"]["execution_timeout_seconds"] == 2700
-    assert "worker_resource_gate" not in fonts.profile()
+def test_exact_old_prepared_record_verifies_and_prepare_returns_identical_bytes(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    verify(root, monkeypatch, record)
+    monkeypatch.setattr(runner, "Host", lambda *_: pytest.fail("prepare must not contact Host"))
+    assert fonts.prepare(root, now=1010) == record
+    assert path.read_bytes() == original
+    assert not (root / fonts.INTENT_FILE).exists()
 
 
-def test_missing_unverified_and_stale_host_facts_fail_closed(tmp_path, monkeypatch):
-    root, w = workspace(tmp_path)
-    with pytest.raises(RuntimeError, match="regular, nonsymlinked"):
-        fonts.prepare(root, now=1000)
-    observe(root, w, monkeypatch)
-    with pytest.raises(RuntimeError, match="stale"):
-        fonts.prepare(root, now=5000)
-    assert not (root / "image-build-lanes").exists()
-
-
-@pytest.mark.parametrize("change", [
-    {"instance_id": "i-fffffffffffffffff"},
-    {"account_id": "000000000000"},
-    {"workspace_id": "0"*32},
-    {"schema": "unreviewed-v2"},
-    {"provenance_host_id": "bad\nidentity"},
-    {"provenance_project_id": ""},
-    {"python_executable": "python3"},
-    {"observed_state_dir": "relative/path"},
-    {"controller": {}},
-    {"resource_policy": {}},
-    {"source_revision": "f"*40},
+@pytest.mark.parametrize("mutation", [
+    lambda r: r["specification"]["resource_policy"].update(cpu_weight=101),
+    lambda r: r["specification"].update(project_root="/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime"),
+    lambda r: r["specification"].update(source_revision="a"*40),
+    lambda r: r["specification"]["controller"].update(execution_user_id=24444),
+    lambda r: r["specification"].update(provenance_project_id="other-project"),
+    lambda r: r.update(fonts_lane_profile={"schema": "unreviewed"}),
 ])
-def test_unverified_mismatched_or_overridden_facts_are_rejected(tmp_path, monkeypatch, change):
-    root, w = workspace(tmp_path)
-    class FakeHost:
-        def __init__(self, config):
-            pass
-        def command(self, script):
-            return json.dumps(facts(w, **change))
-    monkeypatch.setattr(runner, "Host", FakeHost)
-    with pytest.raises((RuntimeError, ValueError)):
-        fonts.verify(root, now=1000)
+def test_conflicting_digest_source_root_identity_and_controller_hold(tmp_path, monkeypatch, mutation):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    previous = copy.deepcopy(record)
+    mutation(record)
+    save(path, record)
+    with pytest.raises(RuntimeError):
+        fonts.verify(root)
+    assert json.loads(path.read_text()) == record
+
+
+def test_foreign_workspace_or_compiler_host_holds_before_remote_contact(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    host["instance_id"] = "i-aaaaaaaaaaaaaaaaa"
+    save(root / "host.json", host)
+    monkeypatch.setattr(runner, "Host", lambda *_: pytest.fail("foreign Host contacted"))
+    with pytest.raises(RuntimeError, match="original workspace-owned compiler Host"):
+        fonts.verify(root)
+
+
+def test_mismatching_installed_controller_or_identity_holds(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    observed = installed(record["specification"], "complete")
+    observed["execution_user_id"] += 1
+    class Host:
+        def __init__(self, *_): pass
+        def command(self, *_): return json.dumps(observed)
+    monkeypatch.setattr(runner, "Host", Host)
+    with pytest.raises(RuntimeError, match="differs"):
+        fonts.verify(root)
     assert not (root / fonts.FACTS_FILE).exists()
 
 
-def test_prepare_only_writes_owning_workspace_and_is_idempotent(tmp_path, monkeypatch):
-    root, w = workspace(tmp_path)
-    observe(root, w, monkeypatch)
-    def no_host(*args, **kwargs):
-        raise AssertionError("preparation must not instantiate Host or contact AWS/SSM")
-    monkeypatch.setattr(runner, "Host", no_host)
-    import zog.host_deploy.image_build_lanes as lane_module
-    monkeypatch.setattr(lane_module, "Host", no_host)
-    before_files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
-    record = fonts.prepare(root, now=1010)
-    after_files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
-    created = set(after_files) - set(before_files)
-    assert created == {"image-build-lanes/gateway-first-fonts-runtime.json"}
-    assert record["state"] == "prepared"
-    assert record["schema"] == 4
-    assert record["specification"]["mode"] == "managed"
-    assert record["specification"]["resource_policy"]["memory_maximum_bytes"] == 8*1024**3
-    assert record["fonts_lane_profile"]["specification_sha256"] == lanes.specification_sha256(record["specification"])
-    path = root / "image-build-lanes" / (fonts.LANE + ".json")
-    bytes_before = path.read_bytes()
-    assert fonts.prepare(root, now=1011) == record
-    assert path.read_bytes() == bytes_before
-    with pytest.raises(ValueError, match="source-owned"):
-        lanes.prepare(root, record["specification"])
-
-
-def test_full_digest_is_stable_and_changes_for_any_bound_identity_or_controller(tmp_path):
-    root, w = workspace(tmp_path)
-    host = json.loads((root / "host.json").read_text())
-    original = fonts.validate_remote_facts(facts(w), w, host)
-    expected = lanes.specification_sha256(fonts._spec(original))
-    assert lanes.specification_sha256(fonts._spec(original)) == expected
-    for name, update in (
-        ("provenance_host_id", {"provenance_host_id": "new-host"}),
-        ("provenance_project_id", {"provenance_project_id": "different-project"}),
-        ("observed_state_dir", {"observed_state_dir": "/srv/observed"}),
-        ("python_executable", {"python_executable": "/usr/bin/python3.13"}),
-        ("memory", {"resource_policy": {**original["resource_policy"], "memory_maximum_bytes": 3*1024**3}}),
-        ("controller", {"controller": {**original["controller"], "execution_user_id": 24001}}),
-        ("socket", {"controller": {**original["controller"], "socket_path": "/run/zog/another.sock"}}),
-    ):
-        changed = fonts.validate_remote_facts({**original, **update}, w, host)
-        assert lanes.specification_sha256(fonts._spec(changed)) != expected, name
-
-
-def other_spec(name="existing", **overrides):
-    p = lanes.specification(
-        name, mode="reservation", source_repository="zog144/image-build",
-        source_revision="a"*40,
-        monthly_pin_repository_path="project/pins/commit-pin.py",
-        monthly_pin_identity="sha256:"+"c"*64,
-        provenance_host_id="host-fixture", provenance_project_id="project-existing",
-        project_root="/srv/existing", memory_maximum_bytes=100,
-        thread_count_maximum=1, cpu_weight=100, disk_reservation_bytes=100,
+def test_retained_lane_collision_in_other_record_is_rejected(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    foreign = lanes.specification(
+        "foreign", mode="reservation", source_repository="zog144/image-build",
+        source_revision="a"*40, monthly_pin_repository_path="pin/path.py",
+        monthly_pin_identity="sha256:"+"b"*64,
+        provenance_host_id="other", provenance_project_id=record["specification"]["provenance_project_id"],
+        project_root="/srv/foreign", memory_maximum_bytes=1024,
+        thread_count_maximum=2, cpu_weight=100, disk_reservation_bytes=1024,
         execution_user_id=1001, execution_group_id=1001,
     )
-    return {**p, **overrides}
+    save(root / "image-build-lanes" / "foreign.json",
+         {"schema": foreign["schema"], "lane": "foreign", "state": "retired", "specification": foreign})
+    with pytest.raises((RuntimeError, fonts.fonts_lane_review.FontsLaneHeld)):
+        fonts.verify(root)
 
 
-@pytest.mark.parametrize("conflict", [
-    "project-id", "project-root", "lane-name", "active-matching-producer", "corrupt-history"
-])
-def test_every_retained_lane_is_checked_and_conflicts_hold(tmp_path, monkeypatch, conflict):
-    root, w = workspace(tmp_path)
-    observe(root, w, monkeypatch)
-    if conflict == "project-id":
-        old = other_spec(provenance_project_id="first-fonts-project")
-    elif conflict == "project-root":
-        old = other_spec(project_root=fonts.PROJECT_ROOT)
-    elif conflict == "lane-name":
-        old = other_spec(fonts.LANE)
-    elif conflict == "active-matching-producer":
-        old = other_spec("matching", mode="managed", source_repository=fonts.profile()["source_repository"],
-                         source_revision=fonts.profile()["source_revision"],
-                         monthly_pin_repository_path=fonts.profile()["monthly_pin_repository_path"],
-                         monthly_pin_identity=fonts.profile()["monthly_pin_identity"],
-                         project_root="/var/lib/zog/image-build-lanes/matching",
-                         observed_state_dir=None, python_executable="/usr/bin/python3.12",schema=4)
-    else:
-        old = other_spec()
-    path = root / "image-build-lanes" / (old["lane"] + ".json")
-    status = "active" if conflict == "active-matching-producer" else "retired"
-    value = {"schema": old["schema"], "lane": old["lane"], "specification": old, "state": status}
-    save(path, value)
-    if conflict == "corrupt-history":
-        path.write_text("not JSON")
-    before = path.read_bytes()
-    with pytest.raises((ValueError, RuntimeError, fonts_lane_review.FontsLaneHeld)):
-        fonts.prepare(root, now=1010)
-    assert path.read_bytes() == before
-    assert not (root / "image-build-lanes" / (fonts.LANE + ".json")).exists() or conflict == "lane-name"
-
-
-def test_changed_verified_facts_cannot_rebind_prepared_lane(tmp_path, monkeypatch):
-    root, w = workspace(tmp_path)
-    observe(root, w, monkeypatch)
-    previous = fonts.prepare(root, now=1010)
-    observe(root, w, monkeypatch, observed=facts(w, project_id="another-project"), timestamp=1020)
-    with pytest.raises(RuntimeError, match="differs"):
-        fonts.prepare(root, now=1025)
-    assert lanes.inspect(root, fonts.LANE) == previous
-
-
-def test_activation_requires_matching_digest_and_selected_owner_host(tmp_path, monkeypatch):
-    root, w = workspace(tmp_path)
-    observe(root, w, monkeypatch, timestamp=1000)
-    prepared = fonts.prepare(root, now=1010)
-    monkeypatch.setattr(fonts.time, "time", lambda: 1100)
-    monkeypatch.setattr(lanes, "runtime_preflight", lambda *args, **kwargs: {})
-    monkeypatch.setattr(lanes, "_capacity", lambda *args, **kwargs: {"disk_free_bytes": 100*1024**3})
+def activation_host(monkeypatch, spec, observed):
     calls = []
-    class FakeHost:
+    class Host:
         def __init__(self, config):
-            assert config["instance_id"] == COMPILER
-            calls.append(("host", config["instance_id"]))
-        def command(self, command, **kwargs):
-            calls.append(("command", command))
-            return ""
-        def upload(self, payload, path):
-            calls.append(("upload", path))
-    monkeypatch.setattr(lanes, "Host", FakeHost)
-    with pytest.raises(RuntimeError, match="digest/Host"):
-        lanes.activate(root, fonts.LANE, expected_specification_sha256="sha256:"+"0"*64)
-    with pytest.raises(RuntimeError, match="explicit digest"):
-        lanes.activate(root, fonts.LANE)
-    assert calls == []
-    digest = prepared["fonts_lane_profile"]["specification_sha256"]
+            assert config["instance_id"] == fonts.COMPILER_INSTANCE
+            calls.append("host")
+        def command(self, command):
+            raise AssertionError("script must be patched in unit activation")
+        def upload(self, *_):
+            raise AssertionError("never upload/overwrite retained controller")
+    monkeypatch.setattr(lanes, "Host", Host)
+    monkeypatch.setattr(lanes, "runtime_preflight", lambda *_: {})
+    monkeypatch.setattr(runtime, "inspect", lambda host, spec: (calls.append("inspect") or installed(spec, observed[0])))
+    monkeypatch.setattr(runtime, "install", lambda host, spec: (calls.append("install"), observed.__setitem__(0, "complete")))
+    monkeypatch.setattr(lanes, "_capacity", lambda *_: {"disk_free_bytes": 100*1024**3})
+    return calls
+
+
+def test_matching_active_lane_readback_is_idempotent_no_rewrite(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    record["state"] = "active"
+    save(path, record)
+    verify(root, monkeypatch, record, status="complete", now=1000)
+    monkeypatch.setattr(fonts.time, "time", lambda: 1100)
+    calls = activation_host(monkeypatch, record["specification"], ["complete"])
+    original = path.read_bytes()
+    first = lanes.activate(root, fonts.LANE, expected_specification_sha256=digest)
+    assert first == record
+    assert lanes.activate(root, fonts.LANE, expected_specification_sha256=digest) == record
+    assert path.read_bytes() == original
+    assert "install" not in calls
+    assert not (root / fonts.INTENT_FILE).exists()
+
+
+def test_active_lane_verifies_installed_state_without_recent_local_snapshot(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    record["state"] = "active"
+    save(path, record)
+    calls = activation_host(monkeypatch, record["specification"], ["complete"])
+    before = path.read_bytes()
+    assert lanes.activate(root, fonts.LANE, expected_specification_sha256=digest) == record
+    assert path.read_bytes() == before
+    assert "install" not in calls and "inspect" in calls
+
+
+def test_prepared_lane_reconciles_complete_remote_after_local_interruption(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    verify(root, monkeypatch, record, status="complete", now=1000)
+    monkeypatch.setattr(fonts.time, "time", lambda: 1100)
+    calls = activation_host(monkeypatch, record["specification"], ["complete"])
     active = lanes.activate(root, fonts.LANE, expected_specification_sha256=digest)
     assert active["state"] == "active"
-    assert active["specification"] == prepared["specification"]
-    assert calls[0] == ("host", COMPILER)
-    assert any(op == "command" and "install -d" in value for op, value in calls)
-    assert any(op == "upload" and value.endswith("controller.json") for op, value in calls)
+    assert active["specification"] == record["specification"]
+    assert active["controller_config"] == fonts.RETAINED_PROJECT_ROOT + "/controller.json"
+    assert "install" not in calls
+    assert lanes.inspect(root, fonts.LANE) == active
 
 
-def test_activation_rejects_stale_facts_before_host_contact(tmp_path, monkeypatch):
-    root, w = workspace(tmp_path)
-    observe(root, w, monkeypatch, timestamp=1000)
-    prepared = fonts.prepare(root, now=1010)
-    monkeypatch.setattr(fonts.time, "time", lambda: 6000)
-    def no_host(*args):
-        raise AssertionError("no Host contact before digest and freshness validation")
-    monkeypatch.setattr(lanes, "Host", no_host)
-    with pytest.raises(RuntimeError, match="stale"):
-        lanes.activate(root, fonts.LANE,
-                       expected_specification_sha256=prepared["fonts_lane_profile"]["specification_sha256"])
-    assert lanes.inspect(root, fonts.LANE)["state"] == "prepared"
+def test_initial_absent_activation_persists_intent_then_installs_exclusively(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    verify(root, monkeypatch, record, status="absent", now=1000)
+    monkeypatch.setattr(fonts.time, "time", lambda: 1100)
+    observed = ["absent"]
+    calls = activation_host(monkeypatch, record["specification"], observed)
+    active = lanes.activate(root, fonts.LANE, expected_specification_sha256=digest)
+    assert active["state"] == "active"
+    assert calls.count("install") == 1
+    intent = json.loads((root / fonts.INTENT_FILE).read_text())
+    assert intent["specification_sha256"] == digest
+    assert intent["binding"] == fonts._binding(w, host)
 
 
-def test_command_dispatch_is_profile_owned(tmp_path, monkeypatch, capsys):
-    import sys
-    from zog.host_deploy.cli import main
-    root, w = workspace(tmp_path)
-    monkeypatch.setattr(sys, "argv", ["host-deploy", "fonts-lane-profile"])
-    main()
-    assert json.loads(capsys.readouterr().out)["lane"] == fonts.LANE
-    observe(root, w, monkeypatch, timestamp=int(fonts.time.time()))
-    monkeypatch.setattr(sys, "argv", [
-        "host-deploy", "fonts-lane-prepare", "--workspace", str(root),
-    ])
-    main()
-    result = json.loads(capsys.readouterr().out)
-    assert result["state"] == "prepared"
-    assert result["fonts_lane_profile"]["profile_sha256"] == fonts._digest(fonts.profile())
-    assert result["fonts_lane_profile"]["build_record_revision"] == fonts.COMPANION_REVISION
-    assert result == lanes.inspect(root, fonts.LANE)
-    # The dedicated CLI does not accept generic --spec / UID / source overrides.
-    monkeypatch.setattr(sys, "argv", [
-        "host-deploy", "fonts-lane-prepare", "--workspace", str(root),
-        "--spec", "/tmp/unreviewed.json",
-    ])
-    with pytest.raises(SystemExit):
-        main()
+@pytest.mark.parametrize("remote", ["absent", "partial"])
+def test_pending_activation_never_reissues_unresolved_remote_command(tmp_path, monkeypatch, remote):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    verify(root, monkeypatch, record, status=remote, now=1000)
+    monkeypatch.setattr(fonts.time, "time", lambda: 1100)
+    calls = activation_host(monkeypatch, record["specification"], [remote])
+    fonts.activation_intent(root, w, host, record["specification"])
+    with pytest.raises(RuntimeError, match="unresolved"):
+        lanes.activate(root, fonts.LANE, expected_specification_sha256=digest)
+    assert "install" not in calls
+    assert path.read_bytes() == json.dumps(record, indent=2).encode() + b"\n"
+
+
+def test_digest_mismatch_blocks_before_host_and_other_lane_activation(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    verify(root, monkeypatch, record, now=1000)
+    monkeypatch.setattr(fonts.time, "time", lambda: 1100)
+    monkeypatch.setattr(lanes, "Host", lambda *_: pytest.fail("Host should not be contacted"))
+    with pytest.raises(RuntimeError, match="digest/Host/source"):
+        lanes.activate(root, fonts.LANE, expected_specification_sha256="sha256:"+"f"*64)
+    with pytest.raises(RuntimeError, match="explicit digest"):
+        lanes.activate(root, fonts.LANE)
+
+
+def test_missing_original_lane_is_never_reconstructed(tmp_path):
+    root = tmp_path / "owner"
+    w = initialize(root, "image-build-toolchain", "zog-development", "us-east-1")
+    save(root / "host.json", {"instance_id": fonts.COMPILER_INSTANCE,
+         "account_id": "123456789012", "region": w["region"],
+         "profile": w["profile"], "workspace_id": w["workspace_id"]})
+    with pytest.raises(RuntimeError, match="missing"):
+        fonts.prepare(root)
+    assert not (root / "image-build-lanes").exists()
+
+
+def test_installed_probe_is_derived_from_owner_controller_not_manual_config(tmp_path, monkeypatch):
+    root, w, host, path, record, digest = workspace(tmp_path, monkeypatch)
+    code = runtime.script(record["specification"])
+    assert "controller.json" in code
+    assert "getpwuid" in code
+    assert "/etc/zog/first-fonts-controller-facts" not in code
+    assert "os.O_NOFOLLOW" in code
+    assert runtime.expected_controller_sha256(record["specification"])

@@ -1,76 +1,151 @@
-# First Fonts — source-owned lane preparation (2026-11-13)
+# First Fonts — retained approved lane and controller recovery (2026-11-13)
 
-**Scope: source-only reviewed workflow.** This is not compiler authorization, a new accepted base, catalogue readiness, or permission to send SSM work. The owner remains the *existing* host-deploy workspace for the compiler Host. This design does **not** recover an absent historical prepared record by inventing one: it provides a **distinct, explicitly reviewed new preparation path** when the authoritative owner has established that no earlier record exists.
+**Scope:** source implementation and native Work handoff. No GitHub submission, SQS
+receive, live SSM operation or compiler run was performed in this source pass.
 
-## Fixed source profile
+## Authoritative retained identity
 
-`host-deploy fonts-lane-profile` displays the reviewed, versioned `host-deploy-first-fonts-managed-lane-v2` selection without accessing AWS:
+`host-deploy fonts-lane-profile` selects the original approved record, **not a
+replacement prepared lane**. The exact reviewed compatibility binding is:
 
-- Lane: `gateway-first-fonts-runtime`, schema 4, mode `managed`, project root `/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime`.
-- Producer: `zog144/image-build@1f07e83dbd80dacb9bed0d6494c697375f0e26cd`.
-- October provenance pin: `project/pins/2026-10-01/commit-pin.py` at SHA-256 `d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
-- Producer-required build-record source: `a866c9c4b0dd385045f00ce2de7d809f5b67c104`, checked against `image_build_lanes.expected_build_record_revision`.
-
-The v2 profile intentionally drops the obsolete `worker_resource_gate` object that was included in the uninstalled PR #33 v1 source. Its canonical profile hash therefore changes; old source snapshots and any historically saved v1 profile metadata must not be silently rewritten or treated as v2. The remote controller-facts schema and generic lane-record schema do **not** change. The lane name and project root are **code-derived**, not flags. Generic `lane-prepare --spec` still works for unrelated lanes, but refuses this reserved first-Fonts lane identity. No CLI override can change the producer, monthly pin, root, mode or companion selection. The owner-controlled controller facts are *not* accepted as an arbitrary lane spec.
-
-## Runtime facts: separate, explicit read-only verification
-
-Before a new lane can be prepared, the selected compiler Host must have an independently reviewed **root-owned, non-symlink, non-group/world-writable** controller-facts file at `/etc/zog/first-fonts-controller-facts-v1.json`. It is an installed Host configuration input (not a lane record, catalogue, compiler receipt, or an activation step); its native installation/approval belongs to Work and the controller owner. The verifier does **not** create it or assume that it already exists.
-
-The file has exactly these fields:
-
-| Field | Authority / validation |
+| Authority | Required value |
 | --- | --- |
-| `schema` | `host-deploy-first-fonts-controller-facts-v1` |
-| `workspace_id`, `account_id`, `region`, `instance_id` | Must equal the existing owner workspace's `workspace.json` + `host.json`; SSM reads the **selected** Host, not an arbitrary caller-selected target |
-| `provenance_host_id` | Existing reviewed Host identity recorded in the trusted Host configuration; strict bounded identifier, not an inferred EC2 ID |
-| `provenance_project_id` | Reviewed **new** box-control project identity, checked distinct from all retained lane project IDs; not copied from the accepted compiler-base project |
-| `observed_state_dir` | Explicit `null` (new lane-local state) or an approved absolute, existing observed state directory distinct from the lane's control state |
-| `python_executable` | Normalized absolute executable path verified on the compiler Host |
-| `controller` | Exactly `socket_path`, `execution_user_id`, `execution_group_id`, `startup_timeout_seconds`, `execution_timeout_seconds`, `termination_grace_seconds`, `wait_timeout_seconds`, `transport_timeout_seconds`; socket must exist and be a socket, UID/GID must exist on Host, values satisfy lane validation |
-| `resource_policy` | Exactly `memory_maximum_bytes`, `thread_count_maximum`, `cpu_weight`, `disk_reservation_bytes`, with existing schema-4 validation. This is configuration, **not** proof of effective limits |
+| Lane | `gateway-first-fonts-runtime`, managed schema-4 |
+| Compiler EC2 Host | `i-00ad300038a599044` in its authenticated owner workspace |
+| Retained project root | `/home/certbot-build-owner/gateway-first-fonts-runtime` |
+| Retained specification SHA-256 | `sha256:c7ab129937330fab5f74ae37b16a0b3e8de35cf87cef1fdda33d18bbcf1779f2` |
+| Producer | `zog144/image-build@1f07e83dbd80dacb9bed0d6494c697375f0e26cd` |
+| October pin | `project/pins/2026-10-01/commit-pin.py`, `sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36` |
+| Build-record compatible source | `a866c9c4b0dd385045f00ce2de7d809f5b67c104` |
 
-No source/pin/compiler generation or catalogue override fields are permitted in this configuration. It contains **no secrets**. The Host/root filesystem and root-owned configuration are inside Zog's approved trusted-Host boundary; no additional signatures or storage service are introduced. The separate authenticated receipt reader still has to prove that the accepted compiler base belongs to the selected Host and original project. Do not use an arbitrary unreviewed project ID or edit the compiler's accepted receipt to match these facts.
+The `source-owned` mechanism **does not** move this project to the new-profile
+`/var/lib/zog/image-build-lanes/...` location, synthesize its original controller
+settings, change its existing Project identity or rewrite the approved
+specification. The approved digest covers the **entire** existing specification,
+including controller settings, Python executable, resource-policy fields and
+provenance identities. A different value, even a reasonable-looking default,
+**must fail closed**. Historical controller/Project identity comes from the
+original `OWNER/image-build-lanes/gateway-first-fonts-runtime.json`, not a new
+root-owned configuration assembled by an operator.
 
-The explicit `host-deploy fonts-lane-verify --workspace OWNER` command uses the workspace's existing Host identity and read-only SSM execution to inspect that root-owned file and check the selected controller socket, UID/GID, Python path and observed state path. Successful verification atomically records `OWNER/first-fonts-verified-facts-v1.json`, including the exact workspace/Host binding, canonical facts SHA-256 and capture time. Preparation requires a matching, unmodified and at-most-3600-second-old verification; missing, stale or changed inputs **hold**.
+The new v3 compatibility profile supersedes the uninstalled v2 first-Fonts
+source-owned profile. A v2-generated lane must not be silently migrated. The
+ordinary lane record schemas and their digest calculation are unchanged.
 
-The verifier may contact the compiler Host, but executes no installation, directory creation, service activation, queue consumption or build. This is deliberately a **different** command from preparation. If the root-owned controller facts or required installed runtime do not yet exist, native Work must establish and review them first, not fabricate a verification response.
+## Installed facts producer and read-only inspection
 
-## Local preparation and explicit activation
+The original record is the **lane-owned authority** for Project identity,
+controller policy and source/pin selection. `image_build_lanes._controller`
+is the **host-deploy-owned producer** of the exact `controller.json` bytes.
+The selected compiler Host supplies independent read-only installed facts:
+root-control socket type/path, passwd execution UID/primary GID, executable
+Python file, observed state directory (when used), project path status, and
+exact bytes of an existing `controller.json`.
 
-After verification, the authorized owner runs:
+This arrangement is consistent with the current root-control socket and
+box-control Project model; it does not invent a separate installation
+interface. It does **not** use or require a manually written
+`/etc/zog/first-fonts-controller-facts-v1.json`. A future NEW lane identity
+may require an installer-owned producer/exporter approved by root-control and
+box-control; that is **not** a prerequisite for using this retained lane.
+
+After recovering the original authoritative owner workspace and retained
+record, run these supported commands:
 
 ```sh
 host-deploy fonts-lane-profile
 host-deploy fonts-lane-verify --workspace OWNER
 host-deploy fonts-lane-prepare --workspace OWNER
+host-deploy lane-inspect --workspace OWNER --lane gateway-first-fonts-runtime
 ```
 
-`fonts-lane-prepare` **never instantiates Host, AWS or SSM**. Under the existing workspace lock it validates the recent observation and *every* `image-build-lanes/*.json` record (including prepared/retired, not only active), rejects corrupt/symlinked history, compares project roots and provenance Project IDs, invokes `fonts_lane_review.review`, and writes only:
+`fonts-lane-verify` uses read-only SSM on the *workspace-selected Host*; it
+checks live installed facts against the retained controller and writes only
+`OWNER/first-fonts-verified-facts-v2.json`, with binding, spec digest,
+observed controller hash and timestamp. The observation is valid for one hour.
+The no-manual-JSON `fonts-lane-prepare` is **read-only and idempotent** for this
+retained lane. It verifies the record and fresh installed evidence, checks
+**every** retained record for name/root/Project conflicts and returns the
+original record unchanged. If the original prepared record does not exist,
+this operation **HOLDs**; it never creates a substitute with a different
+Project root or identity.
 
-```
-OWNER/image-build-lanes/gateway-first-fonts-runtime.json
-```
+## Explicit activation and interruption recovery
 
-The record is schema 4, `state=prepared`, with a frozen full specification, canonical SHA-256, and versioned profile/verified-facts/Host-binding metadata. Identical re-preparation returns the existing record without rewriting it; altered facts, conflicting identities or another matching active Fonts lane **hold**. Preparation does not create `source/`, `state/`, `controller.json` or any other directory on the compiler Host. It never authorizes a compiler-purpose receipt or a catalogue.
-
-Only after explicit digest review may Work select activation:
+Only after exact digest and owner review, run:
 
 ```sh
 host-deploy fonts-lane-activate --workspace OWNER \
-  --expected-specification-sha256 sha256:<reviewed-64-hex>
+  --expected-specification-sha256 \
+  sha256:c7ab129937330fab5f74ae37b16a0b3e8de35cf87cef1fdda33d18bbcf1779f2
 ```
 
-Activation rechecks the complete prepared specification hash, current owner workspace/Host identity, recent verified facts, source profile and every retained lane before using the existing `image_build_lanes.activate` remote project/controller installer. Ordinary `lane-activate` without the expected digest is rejected for this reserved lane. The exact source revision and monthly pin are never rewritten in an older lane.
+The activation path uses an exclusive remote controller installer and a
+separate installed readback. It **never** uses generic lane `Host.upload` to
+replace an existing controller. Every attempt authenticates the Host, exact
+spec digest, original project root and saved inspection before contacting the
+Host. Read-only inspection distinguishes:
 
-## Independent acceptance boundaries
+- **Active + installed complete:** verify exact directories/controller and
+  return the existing record without rewriting any Host/workspace state.
+- **Prepared + installed complete:** authenticate all identities and safely
+  finalize the original local record as `active`, preserving the specification.
+  This is the recovery for an interruption **after** remote controller creation
+  and **before** the workspace active-state update (including old installations
+  made before an activation intent existed).
+- **Prepared + installed absent:** check the ordinary aggregate **disk**
+  admission (not RAM reservations), durably save
+  `OWNER/first-fonts-activation-intent-v1.json`, then create only the absent
+  project directories and controller file using exclusive/non-replacing
+  operations. Independently read back the exact bytes before setting `active`.
+- **Intent exists + installed absent/partial:** **HOLD**, inspect the original
+  SSM command ID and remote evidence; never blindly send another command.
+- **Unexpected partial/foreign/malformed controller or different Host/identity:**
+  **HOLD**. Do not unlink, replace, chmod or import an unrelated directory or
+  configuration to make a retry pass.
 
-The accepted compiler base remains **generation** `3805294fc8ccd9589aa75d3a6c5cb9367b7baf84b6ce131a84adafed7d34f9dc`, **kind `image`**, signed receipt digest `a205c07bde4e6cf61e48061affd9a0b40c3a101e18dff67a9871995a3a2afafc`, on compiler EC2 Host `i-00ad300038a599044`. Verification of that receipt, its original compiler project, issuer, accepted source and runtime identity is a separate gate **after** lane preparation. A prepared or active lane does not imply acceptance.
+The activation intent has the original specification digest and workspace
+Host binding; it is durable before remote mutation. The original retained
+specification is never changed. An already-active matching lane's repeated
+activation only verifies and returns the current record.
 
-The former Fonts-specific work-space, external-accounting and fixed worker-duration prerequisites were **removed from first-Fonts acceptance**. The profile declares **no Fonts-specific quota, fixed worker deadline or separate resource-admission gate**; neither preparation nor catalogue readiness is conditional on such an envelope. The general lane `disk_reservation_bytes` check is still applied during activation, and ordinary controller timeout fields are still validated as configured. Those general checks must not be interpreted as reinstating the retired Fonts prerequisites.
+Native Work must check the selected compiler's account ownership, root-control
+installation, source checkout/companion compatibility and genuine accepted
+compiler-purpose receipt independently. If the original workspace/record is
+missing, **do not invent a new one** or interpret an absent remote directory as
+proof that the record never existed.
 
-The schema-4 `resource_policy.memory_maximum_bytes` field is retained for compatibility and passed through to the controller as a requested runtime setting; it is **not** an aggregate host-RAM reservation or evidence of effective `memory.max` enforcement (see PR #32). Investigation of the actual running compiler's per-compilation memory enforcement belongs to the separate execution-control review and **is not a new first-Fonts prerequisite**. No gateway catalogue file, activation, FIFO message, SSM build or Fonts compilation is part of this source pass.
+## Catalogue and submission boundaries
 
-## Source acceptance
+`graphics_catalogue_owner.install_native` authenticates the managed execution
+lane, the original separately accepted compiler project/receipt, source bytes
+and host/installation identity **before** inspecting the two root-owned files.
+It accepts an identical complete catalogue+receipt unchanged, and can finish
+an exact catalogue-only interrupted write by creating just the missing receipt.
+Conflicting bytes, symlinks, malformed metadata or receipt-only state remain
+visible errors. No alternate catalogue, migration or overwrite is permitted.
 
-Run `python -m pytest -q tests/test_fonts_lane_profile.py tests/test_image_build_lanes.py`, plus the supported Python 3.12/3.13 CI matrix and the existing exact-tuple tests. Unit tests use synthetic Host facts only and must not access AWS. Native Work must authenticate the owning workspace, confirm no matching old prepared record exists, establish the root-owned controller-facts source with the controller owner, run read-only verification, inspect the generated full digest/identities, and only subsequently activate. If any prerequisite is unavailable, report **HOLD** rather than reconstructing an original lane from the historic digest.
+The compiler base remains generation
+`3805294fc8ccd9589aa75d3a6c5cb9367b7baf84b6ce131a84adafed7d34f9dc`,
+accepted `kind=image`, receipt
+`sha256:a205c07bde4e6cf61e48061affd9a0b40c3a101e18dff67a9871995a3a2afafc`.
+Do not reissue its receipt, rewrite its original project or mistake catalogue
+installation for compilation authorization.
+
+**The old Fonts-specific 30 GiB work, 2 GiB external and 21,600-second
+acceptance prerequisites remain removed.** The general lane disk-admission
+check is retained. Effective per-compilation `memory.max` enforcement is a
+separate investigation and is **not** an additional first-Fonts blocker.
+
+The default-branch workflow is prepared independently in [host-deploy PR #34](https://github.com/zog144/host-deploy/pull/34).
+It removes the literal submission hold but remains administrator opt-in via
+`ZOG_GATEWAY_SUBMIT_ENABLED`. Work must keep that disabled until original
+lane, two-file catalogue, receiver readiness and queue identity are genuinely
+accepted. Only then open **one** genuine authorized Fonts GitHub issue and
+trace issue → Actions → FIFO → durable gateway acceptance → SSM command ID →
+actual image-build compilation result. A lost acknowledgement is reconciled by
+its durable identity, **not** by opening another issue or resending blindly.
+Previously accepted IAM evidence is reused unless observed failure disputes it.
+
+Source tests and CI do not establish any native installation or successful
+compilation. No live Host/queue mutation is authorized by this document.

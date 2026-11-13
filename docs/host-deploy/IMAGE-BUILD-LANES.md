@@ -161,7 +161,14 @@ they lack the explicit monthly provenance-pin descriptor.
 
 The first Fonts managed-lane identity is reserved for the reviewed
 `fonts-lane-profile` / `fonts-lane-verify` / `fonts-lane-prepare` /
-`fonts-lane-activate` workflow; unlike a generic `lane-prepare --spec`, it
-never accepts a caller-generated full specification. See
-[the first Fonts source-owned preparation contract](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md).
-Preparation is local and does not activate a Host or prove worker resource limits. The reviewed v2 profile has no Fonts-specific work/external accounting or fixed-duration admission requirement. The ordinary per-lane disk-admission check remains; runtime memory enforcement is investigated separately and is not an additional Fonts acceptance gate.
+`fonts-lane-activate` workflow, bound to the **original retained** prepared
+lane specification at `/home/certbot-build-owner/gateway-first-fonts-runtime`.
+The v3 compatibility reader requires the approved full specification digest,
+workspace/Host identity and independent installed controller inspection; it
+does not assemble a replacement JSON specification or move an older Project.
+See [first Fonts retained-lane recovery](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md).
+The retained `fonts-lane-prepare` is read-only and idempotent. Activation is
+explicit and recoverable after complete remote configuration. The generic
+disk-admission check remains. The retired Fonts-specific worker-space and
+fixed-duration acceptance gates stay removed; runtime memory enforcement is
+investigated separately and is not an additional Fonts blocker.
