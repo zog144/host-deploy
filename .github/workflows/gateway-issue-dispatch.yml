@@ -42,9 +42,9 @@ jobs:
           python -B -m zog.host_deploy.gateway.github_configuration --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/zog-gateway-request.json"
   submit:
     needs: validate
-    # Deployment hold: no FIFO messages until a separate source-reviewed activation.
-    # This is intentionally FALSE even when repository variables already enable submission.
-    if: github.run_attempt == 1 && vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true' && false
+    # Deployment stays disabled until an administrator explicitly enables the
+    # guarded sender AFTER native gateway/catalogue readiness is accepted.
+    if: github.run_attempt == 1 && vars.ZOG_GATEWAY_SUBMIT_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
