@@ -164,4 +164,4 @@ The first Fonts managed-lane identity is reserved for the reviewed
 `fonts-lane-activate` workflow; unlike a generic `lane-prepare --spec`, it
 never accepts a caller-generated full specification. See
 [the first Fonts source-owned preparation contract](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md).
-Preparation is local and does not activate a Host or prove worker resource limits.
+Preparation is local and does not activate a Host or prove worker resource limits. The reviewed v2 profile has no Fonts-specific work/external accounting or fixed-duration admission requirement. The ordinary per-lane disk-admission check remains; runtime memory enforcement is investigated separately and is not an additional Fonts acceptance gate.

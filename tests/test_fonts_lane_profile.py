@@ -75,7 +75,7 @@ def observe(root, w, monkeypatch, *, observed=None, timestamp=1000):
 
 def test_profile_fixes_original_source_pin_and_companion_revision():
     p = fonts.profile()
-    assert p["schema"] == "host-deploy-first-fonts-managed-lane-v1"
+    assert p["schema"] == "host-deploy-first-fonts-managed-lane-v2"
     assert p["lane"] == "gateway-first-fonts-runtime"
     assert p["project_root"] == "/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime"
     assert p["source_revision"] == lanes.FIRST_FONTS_PRODUCER_REVISION
@@ -84,10 +84,27 @@ def test_profile_fixes_original_source_pin_and_companion_revision():
     assert p["monthly_pin_identity"] == "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
     assert p["build_record_revision"] == lanes.expected_build_record_revision(p["source_revision"])
     assert p["build_record_revision"] == "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
-    assert p["worker_resource_gate"] == {
-        "work_bytes": 30*1024**3, "external_bytes": 2*1024**3,
-        "maximum_seconds": 21600, "verified_by_lane": False,
+    # No historical Fonts-specific work/external/worker-deadline prerequisite.
+    # Generic lane resource_policy is still validated separately by lane schema.
+    assert set(p) == {
+        "schema", "lane", "project_root", "source_repository", "source_revision",
+        "monthly_pin_repository_path", "monthly_pin_identity",
+        "build_record_revision", "remote_configuration",
     }
+
+
+def test_fonts_profile_uses_generic_lane_disk_and_controller_settings_without_special_envelope(tmp_path):
+    root, w = workspace(tmp_path)
+    host = json.loads((root / "host.json").read_text())
+    candidate = facts(w)
+    candidate["resource_policy"]["disk_reservation_bytes"] = 128 * 1024**2
+    candidate["controller"]["execution_timeout_seconds"] = 2700
+    approved = fonts.validate_remote_facts(candidate, w, host)
+    spec = fonts._spec(approved)
+    assert lanes.validate(spec) == spec
+    assert spec["resource_policy"]["disk_reservation_bytes"] == 128 * 1024**2
+    assert spec["controller"]["execution_timeout_seconds"] == 2700
+    assert "worker_resource_gate" not in fonts.profile()
 
 
 def test_missing_unverified_and_stale_host_facts_fail_closed(tmp_path, monkeypatch):

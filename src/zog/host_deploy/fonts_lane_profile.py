@@ -21,7 +21,7 @@ from .gateway import graphics_catalogue_owner as fonts
 from .provision import configuration
 from .workspace import load, locked, save
 
-PROFILE = "host-deploy-first-fonts-managed-lane-v1"
+PROFILE = "host-deploy-first-fonts-managed-lane-v2"
 REMOTE_CONFIG_SCHEMA = "host-deploy-first-fonts-controller-facts-v1"
 FACTS_SCHEMA = "host-deploy-verified-first-fonts-facts-v1"
 LANE = "gateway-first-fonts-runtime"
@@ -30,11 +30,6 @@ REMOTE_CONFIG = "/etc/zog/first-fonts-controller-facts-v1.json"
 FACTS_FILE = "first-fonts-verified-facts-v1.json"
 FACTS_MAX_AGE_SECONDS = 3600
 COMPANION_REVISION = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
-# Worker-level envelope belongs to the separate native resource-admission gate.
-FONTS_WORK_BYTES = 30 * 1024**3
-FONTS_EXTERNAL_BYTES = 2 * 1024**3
-FONTS_WORKER_MAX_SECONDS = 21600
-
 _CONTROLLER = {
     "socket_path", "execution_user_id", "execution_group_id",
     "startup_timeout_seconds", "execution_timeout_seconds",
@@ -156,10 +151,6 @@ def profile():
         "monthly_pin_identity": "sha256:" + fonts.PIN_SHA256,
         "build_record_revision": COMPANION_REVISION,
         "remote_configuration": REMOTE_CONFIG,
-        "worker_resource_gate": {"work_bytes": FONTS_WORK_BYTES,
-                                 "external_bytes": FONTS_EXTERNAL_BYTES,
-                                 "maximum_seconds": FONTS_WORKER_MAX_SECONDS,
-                                 "verified_by_lane": False},
     }
 
 

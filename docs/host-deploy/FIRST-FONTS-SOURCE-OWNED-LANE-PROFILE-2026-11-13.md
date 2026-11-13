@@ -4,14 +4,14 @@
 
 ## Fixed source profile
 
-`host-deploy fonts-lane-profile` displays the reviewed, versioned `host-deploy-first-fonts-managed-lane-v1` selection without accessing AWS:
+`host-deploy fonts-lane-profile` displays the reviewed, versioned `host-deploy-first-fonts-managed-lane-v2` selection without accessing AWS:
 
 - Lane: `gateway-first-fonts-runtime`, schema 4, mode `managed`, project root `/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime`.
 - Producer: `zog144/image-build@1f07e83dbd80dacb9bed0d6494c697375f0e26cd`.
 - October provenance pin: `project/pins/2026-10-01/commit-pin.py` at SHA-256 `d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
 - Producer-required build-record source: `a866c9c4b0dd385045f00ce2de7d809f5b67c104`, checked against `image_build_lanes.expected_build_record_revision`.
 
-The lane name and project root are **code-derived**, not flags. Generic `lane-prepare --spec` still works for unrelated lanes, but refuses this reserved first-Fonts lane identity. No CLI override can change the producer, monthly pin, root, mode or companion selection. The owner-controlled controller facts are *not* accepted as an arbitrary lane spec.
+The v2 profile intentionally drops the obsolete `worker_resource_gate` object that was included in the uninstalled PR #33 v1 source. Its canonical profile hash therefore changes; old source snapshots and any historically saved v1 profile metadata must not be silently rewritten or treated as v2. The remote controller-facts schema and generic lane-record schema do **not** change. The lane name and project root are **code-derived**, not flags. Generic `lane-prepare --spec` still works for unrelated lanes, but refuses this reserved first-Fonts lane identity. No CLI override can change the producer, monthly pin, root, mode or companion selection. The owner-controlled controller facts are *not* accepted as an arbitrary lane spec.
 
 ## Runtime facts: separate, explicit read-only verification
 
@@ -67,7 +67,9 @@ Activation rechecks the complete prepared specification hash, current owner work
 
 The accepted compiler base remains **generation** `3805294fc8ccd9589aa75d3a6c5cb9367b7baf84b6ce131a84adafed7d34f9dc`, **kind `image`**, signed receipt digest `a205c07bde4e6cf61e48061affd9a0b40c3a101e18dff67a9871995a3a2afafc`, on compiler EC2 Host `i-00ad300038a599044`. Verification of that receipt, its original compiler project, issuer, accepted source and runtime identity is a separate gate **after** lane preparation. A prepared or active lane does not imply acceptance.
 
-The first Fonts **30 GiB work / 2 GiB external accounting / 21,600-second** envelope is separately reviewed by the resource-admission/execution-control owner. Values in the lane's resource policy are not authoritative measurements of `memory.max`, a worker disk quota or enforced deadline. The legacy aggregate memory-reservation gate was removed separately in PR #32; the general disk-admission check still exists. Native Work must verify real execution limits before any compilation. No gateway catalogue file, activation, FIFO message, SSM build or Fonts compilation is part of this source pass.
+The former Fonts-specific work-space, external-accounting and fixed worker-duration prerequisites were **removed from first-Fonts acceptance**. The profile declares **no Fonts-specific quota, fixed worker deadline or separate resource-admission gate**; neither preparation nor catalogue readiness is conditional on such an envelope. The general lane `disk_reservation_bytes` check is still applied during activation, and ordinary controller timeout fields are still validated as configured. Those general checks must not be interpreted as reinstating the retired Fonts prerequisites.
+
+The schema-4 `resource_policy.memory_maximum_bytes` field is retained for compatibility and passed through to the controller as a requested runtime setting; it is **not** an aggregate host-RAM reservation or evidence of effective `memory.max` enforcement (see PR #32). Investigation of the actual running compiler's per-compilation memory enforcement belongs to the separate execution-control review and **is not a new first-Fonts prerequisite**. No gateway catalogue file, activation, FIFO message, SSM build or Fonts compilation is part of this source pass.
 
 ## Source acceptance
 
