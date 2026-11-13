@@ -44,6 +44,10 @@ def _load_lane_locked(workspace, lane):
     ):
         raise RuntimeError("gateway image-build lane is not active")
     spec = image_build_lanes.validate(record.get("specification"))
+    if lane == "gateway-first-fonts-runtime":
+        # A historical UID-selected lane cannot reach SSM through an
+        # already-active record, even when activation is now disabled.
+        raise RuntimeError("first Fonts gateway execution requires a reviewed inherited-identity producer and migrated lane")
     if spec["mode"] != "managed":
         raise RuntimeError("gateway image-build lane must be managed")
     required = {"source_root", "package_dir", "state_dir", "controller_config"}

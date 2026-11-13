@@ -28,10 +28,10 @@ def script(spec, *, install=False):
     performs one bounded remote operation, never replaces an existing file.
     """
     spec = lanes.validate(spec)
-    if spec["mode"] != "managed" or spec["schema"] != lanes.SCHEMA:
-        raise ValueError("managed schema-4 controller inspection required")
+    if spec["mode"] != "managed" or spec["schema"] != lanes.INHERITED_SCHEMA:
+        raise ValueError("inherited managed schema-5 controller inspection required")
     code = r'''
-import grp, hashlib, json, os, pwd, stat
+import hashlib, json, os, stat
 from pathlib import Path
 spec=json.loads(SPEC)
 root=Path(spec['project_root'])
@@ -39,19 +39,30 @@ ctrl=spec['controller']
 python=Path(spec['python_executable'])
 if not python.is_file() or python.is_symlink() or not os.access(python, os.X_OK):
     raise RuntimeError('selected Python executable not installed')
-account=pwd.getpwuid(ctrl['execution_user_id'])
-if account.pw_uid != ctrl['execution_user_id'] or account.pw_gid != ctrl['execution_group_id']:
-    raise RuntimeError('installed execution UID/GID differ from retained controller')
-if grp.getgrgid(ctrl['execution_group_id']).gr_gid != ctrl['execution_group_id']:
-    raise RuntimeError('installed primary GID absent')
+uid,gid=os.geteuid(),os.getegid()
+if uid == 0 or gid == 0:
+    raise PermissionError('compiler controller probe must run as existing nonroot effective process')
+if 'execution_user_id' in ctrl or 'execution_group_id' in ctrl:
+    # Legacy identifiers are evidence only; cannot authorize another account.
+    raise RuntimeError('legacy execution identity selectors require explicit migration')
+if ctrl.get('execution_identity') != 'inherit':
+    raise RuntimeError('inherited controller execution identity is required')
 socket=Path(ctrl['socket_path'])
 if not stat.S_ISSOCK(socket.lstat().st_mode):
     raise RuntimeError('installed root-control socket differs')
 observed=spec['observed_state_dir']
 if observed is not None and not Path(observed).is_dir():
     raise RuntimeError('retained observed state is absent')
-if root.parent != Path(account.pw_dir) or not root.parent.is_dir() or root.parent.is_symlink():
-    raise RuntimeError('retained project parent differs from installed account home')
+ancestor=root
+while not ancestor.exists():
+    ancestor=ancestor.parent
+for path in (*reversed(ancestor.parents),ancestor):
+    if path.is_symlink() or not path.is_dir() or not os.access(path,os.X_OK,effective_ids=True):
+        raise PermissionError('effective process cannot traverse selected Project ancestor: '+str(path))
+if not root.exists() and not os.access(ancestor,os.W_OK|os.X_OK,effective_ids=True):
+    raise PermissionError('effective process cannot create Project at selected location: '+str(ancestor))
+if root.exists() and not os.access(root,os.R_OK|os.W_OK|os.X_OK,effective_ids=True):
+    raise PermissionError('effective process cannot use existing Project location: '+str(root))
 paths=[root/part for part in PARTS]
 statuses=[]
 for path in paths:
@@ -61,7 +72,7 @@ for path in paths:
         statuses.append(False)
         continue
     if (not stat.S_ISDIR(st.st_mode) or path.is_symlink()
-            or st.st_uid != account.pw_uid or st.st_gid != account.pw_gid
+            or st.st_uid != uid or st.st_gid != gid
             or st.st_mode & 0o022):
         raise RuntimeError('existing project path differs from authorized owner')
     statuses.append(True)
@@ -75,7 +86,7 @@ if present:
     try:
         st=os.fstat(fd)
         if (not stat.S_ISREG(st.st_mode) or st.st_size>65536 or st.st_nlink!=1
-                or st.st_uid not in (0,account.pw_uid) or st.st_mode & 0o022):
+                or st.st_uid != uid or st.st_mode & 0o022):
             raise RuntimeError('unsafe existing controller configuration')
         with os.fdopen(fd,'rb') as stream:
             fd=None
@@ -85,15 +96,13 @@ if present:
     if data!=EXPECTED:
         raise RuntimeError('installed controller configuration conflicts with retained specification')
 if INSTALL:
-    # The exact reviewed root must remain inside the retained user's home;
-    # do not create the home, retarget the project or follow symlinks.
+    # Create only as the executing principal. Never repair ownership or change identity.
     for path in paths:
         if not path.exists():
             path.mkdir(mode=0o755, parents=False, exist_ok=True)
-            os.chown(path, account.pw_uid, account.pw_gid)
         st=path.lstat()
         if (not stat.S_ISDIR(st.st_mode) or path.is_symlink()
-                or st.st_uid != account.pw_uid or st.st_gid != account.pw_gid
+                or st.st_uid != uid or st.st_gid != gid
                 or st.st_mode & 0o022):
             raise RuntimeError('unsafe project directory during recovery')
     if not present:
@@ -117,8 +126,8 @@ print(json.dumps({
     'status': status,
     'project_root': str(root),
     'socket_path': str(socket),
-    'execution_user_id': account.pw_uid,
-    'execution_group_id': account.pw_gid,
+    'effective_uid': uid,
+    'effective_gid': gid,
     'python_executable': str(python),
     'controller_sha256': hashlib.sha256(EXPECTED).hexdigest(),
 }, sort_keys=True))
@@ -137,13 +146,13 @@ def inspect(host, spec):
     expected = {
         "project_root": spec["project_root"],
         "socket_path": controller["socket_path"],
-        "execution_user_id": controller["execution_user_id"],
-        "execution_group_id": controller["execution_group_id"],
         "python_executable": spec["python_executable"],
         "controller_sha256": expected_controller_sha256(spec),
     }
     if (type(result) is not dict
-            or set(result) != set(expected) | {"status"}
+            or set(result) != set(expected) | {"status", "effective_uid", "effective_gid"}
+            or type(result.get("effective_uid")) is not int or result["effective_uid"] == 0
+            or type(result.get("effective_gid")) is not int or result["effective_gid"] == 0
             or any(result[key] != value for key, value in expected.items())
             or result["status"] not in {"complete", "absent", "partial"}):
         raise RuntimeError("installed controller inspection differs from retained lane")
