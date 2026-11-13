@@ -143,55 +143,21 @@ def _approved(root, *, records=None):
 
 
 def verify(directory, *, now=None):
-    """Read-only SSM inspection of installed facts derived from retained policy."""
+    """Inspect the old source/Host/digest as evidence; never select a worker.
+
+    The old UID/GID fields are not an authorized way to execute compilation.
+    Runtime access must be verified by the actual effective compiler process
+    after a source-reviewed inherited-identity migration.
+    """
     with locked(directory) as root:
         workspace, host = _owner(root)
         record, spec, digest = _approved(root)
-        from .runner import Host
-        observation = fonts_lane_runtime.inspect(Host(host), spec)
-        if record["state"] == "active" and observation["status"] != "complete":
-            raise RuntimeError("active Fonts lane installed controller is incomplete")
-        captured = int(time.time() if now is None else now)
-        evidence = {
-            "schema": FACTS_SCHEMA, "profile": PROFILE,
-            "binding": _binding(workspace, host),
-            "specification_sha256": digest,
-            "captured_at": captured,
-            "installed": observation,
-        }
-        save(root / FACTS_FILE, evidence)
-        return {"schema": FACTS_SCHEMA, "profile": profile(),
-                "specification_sha256": digest, "installed": observation,
-                "captured_at": captured, "workspace": str(root)}
-
-
-def _verified(root, workspace, host, spec, *, now=None):
-    evidence = _read_regular(root / FACTS_FILE)
-    digest = lanes.specification_sha256(spec)
-    if (type(evidence) is not dict
-            or set(evidence) != {"schema", "profile", "binding", "specification_sha256", "captured_at", "installed"}
-            or evidence["schema"] != FACTS_SCHEMA or evidence["profile"] != PROFILE
-            or evidence["binding"] != _binding(workspace, host)
-            or evidence["specification_sha256"] != digest
-            or type(evidence["captured_at"]) is not int):
-        raise RuntimeError("missing or mismatched original Fonts installed inspection")
-    age = int(time.time() if now is None else now) - evidence["captured_at"]
-    if not 0 <= age <= FACTS_MAX_AGE_SECONDS:
-        raise RuntimeError("original Fonts installed inspection is stale")
-    if (type(evidence["installed"]) is not dict
-            or evidence["installed"].get("project_root") != spec["project_root"]
-            or evidence["installed"].get("socket_path") != spec["controller"]["socket_path"]
-            or evidence["installed"].get("execution_user_id") != spec["controller"]["execution_user_id"]
-            or evidence["installed"].get("execution_group_id") != spec["controller"]["execution_group_id"]
-            or evidence["installed"].get("python_executable") != spec["python_executable"]
-            or evidence["installed"].get("status") not in {"absent", "partial", "complete"}):
-        raise RuntimeError("original Fonts installed facts differ from controller")
-    # The native install probe authenticates the controller bytes; the
-    # verified evidence also carries the exact SHA to detect local tampering.
-    expected = fonts_lane_runtime.expected_controller_sha256(spec)
-    if evidence["installed"].get("controller_sha256") != expected:
-        raise RuntimeError("original Fonts controller digest differs")
-    return evidence
+        return {"schema": "host-deploy-first-fonts-historical-inspection-v1",
+                "historical_specification_sha256": digest,
+                "project_root": spec["project_root"], "state": record["state"],
+                "workspace": str(root), "binding": _binding(workspace, host),
+                "execution_authorized": False,
+                "migration_required": True}
 
 
 def prepare(directory, *, now=None):
@@ -204,14 +170,17 @@ def prepare(directory, *, now=None):
     with locked(directory) as root:
         workspace, host = _owner(root)
         record, spec, _ = _approved(root)
-        _verified(root, workspace, host, spec, now=now)
-        return record  # Existing bytes and metadata remain untouched.
+        return record  # Historical evidence only; not an authorization.
 
 
 def validate_activation(root, record, spec, workspace, host, *, expected_specification_sha256):
     """Validate the retained exact lane under the owning workspace lock."""
     if host.get("instance_id") != COMPILER_INSTANCE:
         raise RuntimeError("original Fonts deployment differs from approved Host")
+    # Retained v4 UID/GID selectors are historical evidence only. Migration
+    # must produce a different spec/digest before the webhook can execute.
+    if spec["schema"] == lanes.SCHEMA and {"execution_user_id", "execution_group_id"} <= set(spec["controller"]):
+        raise RuntimeError("legacy first Fonts worker UID/GID cannot authorize execution; use explicit inherited-identity migration")
     selected, existing, digest = _approved(root)
     if (selected != record or existing != spec
             or expected_specification_sha256 != digest):
@@ -221,7 +190,7 @@ def validate_activation(root, record, spec, workspace, host, *, expected_specifi
     # verification snapshot merely to observe an already active installation.
     # Prepared lanes still require explicit, recent source-owned verification.
     if selected["state"] == "prepared":
-        _verified(root, workspace, host, spec)
+        raise RuntimeError("inherited-execution migration required before first Fonts activation")
     return selected
 
 
