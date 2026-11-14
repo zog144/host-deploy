@@ -155,6 +155,8 @@ def _initialization_verified(host):
             or report.get("historical_project_materialized") is not False
             or report.get("copy_performed") is not False
             or report.get("initialized_source_verified") is not True
+            or report.get("layout_complete") is not True
+            or report.get("missing_layout_directories") != []
             or report.get("controller_installed") is not False
             or report.get("compilation_authorized") is not False
             or report.get("source_checkouts") != expected
