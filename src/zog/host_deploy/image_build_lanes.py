@@ -21,6 +21,10 @@ _RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCH
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _REVISION = re.compile(r"[0-9a-f]{40,64}")
 DEFAULT_ROOT = Path("/var/lib/zog/image-build-lanes")
+# Exact destination of the reviewed, copy-not-move host-install PR #35.
+# Existing unrelated lanes retain DEFAULT_ROOT; historical specifications
+# and their digests must not be reinterpreted.
+FIRST_FONTS_MIGRATED_ROOT = Path("/var/lib/zog/image-build/projects/gateway-first-fonts-runtime")
 
 
 def _positive(value, name, maximum=2**63 - 1):
@@ -936,7 +940,7 @@ def corrected_first_fonts_specification(original):
         raise ValueError("migration requires historical managed first Fonts schema-4 lane")
     result = json.loads(json.dumps(old))
     result["schema"] = INHERITED_SCHEMA
-    result["project_root"] = str(DEFAULT_ROOT / old["lane"])
+    result["project_root"] = str(FIRST_FONTS_MIGRATED_ROOT)
     result["controller"].pop("execution_user_id")
     result["controller"].pop("execution_group_id")
     return validate(result)
