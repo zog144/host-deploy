@@ -22,6 +22,8 @@ on:
       - src/zog/host_deploy/fonts_lane_profile.py
       - src/zog/host_deploy/cli.py
       - tests/test_fonts_lane_profile.py
+      - tests/test_first_fonts_inherited_identity.py
+      - tests/test_fonts_runtime_process_identity.py
       - tests/test_fonts_catalogue_recovery.py
       - src/zog/host_deploy/fonts_lane_runtime.py
       - tests/test_image_build_lanes.py
@@ -89,6 +91,30 @@ jobs:
           ref: 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
           path: dependencies/image-build
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/root-control
+          ref: db84200822506f41a8df068b997e64ee74ae3ece
+          path: companions/root-control-inherited
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/host-install
+          ref: 994f4985be71c08aa1d2d8114c55c6c4d0617665
+          path: companions/host-install-fonts-migration
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/box-control
+          ref: fdafbfb3032847b73c77abd9d90d769e43fddf85
+          path: companions/box-control-inherited
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/image-build
+          ref: aa65dfe264eea92ce210895f462d4a8c63e23ff2
+          path: companions/image-build-inherited
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -111,6 +137,35 @@ jobs:
         run: |
           test "$(git -C companions/host-deploy-fonts-pr7 rev-parse HEAD)" = 4956d926b56def821e6a57025b803ef21f2ca330
           test "$(git -C dependencies/image-build rev-parse HEAD)" = 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
+      - name: Verify selected inherited-process runtime and retained original source tuple
+        run: |
+          test "$(git -C companions/root-control-inherited rev-parse HEAD)" = db84200822506f41a8df068b997e64ee74ae3ece
+          test "$(git -C companions/host-install-fonts-migration rev-parse HEAD)" = 994f4985be71c08aa1d2d8114c55c6c4d0617665
+          test "$(git -C companions/box-control-inherited rev-parse HEAD)" = fdafbfb3032847b73c77abd9d90d769e43fddf85
+          test "$(git -C companions/image-build-inherited rev-parse HEAD)" = aa65dfe264eea92ce210895f462d4a8c63e23ff2
+          cmp dependencies/image-build/project/bootstrap/graphics-fonts.py companions/image-build-inherited/project/bootstrap/graphics-fonts.py
+          test ! -e companions/image-build-inherited/project/pins/2026-10-01/commit-pin.py
+          PYTHONPATH=src python -B - <<'PY'
+          from pathlib import Path
+          from zog.host_deploy import image_build_lanes as lanes
+          old_source = Path("dependencies/image-build")
+          new_source = Path("companions/image-build-inherited")
+          stage_paths = ("libpng", "freetype", "fontconfig")
+          for project in stage_paths:
+              for old in (old_source / "project/package" / project).rglob("*"):
+                  if old.is_file():
+                      assert old.read_bytes() == (new_source / old.relative_to(old_source)).read_bytes(), old
+          assert lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION == "aa65dfe264eea92ce210895f462d4a8c63e23ff2"
+          assert str(lanes.FIRST_FONTS_MIGRATED_ROOT) == "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
+          assert "execution_user_id" not in (new_source / "src/zog/image_build/box_control_adapter.py").read_text()
+          assert "execution_group_id" not in (new_source / "src/zog/image_build/configuration.py").read_text()
+          controller = Path("companions/root-control-inherited/src/zog/root_control/build.py").read_text()
+          assert "'User':" not in controller and "'Group':" not in controller
+          protocol = Path("companions/box-control-inherited/box-control/src/zog/box_control/build_protocol.py").read_text()
+          assert '"execution_user_id"' not in protocol and '"execution_group_id"' not in protocol
+          installer = Path("companions/host-install-fonts-migration/src/zog/host_install/fonts_project_migration.py").read_text()
+          assert 'NEW = "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"' in installer
+          PY
       - name: Trusted Host selection + durable send-once + reconciliation
         env:
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/tests:${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/host-install/src
@@ -128,6 +183,8 @@ jobs:
             tests/test_gateway_fonts_installed_lane_tuple.py \
             tests/test_image_build_lanes.py \
             tests/test_fonts_lane_profile.py \
+            tests/test_first_fonts_inherited_identity.py \
+            tests/test_fonts_runtime_process_identity.py \
             tests/test_fonts_catalogue_recovery.py \
             tests/test_gateway_github.py \
             tests/test_gateway_protocol.py \
@@ -140,14 +197,14 @@ jobs:
       # Source archive for native Work: the exact PR head, not GitHub's synthetic merge ref.
       # This is a CI artifact, never a committed bundle or an installation authorization.
       - name: Checkout exact PR head for source handoff
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name == 'pull_request' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: reviewed-source
           persist-credentials: false
       - name: Package audited source identity for Work
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name == 'pull_request' }}
         run: |
           test "$(git -C reviewed-source rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           # The selected source modules exercised above must match the exported head.
@@ -158,7 +215,7 @@ jobs:
           (cd source-handoff && sha256sum host-deploy-source.tar > SHA256SUMS)
           git -C reviewed-source rev-parse HEAD > source-handoff/SOURCE_COMMIT
       - name: Publish exact source archive (seven-day retention)
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: reviewed-host-deploy-source-${{ github.event.pull_request.head.sha }}

@@ -20,8 +20,8 @@ from zog.host_deploy.gateway import (
 
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
-    # Source-owned retained-lane activation + recoverable two-file installer.
-    "image_build_lanes.py": "0c4d44a41abeaa2ebd79e2f93876dc2ee5098b91",
+    # Reviewed inherited-identity lane source; old schema-4 records are inspection-only.
+    "image_build_lanes.py": "38a06a27dd861705a383f098c2e75afb2db82382",
     "gateway/graphics_catalogue_owner.py": "0cb322bf35a66b15700e9f7036421e1459b856df",
     "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
 }
@@ -30,6 +30,21 @@ EXPECTED_BLOBS = {
 def git_blob(path):
     raw=Path(path).read_bytes()
     return hashlib.sha1(b"blob "+str(len(raw)).encode("ascii")+bytes([0])+raw).hexdigest()
+
+
+_CURRENT_SPECIFICATION = image_build_lanes.specification  # before fixture-only patch
+
+
+def historical_specification(*args, **kwargs):
+    """Serialize an old synthetic lane; not an executable identity selector."""
+    user = kwargs.pop("execution_user_id")
+    group = kwargs.pop("execution_group_id")
+    # Use the current strict API; add historical fields only AFTER it returns.
+    new = _CURRENT_SPECIFICATION(*args, **kwargs)
+    new["schema"] = image_build_lanes.SCHEMA
+    new["controller"]["execution_user_id"] = user
+    new["controller"]["execution_group_id"] = group
+    return image_build_lanes.validate(new)
 
 
 def test_reviewed_installed_module_tuple_is_exact_fonts_profile_successor_contract():
@@ -44,13 +59,18 @@ def test_reviewed_installed_module_tuple_is_exact_fonts_profile_successor_contra
     assert reader.PIN=="sha256:"+owner.PIN_SHA256
 
 
-def test_pr30_task_catalogue_and_lane_accept_exact_pr7_signed_fonts_selection():
+def test_pr30_task_catalogue_and_lane_accept_exact_pr7_signed_fonts_selection(monkeypatch):
     source=Path(os.environ["ZOG_HOSTDEPLOY_FONTS_PR7"])
     assert source.is_dir()
     sys.path.insert(0,str(source/"tests"))
     from test_gateway_first_graphics_catalogue import example, candidate
-    for kind in ("image","toolchain"):
-        source_context,lane,selection=example(kind)
+    # The immutable PR7 signed fixture was created with a historical schema-4
+    # lane. Construct ONLY that serialized test evidence; never revive the
+    # caller-selectable UID/GID constructor in production.
+    with monkeypatch.context() as patch:
+        patch.setattr(image_build_lanes, "specification", historical_specification)
+        selections = [example(kind) for kind in ("image", "toolchain")]
+    for kind, (source_context,lane,selection) in zip(("image", "toolchain"), selections):
         review=fonts_lane_review.review([
             {"schema":lane["schema"],"lane":lane["lane"],
              "specification":lane,"state":"active"}])
@@ -69,7 +89,7 @@ def test_pr30_task_catalogue_and_lane_accept_exact_pr7_signed_fonts_selection():
 
 
 def lane(name, *, source=None, pin=None, project=None, project_id=None):
-    return image_build_lanes.specification(
+    return historical_specification(
         name, source_repository=owner.REPOSITORY,
         source_revision=source or owner.SOURCE,
         monthly_pin_repository_path=owner.PIN_PATH,

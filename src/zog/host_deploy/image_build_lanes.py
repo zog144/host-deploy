@@ -12,14 +12,19 @@ from .provision import configuration
 from .runner import Host
 from .workspace import locked, save
 
-SCHEMA = 4
+SCHEMA = 4  # historical account-selecting lane, read-only
+INHERITED_SCHEMA = 5
 EXTERNAL_STATE_SCHEMA = 3
 MONTHLY_PIN_SCHEMA = 2
 LEGACY_SCHEMA = 1
-_RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCHEMA}
+_RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _REVISION = re.compile(r"[0-9a-f]{40,64}")
 DEFAULT_ROOT = Path("/var/lib/zog/image-build-lanes")
+# Exact destination of the reviewed, copy-not-move host-install PR #35.
+# Existing unrelated lanes retain DEFAULT_ROOT; historical specifications
+# and their digests must not be reinterpreted.
+FIRST_FONTS_MIGRATED_ROOT = Path("/var/lib/zog/image-build/projects/gateway-first-fonts-runtime")
 
 
 def _positive(value, name, maximum=2**63 - 1):
@@ -89,13 +94,13 @@ def validate(spec):
             "monthly_pin_repository_path",
             "monthly_pin_identity",
         }
-    elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA}:
+    elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         required = common | {
             "monthly_pin_repository_path",
             "monthly_pin_identity",
             "observed_state_dir",
         }
-        if schema == SCHEMA:
+        if schema in {SCHEMA, INHERITED_SCHEMA}:
             required.add("python_executable")
     else:
         raise ValueError("unsupported image-build lane specification")
@@ -116,11 +121,11 @@ def validate(spec):
         spec["source_revision"]
     ):
         raise ValueError("lane source revision must be an immutable commit identity")
-    if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA}:
+    if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         _observed_state_path(spec["observed_state_dir"], spec["project_root"])
         if spec["observed_state_dir"] is not None and spec["mode"] != "managed":
             raise ValueError("external observed state requires a managed lane")
-    if schema == SCHEMA:
+    if schema in {SCHEMA, INHERITED_SCHEMA}:
         validate_python_executable(spec["python_executable"])
     if schema == LEGACY_SCHEMA:
         pin_identity = spec["pin_identity"]
@@ -176,13 +181,16 @@ def validate(spec):
         "wait_timeout_seconds",
         "transport_timeout_seconds",
     }
+    if schema == INHERITED_SCHEMA:
+        required_controller -= {"execution_user_id", "execution_group_id"}
     if not isinstance(controller, dict) or set(controller) != required_controller:
         raise ValueError("invalid lane controller policy")
     socket_path = Path(controller["socket_path"])
     if not socket_path.is_absolute():
         raise ValueError("lane root-control socket must be absolute")
-    for key in ("execution_user_id", "execution_group_id"):
-        _positive(controller[key], key, 2**31 - 1)
+    if schema != INHERITED_SCHEMA:
+        for key in ("execution_user_id", "execution_group_id"):
+            _positive(controller[key], key, 2**31 - 1)
     for key in (
         "startup_timeout_seconds",
         "execution_timeout_seconds",
@@ -212,8 +220,6 @@ def specification(
     thread_count_maximum,
     cpu_weight,
     disk_reservation_bytes,
-    execution_user_id,
-    execution_group_id,
     project_root=None,
     socket_path="/run/zog/root-control.sock",
     startup_timeout_seconds=30,
@@ -225,9 +231,11 @@ def specification(
     python_executable=None,
 ):
     project_root = Path(project_root) if project_root else DEFAULT_ROOT / lane
+    if python_executable is None:
+        raise ValueError("new inherited-identity lane requires an explicit Python executable")
     return validate(
         {
-            "schema": SCHEMA if python_executable is not None else EXTERNAL_STATE_SCHEMA,
+            "schema": INHERITED_SCHEMA,
             **({"python_executable": python_executable} if python_executable is not None else {}),
             "lane": lane,
             "mode": mode,
@@ -251,8 +259,6 @@ def specification(
             },
             "controller": {
                 "socket_path": socket_path,
-                "execution_user_id": execution_user_id,
-                "execution_group_id": execution_group_id,
                 "startup_timeout_seconds": startup_timeout_seconds,
                 "execution_timeout_seconds": execution_timeout_seconds,
                 "termination_grace_seconds": termination_grace_seconds,
@@ -411,6 +417,11 @@ TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104
 # newly bound Fonts lane; never silently rewrite a retained lane binding.
 FIRST_FONTS_PRODUCER_REVISION = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 FIRST_FONTS_BUILD_RECORD_COMPATIBILITY = TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
+# Separate source-reviewed replacement; the original producer remains frozen
+# for historical receipts and the previously accepted catalogue.
+FIRST_FONTS_INHERITED_PRODUCER_REVISION = "aa65dfe264eea92ce210895f462d4a8c63e23ff2"
+FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION = FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
+FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION = "fdafbfb3032847b73c77abd9d90d769e43fddf85"
 TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
 # Separate fresh-only tuple. Historical source/companion bindings above remain
 # valid for readback and recovery; no prior lane may be silently promoted.
@@ -425,6 +436,8 @@ CONTROLLER_COMPANION_SCHEMA = 1
 def expected_build_record_revision(producer_revision):
     if producer_revision == FIRST_FONTS_PRODUCER_REVISION:
         return FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
+    if producer_revision == FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+        return FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BUILD_RECORD_REVISION
     if producer_revision in (
@@ -434,6 +447,8 @@ def expected_build_record_revision(producer_revision):
 
 
 def expected_controller_revision(producer_revision):
+    if producer_revision == FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+        return FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BOX_CONTROL_REVISION
     if producer_revision in (
@@ -483,11 +498,11 @@ def bind_controller_companion(
             raise RuntimeError("controller companion requires regular lane record")
         record = json.loads(path.read_text())
         spec = validate(record.get("specification"))
-        if (record.get("schema") != SCHEMA
+        if (record.get("schema") != INHERITED_SCHEMA
                 or record.get("lane") != lane or spec["lane"] != lane
                 or record.get("state") != "active"
-                or spec["schema"] != SCHEMA or spec["mode"] != "managed"):
-            raise RuntimeError("controller companion requires active managed schema-4 lane")
+                or spec["schema"] != INHERITED_SCHEMA or spec["mode"] != "managed"):
+            raise RuntimeError("controller companion requires active inherited-identity schema-5 lane")
         candidate = validate_controller_companion(
             expected, project_root=spec["project_root"])
         if (specification_sha256(spec) != expected_specification_sha256
@@ -506,62 +521,9 @@ def bind_controller_companion(
 
 
 
-def bind_compiler_execution_identity(
-    directory, lane, *, identity, expected_specification_sha256,
-):
-    """One-time approved nonroot owner binding for a NEW typed compiler lane.
-
-    No history rewrite, no UID inference, no defaults and no identity rotation.
-    The actual host passwd/socket/source DAC is checked separately by the
-    fixed, root-controlled SSM transition before each producer invocation.
-    """
-    from .gateway.compiler_execution_identity import validate as validate_identity
-    with locked(directory) as root:
-        path = _path(root, lane)
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError("nonroot compiler requires regular lane record")
-        record = json.loads(path.read_text())
-        spec = validate(record.get("specification"))
-        companion = validate_runtime_companion(
-            record.get("runtime_companion"), project_root=spec["project_root"])
-        controller = validate_controller_companion(
-            record.get("controller_companion"), project_root=spec["project_root"])
-        if (record.get("schema") != SCHEMA or record.get("lane") != lane
-                or record.get("state") != "active"
-                or spec["schema"] != SCHEMA or spec["mode"] != "managed"
-                or spec["source_revision"] not in (
-                    RESTORED_TOOLCHAIN_PRODUCER_REVISION,
-                    FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION,
-                )
-                or spec["observed_state_dir"] is not None
-                or controller["producer_revision"] != spec["source_revision"]
-                or companion["producer_revision"] != spec["source_revision"]
-                or specification_sha256(spec) != expected_specification_sha256):
-            raise RuntimeError("nonroot compiler requires reviewed separate managed lane")
-        expected = validate_identity(
-            identity, project_root=spec["project_root"],
-            python_executable=spec["python_executable"],
-            source_revision=spec["source_revision"],
-            build_record_revision=companion["revision"],
-            box_control_revision=controller["revision"],
-            task_identity=identity["task_catalogue_identity"],
-        )
-        if spec["source_revision"] == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
-            selected_controller = spec["controller"]
-            if (selected_controller["socket_path"] != expected["socket_path"]
-                    or selected_controller["execution_user_id"] != expected["build_uid"]
-                    or selected_controller["execution_group_id"] != expected["build_gid"]
-                    or selected_controller["execution_timeout_seconds"] > 21600
-                    or spec["resource_policy"]["disk_reservation_bytes"] > 32 * 1024**3):
-                raise RuntimeError("fresh compiler owner/socket/resource bounds differ from lane")
-        existing = record.get("compiler_execution_identity")
-        if existing is not None:
-            if existing != expected:
-                raise RuntimeError("compiler execution identity already frozen differently")
-            return record
-        record["compiler_execution_identity"] = expected
-        save(path, record)
-        return record
+def bind_compiler_execution_identity(*args, **kwargs):
+    """Disabled: historical compiler execution identities cannot select accounts."""
+    raise RuntimeError("alternate compiler execution identity is obsolete; use inherited-identity schema 5")
 
 
 def validate_runtime_companion(value, *, project_root=None):
@@ -588,7 +550,9 @@ def validate_runtime_companion(value, *, project_root=None):
         PurePosixPath(root).is_relative_to(PurePosixPath(project_root) / "companions")
     ):
         raise ValueError("runtime companion must be below the owned lane companions directory")
-    if value["producer_revision"] == FIRST_FONTS_PRODUCER_REVISION:
+    if value["producer_revision"] in (
+            FIRST_FONTS_PRODUCER_REVISION,
+            FIRST_FONTS_INHERITED_PRODUCER_REVISION):
         if value["revision"] != FIRST_FONTS_BUILD_RECORD_COMPATIBILITY:
             raise ValueError("first Fonts requires the producer-pinned build-record revision")
         if project_root is not None and root != str(
@@ -616,8 +580,8 @@ def bind_runtime_companion(
         spec = validate(record.get("specification"))
         if (record.get("lane") != lane or spec["lane"] != lane
                 or record.get("state") != "active"
-                or spec["schema"] != SCHEMA or spec["mode"] != "managed"):
-            raise RuntimeError("runtime companion binding requires an active managed schema-4 lane")
+                or spec["schema"] != INHERITED_SCHEMA or spec["mode"] != "managed"):
+            raise RuntimeError("runtime companion binding requires active inherited-identity schema-5 lane")
         candidate = validate_runtime_companion(expected, project_root=spec["project_root"])
         if (specification_sha256(spec) != expected_specification_sha256
                 or spec["source_revision"] != producer_revision):
@@ -642,13 +606,13 @@ def inspect(directory, lane):
 
 
 def _controller(spec):
+    if validate(spec)["schema"] != INHERITED_SCHEMA:
+        raise RuntimeError("historical selected-account lane cannot produce new controller; migrate explicitly")
     policy = spec["resource_policy"]
     controller = spec["controller"]
     return {
         "project_root": spec["project_root"],
         "socket_path": controller["socket_path"],
-        "execution_user_id": controller["execution_user_id"],
-        "execution_group_id": controller["execution_group_id"],
         "startup_timeout_seconds": controller["startup_timeout_seconds"],
         "execution_timeout_seconds": controller["execution_timeout_seconds"],
         "termination_grace_seconds": controller["termination_grace_seconds"],
@@ -752,6 +716,8 @@ def activate(directory, lane, *, expected_specification_sha256=None):
         path = _path(root, lane)
         record = json.loads(path.read_text())
         spec = validate(record["specification"])
+        if spec["schema"] != INHERITED_SCHEMA:
+            raise RuntimeError("historical account-selecting lane must be migrated before activation")
         if lane == "gateway-first-fonts-runtime" or "fonts_lane_profile" in record:
             from . import fonts_lane_profile
             if lane != fonts_lane_profile.LANE or expected_specification_sha256 is None:
@@ -921,6 +887,8 @@ def remote_operation_argv(record, request_path):
     if record.get("state") != "active":
         raise RuntimeError("image-build lane is not active")
     spec = validate(record["specification"])
+    if spec["schema"] != INHERITED_SCHEMA:
+        raise RuntimeError("historical selected-account lane cannot dispatch; explicit migration required")
     if spec["mode"] != "managed":
         raise RuntimeError("reservation-only lane does not execute remote operations")
     if spec["schema"] == LEGACY_SCHEMA:
@@ -936,7 +904,7 @@ def remote_operation_argv(record, request_path):
     argv = [
         "env",
         "PYTHONPATH=" + str(Path(record["source_root"]) / "src"),
-        (spec["python_executable"] if spec["schema"] == SCHEMA else "python3"),
+        spec["python_executable"],
         "-m",
         "zog.image_build.remote_operations",
         "--repository-root",
@@ -952,7 +920,7 @@ def remote_operation_argv(record, request_path):
     ]
     observed_state = (
         spec["observed_state_dir"]
-        if spec["schema"] in {EXTERNAL_STATE_SCHEMA, SCHEMA}
+        if spec["schema"] in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}
         else None
     )
     if observed_state is None:
@@ -973,3 +941,21 @@ def remote_operation_argv(record, request_path):
         ]
     )
     return argv
+
+
+def corrected_first_fonts_specification(original):
+    """Pure, explicit conversion of a retained first Fonts spec; does not touch a Host."""
+    old = validate(original)
+    if (old["schema"] != SCHEMA or old["lane"] != "gateway-first-fonts-runtime"
+            or old["mode"] != "managed"):
+        raise ValueError("migration requires historical managed first Fonts schema-4 lane")
+    result = json.loads(json.dumps(old))
+    result["schema"] = INHERITED_SCHEMA
+    # An immutable successor is mandatory: the original producer requested
+    # numerical execution identities and must remain available only for
+    # historical record verification, never new work.
+    result["source_revision"] = FIRST_FONTS_INHERITED_PRODUCER_REVISION
+    result["project_root"] = str(FIRST_FONTS_MIGRATED_ROOT)
+    result["controller"].pop("execution_user_id")
+    result["controller"].pop("execution_group_id")
+    return validate(result)

@@ -153,22 +153,32 @@ When present:
 Image-build owns the final live path checks and read-only semantics. Host-deploy
 does not copy, symlink or import retained pipeline evidence into the isolated lane.
 
-Historical schema-2 lanes remain executable without external observation state.
-Schema-1 lanes remain readable but cannot execute pass-4 remote operations because
-they lack the explicit monthly provenance-pin descriptor.
+Historical schemas 1–4 remain readable as retained provenance; **none** can
+activate or dispatch under the inherited-identity execution contract. Schema-5
+lanes have a required Python interpreter and no selectable UID/GID. For their
+read-only external observed state, `remote_operation_argv()` passes the frozen
+`--observed-state-dir` and omits `--controller-config`. Native execution still
+requires an explicitly compatible image-build/box-control/root-control runtime.
 
-## First Fonts source-owned profile
+## First Fonts historical record and inherited-identity plan
 
-The first Fonts managed-lane identity is reserved for the reviewed
-`fonts-lane-profile` / `fonts-lane-verify` / `fonts-lane-prepare` /
-`fonts-lane-activate` workflow, bound to the **original retained** prepared
-lane specification at `/home/certbot-build-owner/gateway-first-fonts-runtime`.
-The v3 compatibility reader requires the approved full specification digest,
-workspace/Host identity and independent installed controller inspection; it
-does not assemble a replacement JSON specification or move an older Project.
-See [first Fonts retained-lane recovery](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md).
-The retained `fonts-lane-prepare` is read-only and idempotent. Activation is
-explicit and recoverable after complete remote configuration. The generic
-disk-admission check remains. The retired Fonts-specific worker-space and
-fixed-duration acceptance gates stay removed; runtime memory enforcement is
-investigated separately and is not an additional Fonts blocker.
+The original `gateway-first-fonts-runtime` schema-4 record remains historical
+source/Host/pin evidence and is **not** executable. It retains the old original
+root `/home/certbot-build-owner/gateway-first-fonts-runtime` and original full
+digest only for verification. It must never select its old execution UID/GID.
+
+The supported `fonts-lane-profile`, `fonts-lane-verify`, `fonts-lane-prepare`
+and `fonts-lane-migration-plan` commands inspect the existing workspace-owned
+record and produce an **uninstalled**, identity-free schema-5 candidate.
+They do not contact the compiler Host, create project directories, rewrite the
+old lane or authorize an execution. `fonts-lane-activate` refuses the old
+account-selecting lane, including one whose historical state is `active`.
+
+See [first Fonts retained evidence](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md)
+and [inherited-identity migration](FIRST-FONTS-INHERITED-IDENTITY-MIGRATION-2026-11-14.md).
+The planned destination is the host-install-managed application Project root
+`/var/lib/zog/image-build/projects/gateway-first-fonts-runtime`, not the
+host-deploy lane-record directory. The ordinary
+disk-admission rule is unchanged. Retired Fonts-specific work space,
+external-accounting and fixed-duration gates remain removed.
+runtime memory enforcement is a separate investigation, not a submission gate.
