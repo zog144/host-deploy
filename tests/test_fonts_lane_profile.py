@@ -107,7 +107,7 @@ def test_migration_plan_only_previews_a_distinct_nonexecutable_schema_five(tmp_p
     assert "compatible-producer" in plan["status"]
     candidate = plan["corrected_specification"]
     assert candidate["schema"] == lanes.INHERITED_SCHEMA
-    assert candidate["project_root"] == "/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime"
+    assert candidate["project_root"] == "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
     assert "execution_user_id" not in candidate["controller"]
     assert "execution_group_id" not in candidate["controller"]
     assert plan["corrected_specification_sha256"] == lanes.specification_sha256(candidate)
@@ -215,7 +215,7 @@ def test_legacy_runtime_probe_is_refused_and_new_probe_never_selects_an_account(
     script = runtime.script(new)
     assert "os.geteuid()" in script
     assert "os.getegid()" in script
-    assert "uid==0 or gid==0" in script
+    assert "uid==0 or gid==0" not in script
     assert "getpwuid" not in script
     assert "getgrgid" not in script
     assert "os.chown" not in script
@@ -225,7 +225,7 @@ def test_legacy_runtime_probe_is_refused_and_new_probe_never_selects_an_account(
     assert runtime.expected_controller_sha256(new)
 
 
-def test_installed_probe_rejects_privileged_result_without_mutating_state():
+def test_installed_probe_reports_existing_root_identity_without_mutating_state():
     historic = historical_specification()
     new = lanes.corrected_first_fonts_specification(historic)
     class Host:
@@ -237,8 +237,9 @@ def test_installed_probe_rejects_privileged_result_without_mutating_state():
                 "python_executable": new["python_executable"],
                 "controller_sha256": runtime.expected_controller_sha256(new),
             })
-    with pytest.raises(RuntimeError, match="execution context"):
-        runtime.inspect(Host(), new)
+    inspected = runtime.inspect(Host(), new)
+    assert inspected["effective_user_id"] == 0
+    assert inspected["effective_group_id"] == 0
 
 
 def test_new_schema_rejects_injected_execution_identity_selection():
