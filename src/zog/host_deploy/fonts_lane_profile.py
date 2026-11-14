@@ -82,6 +82,7 @@ def profile():
         "build_record_revision": COMPANION_REVISION,
         "retained_specification_sha256": RETAINED_SPECIFICATION_SHA256,
         "retained_project_root": RETAINED_PROJECT_ROOT,
+        "migration_project_root": PROJECT_ROOT,
         "compiler_instance_id": COMPILER_INSTANCE,
         "controller_producer": "zog.host_deploy.image_build_lanes._controller",
     }
@@ -205,7 +206,7 @@ def migration_plan(directory):
         record, original, old_digest = _approved(root)
         corrected = lanes.corrected_first_fonts_specification(original)
         return {
-            "schema": "host-deploy-first-fonts-identity-migration-plan-v1",
+            "schema": "host-deploy-first-fonts-identity-migration-plan-v2",
             "status": "requires-native-data-migration-and-compatible-producer",
             "execution_authorized": False,
             "corrected_specification_is_executable": False,
@@ -216,4 +217,8 @@ def migration_plan(directory):
             "corrected_specification": corrected,
             "corrected_specification_sha256": lanes.specification_sha256(corrected),
             "corrected_project_root": corrected["project_root"],
+            "migration_producer": "host-install-fonts-project-migrate",
+            "migration_copy_verified": False,
+            "controller_rebinding_verified": False,
+            "compiler_child_identity_verified": False,
         }

@@ -98,6 +98,7 @@ def test_migration_plan_only_previews_a_distinct_nonexecutable_schema_five(tmp_p
     before = path.read_bytes()
     deny_remote(monkeypatch)
     plan = fonts.migration_plan(root)
+    assert plan["schema"] == "host-deploy-first-fonts-identity-migration-plan-v2"
     assert plan == fonts.migration_plan(root)
     assert plan["original_specification_sha256"] == digest
     assert plan["original_project_root"] == fonts.RETAINED_PROJECT_ROOT
@@ -114,6 +115,11 @@ def test_migration_plan_only_previews_a_distinct_nonexecutable_schema_five(tmp_p
     assert "execution_group_id" not in candidate["controller"]
     assert plan["corrected_specification_sha256"] == lanes.specification_sha256(candidate)
     assert plan["corrected_specification_sha256"] != digest
+    assert plan["corrected_project_root"] == str(lanes.FIRST_FONTS_MIGRATED_ROOT)
+    assert plan["migration_producer"] == "host-install-fonts-project-migrate"
+    assert plan["migration_copy_verified"] is False
+    assert plan["controller_rebinding_verified"] is False
+    assert plan["compiler_child_identity_verified"] is False
     assert path.read_bytes() == before
     assert not (root / "image-build-lanes" / "new.json").exists()
 
