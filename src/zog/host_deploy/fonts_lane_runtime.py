@@ -85,7 +85,7 @@ if INSTALL:
         st=path.lstat()
         if not stat.S_ISDIR(st.st_mode) or path.is_symlink():
             raise RuntimeError('application directory changed during installation: '+str(path))
-        if not os.access(path,os.R_OK|os.W_OK|os.X_OK):
+        if not os.access(path,os.R_OK|os.W_OK|os.X_OK,effective_ids=True):
             raise RuntimeError('running process cannot write application directory: '+str(path))
     if not present:
         fd=os.open(config,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o644)
@@ -118,7 +118,11 @@ print(json.dumps({
 
 
 def inspect(host, spec):
-    """Read actual kernel credentials, never resolve or select an account."""
+    """Inspect this command process's kernel identity, without account selection.
+
+    A probe invoked by SSM reports the SSM command's credentials; it is not
+    evidence of the root-control build child process's effective identity.
+    """
     result=json.loads(host.command(script(spec)))
     fixed={
         "project_root":spec["project_root"],

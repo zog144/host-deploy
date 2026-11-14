@@ -22,6 +22,8 @@ on:
       - src/zog/host_deploy/fonts_lane_profile.py
       - src/zog/host_deploy/cli.py
       - tests/test_fonts_lane_profile.py
+      - tests/test_first_fonts_inherited_identity.py
+      - tests/test_fonts_runtime_process_identity.py
       - tests/test_fonts_catalogue_recovery.py
       - src/zog/host_deploy/fonts_lane_runtime.py
       - tests/test_image_build_lanes.py
@@ -128,6 +130,8 @@ jobs:
             tests/test_gateway_fonts_installed_lane_tuple.py \
             tests/test_image_build_lanes.py \
             tests/test_fonts_lane_profile.py \
+            tests/test_first_fonts_inherited_identity.py \
+            tests/test_fonts_runtime_process_identity.py \
             tests/test_fonts_catalogue_recovery.py \
             tests/test_gateway_github.py \
             tests/test_gateway_protocol.py \

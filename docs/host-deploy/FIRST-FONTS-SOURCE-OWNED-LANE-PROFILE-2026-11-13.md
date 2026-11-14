@@ -47,7 +47,8 @@ lookup is required.
 `fonts-lane-migration-plan` produces a distinct **non-executable candidate**
 (schema 5), removing the identity selectors and calculating the proposed
 specification hash from the actual original record. Its new project root is
-`/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime`. This is a proposed
+`/var/lib/zog/image-build/projects/gateway-first-fonts-runtime` (the reviewed
+host-install project-copy destination). This is a proposed
 migration destination, not an installed directory or permission grant. The
 returned candidate digest is **not a final executable approval**: the original
 producer does not accept inherited-identity controller configuration, and
@@ -65,9 +66,12 @@ old stored installed-facts file is historical material, not fresh authority.
 
 For the future schema-5 runtime, the `fonts_lane_runtime` probe uses the
 actual process `geteuid/getegid`, verifies normal filesystem/socket access
-and rejects a privileged root compiler context. It does not resolve an account
-name, switch users, chown files or accept caller-supplied UID/GID. Runtime
-source testing does not prove native effective identity, source compatibility
+and reports the process's observed effective UID/GID, including UID 0. It does
+not resolve an account name, switch users, chown files or accept caller-supplied
+UID/GID. When invoked through SSM, this is the SSM **probe** process's identity,
+not automatically the identity of the eventual compiler child. Root-control's
+own service/child effective credentials must be read back independently. Runtime
+source testing does not prove native compiler identity, source compatibility
 or per-compilation enforcement.
 
 ## Separate existing acceptance

@@ -176,6 +176,9 @@ account-selecting lane, including one whose historical state is `active`.
 
 See [first Fonts retained evidence](FIRST-FONTS-SOURCE-OWNED-LANE-PROFILE-2026-11-13.md)
 and [inherited-identity migration](FIRST-FONTS-INHERITED-IDENTITY-MIGRATION-2026-11-14.md).
-The ordinary disk-admission rule is unchanged. Retired Fonts-specific work
-space, external-accounting and fixed-duration gates remain removed, and
+The planned destination is the host-install-managed application Project root
+`/var/lib/zog/image-build/projects/gateway-first-fonts-runtime`, not the
+host-deploy lane-record directory. The ordinary
+disk-admission rule is unchanged. Retired Fonts-specific work space,
+external-accounting and fixed-duration gates remain removed.
 runtime memory enforcement is a separate investigation, not a submission gate.
