@@ -107,6 +107,8 @@ def test_migration_plan_only_previews_a_distinct_nonexecutable_schema_five(tmp_p
     assert "compatible-producer" in plan["status"]
     candidate = plan["corrected_specification"]
     assert candidate["schema"] == lanes.INHERITED_SCHEMA
+    assert candidate["source_revision"] == lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+    assert candidate["source_revision"] != record["specification"]["source_revision"]
     assert candidate["project_root"] == "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
     assert "execution_user_id" not in candidate["controller"]
     assert "execution_group_id" not in candidate["controller"]
