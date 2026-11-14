@@ -23,6 +23,7 @@ on:
       - src/zog/host_deploy/cli.py
       - tests/test_fonts_lane_profile.py
       - tests/test_fonts_lane_migration.py
+      - tests/test_fonts_initialized_layout_integration.py
       - tests/test_first_fonts_inherited_identity.py
       - tests/test_fonts_runtime_process_identity.py
       - tests/test_fonts_catalogue_recovery.py
@@ -69,7 +70,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/host-install
-          ref: 0e435a21fc12a6950163b72733a9872494279a71
+          ref: d6af052f0dfa98fceaaa7ff391f84aa84d6aa690
           path: companions/host-install
           persist-credentials: false
       - uses: actions/checkout@v4
@@ -133,7 +134,7 @@ jobs:
       - name: Verify selected inherited-process runtime and retained original source tuple
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = 6b9c4592438ff488646e59f025813d919119ab12
-          test "$(git -C companions/host-install rev-parse HEAD)" = 0e435a21fc12a6950163b72733a9872494279a71
+          test "$(git -C companions/host-install rev-parse HEAD)" = d6af052f0dfa98fceaaa7ff391f84aa84d6aa690
           test "$(git -C companions/box-control-inherited rev-parse HEAD)" = fdafbfb3032847b73c77abd9d90d769e43fddf85
           test "$(git -C companions/image-build-inherited rev-parse HEAD)" = 620378bdd8075daeb5eaad45eedea4af7db36423
           cmp dependencies/image-build/project/bootstrap/graphics-fonts.py companions/image-build-inherited/project/bootstrap/graphics-fonts.py
@@ -206,7 +207,7 @@ jobs:
           ZOG_HOSTDEPLOY_FONTS_PR7: ${{ github.workspace }}/companions/host-deploy-fonts-pr7
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = 6b9c4592438ff488646e59f025813d919119ab12
-          test "$(git -C companions/host-install rev-parse HEAD)" = 0e435a21fc12a6950163b72733a9872494279a71
+          test "$(git -C companions/host-install rev-parse HEAD)" = d6af052f0dfa98fceaaa7ff391f84aa84d6aa690
           python -m pytest -q -rs \
             tests/test_gateway_trusted_host_ssm.py \
             tests/test_gateway_generic_pipeline.py \
@@ -218,6 +219,7 @@ jobs:
             tests/test_image_build_lanes.py \
             tests/test_fonts_lane_profile.py \
             tests/test_fonts_lane_migration.py \
+            tests/test_fonts_initialized_layout_integration.py \
             tests/test_fonts_pin_retention.py \
             tests/test_fonts_prepared_pin_provenance.py \
             tests/test_first_fonts_inherited_identity.py \
