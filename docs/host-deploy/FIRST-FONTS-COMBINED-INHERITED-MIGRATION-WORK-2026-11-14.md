@@ -16,7 +16,7 @@ in an SSM shell measures *that SSM process*, not an installed build child.
 | Program | Reviewed commit | Role |
 |---|---|---|
 | root-control PR #49 | `6b9c4592438ff488646e59f025813d919119ab12` | Combined trusted-Host Task C and identity-free build backend in **one** installation |
-| host-install PR #38 | `a0745915f934dfff658a9b848d48c94894dcfb68` | Combined Task C, existing copy migrator and prepared-only initialization in **one** installation |
+| host-install PR #38 | `c8ff1722f9e0c6df755e637047a5be3baa90a82b` | Combined Task C, existing copy migrator and prepared-only initialization in **one** installation |
 | box-control PR #20 | `fdafbfb3032847b73c77abd9d90d769e43fddf85` | No selectable build UID/GID in registration or operations |
 | image-build PR #23 | `620378bdd8075daeb5eaad45eedea4af7db36423` | Identity-free executable with separately retained original October pin |
 | build-record | `a866c9c4b0dd385045f00ce2de7d809f5b67c104` | Producer-required companion |
