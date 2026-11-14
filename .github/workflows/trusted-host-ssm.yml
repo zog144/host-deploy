@@ -26,6 +26,8 @@ on:
       - tests/test_fonts_runtime_process_identity.py
       - tests/test_fonts_catalogue_recovery.py
       - src/zog/host_deploy/fonts_lane_runtime.py
+      - src/zog/host_deploy/fonts_pin_retention.py
+      - tests/test_fonts_pin_retention.py
       - tests/test_image_build_lanes.py
       - src/zog/host_deploy/gateway/image_build_execution.py
       - src/zog/host_deploy/gateway/graphics_catalogue_owner.py
@@ -196,6 +198,7 @@ jobs:
             tests/test_gateway_fonts_installed_lane_tuple.py \
             tests/test_image_build_lanes.py \
             tests/test_fonts_lane_profile.py \
+            tests/test_fonts_pin_retention.py \
             tests/test_first_fonts_inherited_identity.py \
             tests/test_fonts_runtime_process_identity.py \
             tests/test_fonts_catalogue_recovery.py \
