@@ -422,6 +422,8 @@ FIRST_FONTS_BUILD_RECORD_COMPATIBILITY = TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
 FIRST_FONTS_INHERITED_PRODUCER_REVISION = "aa65dfe264eea92ce210895f462d4a8c63e23ff2"
 FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION = FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
 FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION = "fdafbfb3032847b73c77abd9d90d769e43fddf85"
+FIRST_FONTS_ORIGINAL_PIN_PATH = "project/pins/2026-10-01/commit-pin.py"
+FIRST_FONTS_ORIGINAL_PIN_IDENTITY = "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
 TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
 # Separate fresh-only tuple. Historical source/companion bindings above remain
 # valid for readback and recovery; no prior lane may be silently promoted.
@@ -898,9 +900,25 @@ def remote_operation_argv(record, request_path):
     request_path = Path(request_path)
     if not request_path.is_absolute():
         raise ValueError("remote request path must be absolute")
-    monthly_pin = Path(record["source_root"]).joinpath(
-        *PurePosixPath(spec["monthly_pin_repository_path"]).parts
+    retained_fonts = (
+        spec["lane"] == "gateway-first-fonts-runtime"
+        and spec["source_revision"] == FIRST_FONTS_INHERITED_PRODUCER_REVISION
     )
+    if retained_fonts:
+        # The accepted October pin is a pre-existing content-addressed
+        # build-record artifact, never part of the public executable checkout.
+        if (spec["source_repository"] != "zog144/image-build"
+                or spec["monthly_pin_repository_path"] != FIRST_FONTS_ORIGINAL_PIN_PATH
+                or spec["monthly_pin_identity"] != FIRST_FONTS_ORIGINAL_PIN_IDENTITY
+                or Path(record["state_dir"]) != Path(spec["project_root"]) / "state"):
+            raise RuntimeError("first Fonts retained pin differs from approved source binding")
+        monthly_pin = (Path(record["state_dir"])
+                       / "image-build/build-record/artifacts"
+                       / spec["monthly_pin_identity"][7:])
+    else:
+        monthly_pin = Path(record["source_root"]).joinpath(
+            *PurePosixPath(spec["monthly_pin_repository_path"]).parts
+        )
     argv = [
         "env",
         "PYTHONPATH=" + str(Path(record["source_root"]) / "src"),
@@ -937,9 +955,16 @@ def remote_operation_argv(record, request_path):
             str(monthly_pin),
             "--expected-pin-digest",
             spec["monthly_pin_identity"],
-            str(request_path),
         ]
     )
+    if retained_fonts:
+        argv.extend([
+            "--retained-pin-source-revision",
+            FIRST_FONTS_PRODUCER_REVISION,
+            "--retained-pin-repository-path",
+            FIRST_FONTS_ORIGINAL_PIN_PATH,
+        ])
+    argv.append(str(request_path))
     return argv
 
 
