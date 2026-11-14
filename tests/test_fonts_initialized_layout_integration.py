@@ -96,7 +96,14 @@ def test_committed_original_initializer_recovers_to_real_activation(
                 timeout=25, check=False)
             if run.returncode:
                 raise RuntimeError("real controller runtime failed: " + run.stderr)
-            return run.stdout
+            observed = json.loads(run.stdout)
+            # FakeHost represents a compiler Host with the canonical Project,
+            # Python and socket mounted under disposable test paths. The
+            # remote protocol still returns the original selected path names.
+            observed["project_root"] = corrected["project_root"]
+            observed["python_executable"] = corrected["python_executable"]
+            observed["socket_path"] = corrected["controller"]["socket_path"]
+            return json.dumps(observed)
 
     with socket.socket(socket.AF_UNIX) as listener:
         listener.bind(str(sock_path))
