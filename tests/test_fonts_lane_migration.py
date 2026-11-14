@@ -214,6 +214,9 @@ class InitializedHost(FakeHost):
                 "initialized_source_verified": True,
                 "layout_complete": True,
                 "missing_layout_directories": [],
+                "runtime_layout": {"status": "ready", "present": [
+                    "package", "application", "catalogue"], "missing": []},
+                "controllers_present": [],
                 "controller_installed": False,
                 "compilation_authorized": False,
                 "manifest_sha256": "1" * 64,
