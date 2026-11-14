@@ -58,13 +58,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/root-control
-          ref: db84200822506f41a8df068b997e64ee74ae3ece
+          ref: 7838c1ff51bc147521a5e38530a4aed8ff8bbf9a
           path: companions/root-control
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: zog144/host-install
-          ref: 994f4985be71c08aa1d2d8114c55c6c4d0617665
+          ref: 0b52eb50073477a1de8504009004eb27d2caa54b
           path: companions/host-install
           persist-credentials: false
       - uses: actions/checkout@v4
@@ -90,6 +90,18 @@ jobs:
           repository: zog144/image-build
           ref: 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
           path: dependencies/image-build
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/root-control
+          ref: db84200822506f41a8df068b997e64ee74ae3ece
+          path: companions/root-control-inherited
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: zog144/host-install
+          ref: 994f4985be71c08aa1d2d8114c55c6c4d0617665
+          path: companions/host-install-fonts-migration
           persist-credentials: false
       - uses: actions/checkout@v4
         with:
@@ -127,8 +139,8 @@ jobs:
           test "$(git -C dependencies/image-build rev-parse HEAD)" = 1f07e83dbd80dacb9bed0d6494c697375f0e26cd
       - name: Verify selected inherited-process runtime and retained original source tuple
         run: |
-          test "$(git -C companions/root-control rev-parse HEAD)" = db84200822506f41a8df068b997e64ee74ae3ece
-          test "$(git -C companions/host-install rev-parse HEAD)" = 994f4985be71c08aa1d2d8114c55c6c4d0617665
+          test "$(git -C companions/root-control-inherited rev-parse HEAD)" = db84200822506f41a8df068b997e64ee74ae3ece
+          test "$(git -C companions/host-install-fonts-migration rev-parse HEAD)" = 994f4985be71c08aa1d2d8114c55c6c4d0617665
           test "$(git -C companions/box-control-inherited rev-parse HEAD)" = fdafbfb3032847b73c77abd9d90d769e43fddf85
           test "$(git -C companions/image-build-inherited rev-parse HEAD)" = aa65dfe264eea92ce210895f462d4a8c63e23ff2
           cmp dependencies/image-build/project/bootstrap/graphics-fonts.py companions/image-build-inherited/project/bootstrap/graphics-fonts.py
@@ -147,11 +159,11 @@ jobs:
           assert str(lanes.FIRST_FONTS_MIGRATED_ROOT) == "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
           assert "execution_user_id" not in (new_source / "src/zog/image_build/box_control_adapter.py").read_text()
           assert "execution_group_id" not in (new_source / "src/zog/image_build/configuration.py").read_text()
-          controller = Path("companions/root-control/src/zog/root_control/build.py").read_text()
+          controller = Path("companions/root-control-inherited/src/zog/root_control/build.py").read_text()
           assert "'User':" not in controller and "'Group':" not in controller
           protocol = Path("companions/box-control-inherited/box-control/src/zog/box_control/build_protocol.py").read_text()
           assert '"execution_user_id"' not in protocol and '"execution_group_id"' not in protocol
-          installer = Path("companions/host-install/src/zog/host_install/fonts_project_migration.py").read_text()
+          installer = Path("companions/host-install-fonts-migration/src/zog/host_install/fonts_project_migration.py").read_text()
           assert 'NEW = "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"' in installer
           PY
       - name: Trusted Host selection + durable send-once + reconciliation
@@ -159,8 +171,8 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}/tests:${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/host-install/src
           ZOG_HOSTDEPLOY_FONTS_PR7: ${{ github.workspace }}/companions/host-deploy-fonts-pr7
         run: |
-          test "$(git -C companions/root-control rev-parse HEAD)" = db84200822506f41a8df068b997e64ee74ae3ece
-          test "$(git -C companions/host-install rev-parse HEAD)" = 994f4985be71c08aa1d2d8114c55c6c4d0617665
+          test "$(git -C companions/root-control rev-parse HEAD)" = 7838c1ff51bc147521a5e38530a4aed8ff8bbf9a
+          test "$(git -C companions/host-install rev-parse HEAD)" = 0b52eb50073477a1de8504009004eb27d2caa54b
           python -m pytest -q -rs \
             tests/test_gateway_trusted_host_ssm.py \
             tests/test_gateway_generic_pipeline.py \
