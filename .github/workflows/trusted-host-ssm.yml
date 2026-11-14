@@ -140,14 +140,14 @@ jobs:
       # Source archive for native Work: the exact PR head, not GitHub's synthetic merge ref.
       # This is a CI artifact, never a committed bundle or an installation authorization.
       - name: Checkout exact PR head for source handoff
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name == 'pull_request' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: reviewed-source
           persist-credentials: false
       - name: Package audited source identity for Work
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name == 'pull_request' }}
         run: |
           test "$(git -C reviewed-source rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           # The selected source modules exercised above must match the exported head.
@@ -158,7 +158,7 @@ jobs:
           (cd source-handoff && sha256sum host-deploy-source.tar > SHA256SUMS)
           git -C reviewed-source rev-parse HEAD > source-handoff/SOURCE_COMMIT
       - name: Publish exact source archive (seven-day retention)
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ always() && github.event_name == 'pull_request' }}
         uses: actions/upload-artifact@v4
         with:
           name: reviewed-host-deploy-source-${{ github.event.pull_request.head.sha }}
