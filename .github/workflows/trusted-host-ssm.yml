@@ -163,7 +163,7 @@ jobs:
           PY
       - name: Import both capabilities from each SAME selected runtime checkout
         env:
-          PYTHONPATH: ${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/box-control-inherited/box-control/src:${{ github.workspace }}/companions/host-install/src
+          PYTHONPATH: ${{ github.workspace }}/companions/root-control/src:${{ github.workspace }}/companions/box-control-inherited/box-control/src:${{ github.workspace }}/companions/image-build-inherited/src:${{ github.workspace }}/companions/build-record/src:${{ github.workspace }}/companions/host-install/src
         run: |
           python -B - <<'PY'
           from pathlib import Path
