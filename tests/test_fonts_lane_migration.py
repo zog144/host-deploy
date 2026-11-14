@@ -212,6 +212,8 @@ class InitializedHost(FakeHost):
                 "historical_project_materialized": False,
                 "copy_performed": False,
                 "initialized_source_verified": True,
+                "layout_complete": True,
+                "missing_layout_directories": [],
                 "controller_installed": False,
                 "compilation_authorized": False,
                 "manifest_sha256": "1" * 64,
@@ -314,4 +316,29 @@ def test_fabricated_copy_receipt_rejected_by_initialization_stage(tmp_path, monk
         m.stage(root, expected_original_specification_sha256=digest,
                 expected_corrected_specification_sha256=lanes.specification_sha256(corrected),
                 prepared_initialize=True, host_factory=Fabricated)
+    assert not (root / m.INTENT).exists()
+
+
+def test_prepared_initializer_partial_layout_cannot_stage_as_ready(
+        tmp_path, monkeypatch):
+    root, ws, config, path, old, digest = workspace(tmp_path, monkeypatch)
+    corrected = lanes.corrected_first_fonts_specification(old["specification"])
+    new_digest = lanes.specification_sha256(corrected)
+
+    class Partial(InitializedHost):
+        def command(self, script):
+            raw = super().command(script)
+            if script == "host-install-fonts-project-init --verify":
+                result = json.loads(raw)
+                result["layout_complete"] = False
+                result["missing_layout_directories"] = [
+                    "package", "application", "catalogue"]
+                return json.dumps(result)
+            return raw
+
+    with pytest.raises(RuntimeError, match="initialization is not verified"):
+        m.stage(root, expected_original_specification_sha256=digest,
+                expected_corrected_specification_sha256=new_digest,
+                prepared_initialize=True, host_factory=Partial)
+    assert path.read_bytes()
     assert not (root / m.INTENT).exists()
