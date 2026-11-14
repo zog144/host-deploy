@@ -109,7 +109,7 @@ def test_inherited_fonts_argv_uses_only_existing_retained_state_artifact():
     assert "certbot-build-worker" not in repr(argv)
     incorrect = json.loads(json.dumps(record))
     incorrect["specification"]["monthly_pin_identity"] = "sha256:"+"b"*64
-    with pytest.raises(RuntimeError, match="reviewed source binding"):
+    with pytest.raises(RuntimeError, match="approved source binding"):
         lanes.remote_operation_argv(incorrect, str(root/"gateway-requests/job/request.json"))
 
 
