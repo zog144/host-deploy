@@ -157,6 +157,9 @@ def _initialization_verified(host):
             or report.get("initialized_source_verified") is not True
             or report.get("layout_complete") is not True
             or report.get("missing_layout_directories") != []
+            or report.get("runtime_layout", {}).get("status") != "ready"
+            or report.get("runtime_layout", {}).get("missing") != []
+            or report.get("controllers_present") != []
             or report.get("controller_installed") is not False
             or report.get("compilation_authorized") is not False
             or report.get("source_checkouts") != expected
