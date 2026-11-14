@@ -12,11 +12,12 @@ from .provision import configuration
 from .runner import Host
 from .workspace import locked, save
 
-SCHEMA = 4
+SCHEMA = 4  # historical account-selecting lane, read-only
+INHERITED_SCHEMA = 5
 EXTERNAL_STATE_SCHEMA = 3
 MONTHLY_PIN_SCHEMA = 2
 LEGACY_SCHEMA = 1
-_RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCHEMA}
+_RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _REVISION = re.compile(r"[0-9a-f]{40,64}")
 DEFAULT_ROOT = Path("/var/lib/zog/image-build-lanes")
@@ -89,13 +90,13 @@ def validate(spec):
             "monthly_pin_repository_path",
             "monthly_pin_identity",
         }
-    elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA}:
+    elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         required = common | {
             "monthly_pin_repository_path",
             "monthly_pin_identity",
             "observed_state_dir",
         }
-        if schema == SCHEMA:
+        if schema in {SCHEMA, INHERITED_SCHEMA}:
             required.add("python_executable")
     else:
         raise ValueError("unsupported image-build lane specification")
@@ -116,11 +117,11 @@ def validate(spec):
         spec["source_revision"]
     ):
         raise ValueError("lane source revision must be an immutable commit identity")
-    if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA}:
+    if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         _observed_state_path(spec["observed_state_dir"], spec["project_root"])
         if spec["observed_state_dir"] is not None and spec["mode"] != "managed":
             raise ValueError("external observed state requires a managed lane")
-    if schema == SCHEMA:
+    if schema in {SCHEMA, INHERITED_SCHEMA}:
         validate_python_executable(spec["python_executable"])
     if schema == LEGACY_SCHEMA:
         pin_identity = spec["pin_identity"]
@@ -176,13 +177,16 @@ def validate(spec):
         "wait_timeout_seconds",
         "transport_timeout_seconds",
     }
+    if schema == INHERITED_SCHEMA:
+        required_controller -= {"execution_user_id", "execution_group_id"}
     if not isinstance(controller, dict) or set(controller) != required_controller:
         raise ValueError("invalid lane controller policy")
     socket_path = Path(controller["socket_path"])
     if not socket_path.is_absolute():
         raise ValueError("lane root-control socket must be absolute")
-    for key in ("execution_user_id", "execution_group_id"):
-        _positive(controller[key], key, 2**31 - 1)
+    if schema != INHERITED_SCHEMA:
+        for key in ("execution_user_id", "execution_group_id"):
+            _positive(controller[key], key, 2**31 - 1)
     for key in (
         "startup_timeout_seconds",
         "execution_timeout_seconds",
@@ -642,13 +646,13 @@ def inspect(directory, lane):
 
 
 def _controller(spec):
+    if validate(spec)["schema"] != INHERITED_SCHEMA:
+        raise RuntimeError("historical selected-account lane cannot produce new controller; migrate explicitly")
     policy = spec["resource_policy"]
     controller = spec["controller"]
     return {
         "project_root": spec["project_root"],
         "socket_path": controller["socket_path"],
-        "execution_user_id": controller["execution_user_id"],
-        "execution_group_id": controller["execution_group_id"],
         "startup_timeout_seconds": controller["startup_timeout_seconds"],
         "execution_timeout_seconds": controller["execution_timeout_seconds"],
         "termination_grace_seconds": controller["termination_grace_seconds"],
@@ -921,6 +925,8 @@ def remote_operation_argv(record, request_path):
     if record.get("state") != "active":
         raise RuntimeError("image-build lane is not active")
     spec = validate(record["specification"])
+    if spec["schema"] != INHERITED_SCHEMA:
+        raise RuntimeError("historical selected-account lane cannot dispatch; explicit migration required")
     if spec["mode"] != "managed":
         raise RuntimeError("reservation-only lane does not execute remote operations")
     if spec["schema"] == LEGACY_SCHEMA:
@@ -936,7 +942,7 @@ def remote_operation_argv(record, request_path):
     argv = [
         "env",
         "PYTHONPATH=" + str(Path(record["source_root"]) / "src"),
-        (spec["python_executable"] if spec["schema"] == SCHEMA else "python3"),
+        spec["python_executable"],
         "-m",
         "zog.image_build.remote_operations",
         "--repository-root",
@@ -973,3 +979,17 @@ def remote_operation_argv(record, request_path):
         ]
     )
     return argv
+
+
+def corrected_first_fonts_specification(original):
+    """Pure, explicit conversion of a retained first Fonts spec; does not touch a Host."""
+    old = validate(original)
+    if (old["schema"] != SCHEMA or old["lane"] != "gateway-first-fonts-runtime"
+            or old["mode"] != "managed"):
+        raise ValueError("migration requires historical managed first Fonts schema-4 lane")
+    result = json.loads(json.dumps(old))
+    result["schema"] = INHERITED_SCHEMA
+    result["project_root"] = str(DEFAULT_ROOT / old["lane"])
+    result["controller"].pop("execution_user_id")
+    result["controller"].pop("execution_group_id")
+    return validate(result)

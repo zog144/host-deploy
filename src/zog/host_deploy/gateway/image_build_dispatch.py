@@ -38,7 +38,7 @@ def _load_lane_locked(workspace, lane):
     path = Path(workspace) / "image-build-lanes" / (lane + ".json")
     record = json.loads(path.read_text())
     if (
-        record.get("schema") not in {1, 2, 3, 4}
+        record.get("schema") not in image_build_lanes._RECORD_SCHEMAS
         or record.get("lane") != lane
         or record.get("state") != "active"
     ):
@@ -212,9 +212,9 @@ def binding_for_request(
         if host["workspace_id"] != request["workspace_id"]:
             raise RuntimeError("workspace host identity changed before dispatch")
         lane_record, lane_spec = _load_lane_locked(locked, lane)
-        if lane_spec["schema"] != image_build_lanes.SCHEMA:
+        if lane_spec["schema"] != image_build_lanes.INHERITED_SCHEMA:
             raise RuntimeError(
-                "gateway dispatch requires lane schema 4 with a bound Python interpreter; "
+                "gateway dispatch requires inherited-identity lane schema 5; "
                 "legacy prepared operations must not be silently rewritten"
             )
         companion = lane_record.get("runtime_companion")
@@ -314,29 +314,6 @@ def binding_for_request(
     }
     if controller_companion is not None and "--controller-config" in argv:
         binding["controller_companion"] = controller_companion
-    if request["operation"] == "toolchain.submit":
-        from .compiler_execution_identity import validate as validate_execution
-        if task_binding is None:
-            raise RuntimeError("nonroot toolchain requires reviewed protected task")
-        approved_identity = lane_record.get("compiler_execution_identity")
-        if approved_identity is None:
-            raise RuntimeError("nonroot toolchain execution identity not installed")
-        if lane_spec["source_revision"] == image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
-            controller = lane_spec["controller"]
-            if (controller["socket_path"] != approved_identity.get("socket_path")
-                    or controller["execution_user_id"] != approved_identity.get("build_uid")
-                    or controller["execution_group_id"] != approved_identity.get("build_gid")
-                    or controller["execution_timeout_seconds"] > 21600
-                    or lane_spec["resource_policy"]["disk_reservation_bytes"] > 32 * 1024**3):
-                raise RuntimeError("fresh compiler lane exceeds controller/socket/budget binding")
-        binding["compiler_execution_identity"] = validate_execution(
-            approved_identity, project_root=lane_spec["project_root"],
-            python_executable=lane_spec["python_executable"],
-            source_revision=lane_spec["source_revision"],
-            build_record_revision=companion["revision"],
-            box_control_revision=controller_companion["revision"],
-            task_identity=task_catalogue_identity,
-        )
     if task_binding is not None:
         binding["task"] = task_binding["task"]
         binding["task_catalogue_identity"] = task_binding[
@@ -419,34 +396,8 @@ def verify_current_target(gateway_root, binding):
                   image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
               and binding["runtime_profile"]["controller"]):
             raise RuntimeError("new producer dispatch lacks reviewed controller binding")
-    if "compiler_execution_identity" in binding:
-        from .compiler_execution_identity import (
-            FRESH_SCHEMA, validate as validate_execution,
-        )
-        checked = validate_execution(
-            binding["compiler_execution_identity"],
-            project_root=binding["project_root"],
-            python_executable=binding["python_executable"],
-            source_revision=binding["source"]["revision"],
-            build_record_revision=binding["runtime_companion"]["revision"],
-            box_control_revision=binding["controller_companion"]["revision"],
-            task_identity=binding["task_catalogue_identity"],
-            allow_historical=True,
-        )
-        if lane_record.get("compiler_execution_identity") != checked:
-            raise RuntimeError("compiler UID/GID/home/socket identity changed after preparation")
-        if checked["schema"] == FRESH_SCHEMA:
-            cfg = lane_spec["controller"]
-            if (cfg["socket_path"] != checked["socket_path"]
-                    or cfg["execution_user_id"] != checked["build_uid"]
-                    or cfg["execution_group_id"] != checked["build_gid"]
-                    or cfg["execution_timeout_seconds"] > 21600
-                    or lane_spec["resource_policy"]["disk_reservation_bytes"] > 32 * 1024**3):
-                raise RuntimeError("fresh compiler controller/socket/budget drift")
-    elif binding.get("task") and binding["source"]["revision"] in (
-            image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
-            image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION):
-        raise RuntimeError("reviewed compiler dispatch missing nonroot binding")
+    if "compiler_execution_identity" in binding or "compiler_execution_identity" in lane_record:
+        raise RuntimeError("historic account-switch binding cannot be used")
     if lane_record["source_root"] != binding["source_root"]:
         raise RuntimeError("image-build lane source path differs from prepared dispatch")
     expected_argv = image_build_lanes.remote_operation_argv(
