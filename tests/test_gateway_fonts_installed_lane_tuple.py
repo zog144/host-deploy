@@ -32,12 +32,15 @@ def git_blob(path):
     return hashlib.sha1(b"blob "+str(len(raw)).encode("ascii")+bytes([0])+raw).hexdigest()
 
 
+_CURRENT_SPECIFICATION = image_build_lanes.specification  # before fixture-only patch
+
+
 def historical_specification(*args, **kwargs):
     """Serialize an old synthetic lane; not an executable identity selector."""
     user = kwargs.pop("execution_user_id")
     group = kwargs.pop("execution_group_id")
     # Use the current strict API; add historical fields only AFTER it returns.
-    new = image_build_lanes.specification(*args, **kwargs)
+    new = _CURRENT_SPECIFICATION(*args, **kwargs)
     new["schema"] = image_build_lanes.SCHEMA
     new["controller"]["execution_user_id"] = user
     new["controller"]["execution_group_id"] = group
