@@ -32,6 +32,8 @@ spec=json.loads(SPEC)
 root=Path(spec['project_root'])
 python=Path(spec['python_executable'])
 uid,gid=os.geteuid(),os.getegid()
+if uid==0 or gid==0:
+    raise RuntimeError('privileged execution context is not an authorized compiler')
 if not python.is_file() or python.is_symlink() or not os.access(python,os.X_OK):
     raise RuntimeError('selected Python executable is missing or not executable as running process')
 socket=Path(spec['controller']['socket_path'])
@@ -132,7 +134,7 @@ def inspect(host, spec):
             result["status"] not in {"complete","absent","partial"} or
             type(result["effective_user_id"]) is not int or
             type(result["effective_group_id"]) is not int or
-            min(result["effective_user_id"],result["effective_group_id"])<0):
+            min(result["effective_user_id"],result["effective_group_id"])<=0):
         raise RuntimeError("installed controller inspection differs from current execution context")
     return result
 
