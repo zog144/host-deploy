@@ -168,6 +168,25 @@ def _binding(record):
         )
     ):
         raise RuntimeError("image-build dispatch monthly pin identity is invalid")
+    if binding["source"]["revision"] == image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+        if (binding["lane"] != "gateway-first-fonts-runtime"
+                or binding["monthly_pin_identity"] != image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY
+                or monthly_path != image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_PATH):
+            raise RuntimeError("inherited Fonts dispatch has wrong retained pin binding")
+        argv = binding["argv"]
+        expected_artifact = (Path(binding["project_root"]) / "state/image-build/build-record/artifacts"
+                             / binding["monthly_pin_identity"][7:])
+        for flag, expected in (
+            ("--retained-pin-source-revision", image_build_lanes.FIRST_FONTS_PRODUCER_REVISION),
+            ("--retained-pin-repository-path", monthly_path),
+            ("--provenance-pin", str(expected_artifact)),
+        ):
+            if (argv.count(flag) != 1 or argv.index(flag) + 1 >= len(argv)
+                    or argv[argv.index(flag) + 1] != expected):
+                raise RuntimeError("inherited Fonts dispatch arguments differ from retained pin")
+    elif ("--retained-pin-source-revision" in binding["argv"]
+          or "--retained-pin-repository-path" in binding["argv"]):
+        raise RuntimeError("retained pin flags require the exact inherited Fonts producer")
     observed_state = binding["observed_state_dir"]
     if observed_state is not None:
         if (
