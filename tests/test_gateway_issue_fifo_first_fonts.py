@@ -223,8 +223,15 @@ def test_selected_pr7_files_match_exact_source_review():
         return ast.dump(node, include_attributes=False)
     old_owner = root / "src/zog/host_deploy/gateway/graphics_catalogue_owner.py"
     new_owner = Path("src/zog/host_deploy/gateway/graphics_catalogue_owner.py")
-    for name in ("_selection", "prepare", "_protected_store"):
-        assert selected_function(old_owner, name) == selected_function(new_owner, name)
+    # Historical signed-evidence reader and protected destination stay exact.
+    # The catalogue selector/preparer necessarily change to bind the reviewed
+    # identity-free producer and the preserved ORIGINAL compiler evidence.
+    assert selected_function(old_owner, "_protected_store") == selected_function(new_owner, "_protected_store")
+    source = new_owner.read_text()
+    assert "base_acceptance.checked_base(" in source
+    assert "base_acceptance.retained_generation(" in source
+    assert "compiler_base_origin_lane" in source
+    assert "EXECUTABLE_SOURCE" in source
     # PR30 also retains the preexisting reviewed XCB/X11 predecessor argument.
     # It must match PR7's finite task map and Fonts receipt checks.
     import ast

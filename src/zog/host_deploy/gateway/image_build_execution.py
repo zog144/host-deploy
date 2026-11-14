@@ -12,7 +12,6 @@ import shlex
 
 from ..runner import Host
 from .. import image_build_lanes
-from .compiler_execution_identity import validate as validate_execution_identity, IDENTITY_RUNTIME
 from .image_build_dispatch import REMOTE_SCHEMA, verify_current_target
 from .ledger import (
     load_dispatch,
@@ -74,8 +73,7 @@ def _binding(record):
         "remote_request",
         "remote_request_sha256",
     }
-    optional = {"task", "task_catalogue_identity", "controller_companion",
-                "compiler_execution_identity"}
+    optional = {"task", "task_catalogue_identity", "controller_companion"}
     if binding.get("schema") in {2, 3}:
         required.add("python_executable")
         image_build_lanes.validate_python_executable(binding.get("python_executable"))
@@ -133,26 +131,7 @@ def _binding(record):
     if binding.get("schema") != 3 and "controller_companion" in binding:
         raise RuntimeError("legacy dispatch cannot have controller companion")
     if "compiler_execution_identity" in binding:
-        if (binding["schema"] != 3 or binding["source"]["revision"] not in (
-                    image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
-                    image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)
-                or "task" not in binding or "controller_companion" not in binding):
-            raise RuntimeError("compiler nonroot identity is not bound to protected task")
-        validate_execution_identity(
-            binding["compiler_execution_identity"],
-            project_root=binding["project_root"],
-            python_executable=binding["python_executable"],
-            source_revision=binding["source"]["revision"],
-            build_record_revision=binding["runtime_companion"]["revision"],
-            box_control_revision=binding["controller_companion"]["revision"],
-            task_identity=binding["task_catalogue_identity"],
-            allow_historical=True,
-        )
-    elif (binding.get("task")
-          and binding["source"]["revision"] in (
-              image_build_lanes.RESTORED_TOOLCHAIN_PRODUCER_REVISION,
-              image_build_lanes.FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION)):
-        raise RuntimeError("restored toolchain requires nonroot execution identity")
+        raise RuntimeError("legacy account-switch binding cannot execute; migrate explicitly")
     if set(binding) - required - optional or not required.issubset(binding):
         raise RuntimeError("image-build dispatch binding fields are invalid")
     if ("task" in binding) != ("task_catalogue_identity" in binding):
@@ -189,6 +168,25 @@ def _binding(record):
         )
     ):
         raise RuntimeError("image-build dispatch monthly pin identity is invalid")
+    if binding["source"]["revision"] == image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+        if (binding["lane"] != "gateway-first-fonts-runtime"
+                or binding["monthly_pin_identity"] != image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY
+                or monthly_path != image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_PATH):
+            raise RuntimeError("inherited Fonts dispatch has wrong retained pin binding")
+        argv = binding["argv"]
+        expected_artifact = (Path(binding["project_root"]) / "state/image-build/build-record/artifacts"
+                             / binding["monthly_pin_identity"][7:])
+        for flag, expected in (
+            ("--retained-pin-source-revision", image_build_lanes.FIRST_FONTS_PRODUCER_REVISION),
+            ("--retained-pin-repository-path", monthly_path),
+            ("--provenance-pin", str(expected_artifact)),
+        ):
+            if (argv.count(flag) != 1 or argv.index(flag) + 1 >= len(argv)
+                    or argv[argv.index(flag) + 1] != expected):
+                raise RuntimeError("inherited Fonts dispatch arguments differ from retained pin")
+    elif ("--retained-pin-source-revision" in binding["argv"]
+          or "--retained-pin-repository-path" in binding["argv"]):
+        raise RuntimeError("retained pin flags require the exact inherited Fonts producer")
     observed_state = binding["observed_state_dir"]
     if observed_state is not None:
         if (
@@ -254,6 +252,7 @@ import base64
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -270,12 +269,9 @@ monthly_pin_repository_path = sys.argv[5]
 monthly_pin_identity = sys.argv[6]
 request_sha256 = sys.argv[7]
 payload = base64.b64decode(sys.argv[8], validate=True)
-identity = None
-if len(sys.argv) > 9 and sys.argv[9].startswith("identity-v1:"):
-    identity = json.loads(base64.b64decode(sys.argv[9].split(":", 1)[1], validate=True))
-    argv = sys.argv[10:]
-else:
-    argv = sys.argv[9:]
+argv = sys.argv[9:]
+if argv and argv[0].startswith("identity-v1:"):
+    raise SystemExit("account-switch override rejected")
 
 def fail(message):
     raise SystemExit(message)
@@ -336,50 +332,62 @@ if (
     or relative_pin.parts[0] == ".git"
 ):
     fail("bound monthly provenance pin path is unsafe")
-pin_path = source_root.joinpath(*relative_pin.parts)
-current = source_root
-for part in relative_pin.parts:
-    current = current / part
-    if current.is_symlink():
-        fail("bound monthly provenance pin must not traverse a symlink")
-try:
-    resolved_root = source_root.resolve(strict=True)
-    resolved_pin = pin_path.resolve(strict=True)
-    resolved_pin.relative_to(resolved_root)
-except (OSError, ValueError):
-    fail("bound monthly provenance pin escapes deployed checkout")
-if not resolved_pin.is_file():
-    fail("bound monthly provenance pin is not a regular file")
+retained = "--retained-pin-source-revision" in argv
+if retained:
+    # The original source revision is a provenance identity, not executable
+    # code. Only a pre-existing build-record artifact below the same Project
+    # state is eligible; the public checkout must remain clean and pin-free.
+    for flag, required in (
+        ("--retained-pin-source-revision", "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"),
+        ("--retained-pin-repository-path", monthly_pin_repository_path),
+    ):
+        if argv.count(flag) != 1:
+            fail("retained pin source binding is incomplete")
+        pos = argv.index(flag)
+        if pos + 1 >= len(argv) or argv[pos + 1] != required:
+            fail("retained pin source identity differs from reviewed original")
+    state = source_root.parent / "state"
+    pin_path = state / "image-build/build-record/artifacts" / monthly_pin_identity.removeprefix("sha256:")
+    if argv.count("--provenance-pin") != 1 or (
+        argv.index("--provenance-pin") + 1 >= len(argv)
+        or argv[argv.index("--provenance-pin") + 1] != str(pin_path)
+    ):
+        fail("producer pin argument differs from retained artifact")
+    current = state
+    if current.is_symlink() or not current.is_dir():
+        fail("retained image-build state is missing or linked")
+    for part in ("image-build", "build-record", "artifacts", monthly_pin_identity[7:]):
+        current = current / part
+        if current.is_symlink():
+            fail("retained original pin path traverses a symlink")
+    if not current.is_file():
+        fail("retained original pin artifact is absent")
+    st = current.lstat()
+    if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+            or st.st_size > 1048576 or st.st_mode & 0o022):
+        fail("retained original pin artifact type or permissions are unsafe")
+    resolved_pin = current
+else:
+    pin_path = source_root.joinpath(*relative_pin.parts)
+    current = source_root
+    for part in relative_pin.parts:
+        current = current / part
+        if current.is_symlink():
+            fail("bound monthly provenance pin must not traverse a symlink")
+    try:
+        resolved_root = source_root.resolve(strict=True)
+        resolved_pin = pin_path.resolve(strict=True)
+        resolved_pin.relative_to(resolved_root)
+    except (OSError, ValueError):
+        fail("bound monthly provenance pin escapes deployed checkout")
+    if not resolved_pin.is_file():
+        fail("bound monthly provenance pin is not a regular file")
 try:
     pin_digest = hashlib.sha256(resolved_pin.read_bytes()).hexdigest()
 except OSError:
     fail("deployed image-build monthly pin is unavailable")
 if monthly_pin_identity != "sha256:" + pin_digest:
     fail("deployed monthly pin digest differs from lane binding")
-
-if identity is not None:
-    # Root-owned control-plane request/result state must never live in the
-    # controller's writable Project. Verify *every* parent component is a
-    # real root-owned directory; create missing registry directories 0700.
-    expected_base = Path("/var/lib/host-deploy/typed-toolchain-requests")
-    try:
-        request_path.relative_to(expected_base)
-        if result_path.parent != request_path.parent:
-            fail("compiler request/result roots differ")
-        parent = Path("/")
-        for name in request_path.parent.parts[1:]:
-            parent = parent / name
-            if parent.is_symlink():
-                fail("protected compiler registry traverses a symlink")
-            if not parent.exists():
-                parent.mkdir(mode=0o700)
-                fsync_directory(parent.parent)
-            details = parent.stat()
-            if (not parent.is_dir() or details.st_uid != 0
-                    or details.st_mode & 0o022):
-                fail("protected compiler registry ownership unsafe")
-    except (OSError, ValueError):
-        fail("protected compiler registry unavailable")
 
 atomic(request_path, payload)
 
@@ -388,28 +396,7 @@ if result_path.exists():
         fail("retained gateway result is unsafe")
     result_bytes = result_path.read_bytes()
 else:
-    if identity is None:
-        completed = subprocess.run(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300,
-        )
-    else:
-        import fcntl
-        if argv[-1] != str(request_path):
-            fail("frozen compiler request path changed")
-        # Root retains the durable 0700 journal. The controller is given
-        # only sealed, read-only immutable request bytes, never root registry
-        # directory permissions or a writable request/result pathname.
-        descriptor = os.memfd_create("zog-compiler-request", os.MFD_ALLOW_SEALING)
-        try:
-            os.write(descriptor, payload)
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS,
-                fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW |
-                fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
-            completed = _as_controller(
-                identity, argv, request_fd=descriptor, timeout=300)
-        finally:
-            os.close(descriptor)
+    completed = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300)
     if len(completed.stdout) > MAX_STDIO or len(completed.stderr) > MAX_STDIO:
         fail("image-build remote operation output exceeds control-plane limit")
     if completed.returncode:
@@ -511,8 +498,7 @@ def remote_script(binding):
     binding = _binding({"phase": "prepared", "binding": binding})
     request_bytes = _canonical(binding["remote_request"])
     payload = base64.b64encode(request_bytes).decode("ascii")
-    execution = binding.get("compiler_execution_identity")
-    wrapper = (IDENTITY_RUNTIME + "\n" + _WRAPPER) if execution else _WRAPPER
+    wrapper = _WRAPPER
     arguments = [
         (binding["python_executable"] if binding["schema"] in {2, 3} else "python3"),
         "-c",
@@ -525,10 +511,6 @@ def remote_script(binding):
         binding["monthly_pin_identity"],
         binding["remote_request_sha256"],
         payload,
-        *(
-            ["identity-v1:" + base64.b64encode(_canonical(execution)).decode("ascii")]
-            if execution else []
-        ),
         *binding["argv"],
     ]
     return " ".join(shlex.quote(value) for value in arguments)
@@ -591,29 +573,7 @@ def producer_runtime_preflight(host, binding):
             'test -z "$(git -C ' + shlex.quote(box_root)
             + ' status --porcelain=v1 --untracked-files=all)"',
         ))
-    identity = binding.get("compiler_execution_identity")
-    if identity is not None:
-        # The root SSM shell only verifies pinned checkout/ownership; the
-        # image-build preflight itself executes as the actual nonroot owner.
-        reduced = ["env", cli[2], python, *cli[4:]]
-        guarded = IDENTITY_RUNTIME + """
-import json
-import subprocess
-import sys
-identity = json.loads(sys.argv[1])
-producer = json.loads(sys.argv[2])
-observed = _as_controller(identity, producer, timeout=120)
-if observed.returncode:
-    sys.stderr.buffer.write(observed.stderr[-2048:])
-    raise SystemExit("nonroot image-build preflight failed")
-sys.stdout.buffer.write(observed.stdout)
-"""
-        script.append(shlex.join([
-            python, "-c", guarded,
-            _canonical(identity).decode("ascii"), _canonical(reduced).decode("ascii"),
-        ]))
-    else:
-        script.append(shlex.join(cli))
+    script.append(shlex.join(cli))
     raw = host.command("\n".join(script), seconds=120)
     if not isinstance(raw, str) or len(raw) > 32768:
         raise RuntimeError("producer preflight evidence is not bounded")

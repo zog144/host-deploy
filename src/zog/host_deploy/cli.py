@@ -95,12 +95,20 @@ def main():
             command.add_argument('--request-path',required=True)
     # Reviewed first-Fonts path: no caller-supplied spec or identity overrides.
     for name in ('fonts-lane-profile', 'fonts-lane-verify',
-                 'fonts-lane-prepare', 'fonts-lane-activate'):
+                 'fonts-lane-prepare', 'fonts-lane-activate', 'fonts-lane-migration-plan',
+                 'fonts-lane-migration-stage', 'fonts-lane-migration-activate'):
         command = commands.add_parser(name)
         if name != 'fonts-lane-profile':
             command.add_argument('--workspace', required=True)
         if name == 'fonts-lane-activate':
             command.add_argument('--expected-specification-sha256', required=True)
+        if name == 'fonts-lane-migration-stage':
+            command.add_argument('--prepared-initialize', action='store_true',
+                                 help='Use real prepared-only initialization, not copy migration evidence')
+            command.add_argument('--expected-original-specification-sha256', required=True)
+            command.add_argument('--expected-corrected-specification-sha256', required=True)
+        if name == 'fonts-lane-migration-activate':
+            command.add_argument('--expected-corrected-specification-sha256', required=True)
     for name in ['artifact-init','artifact-publish','artifact-fetch','artifact-prune']:
         command=commands.add_parser(name)
         command.add_argument('--store',required=True)
@@ -116,8 +124,22 @@ def main():
             result = fonts_lane_profile.profile()
         elif arguments.command == 'fonts-lane-verify':
             result = fonts_lane_profile.verify(arguments.workspace)
+        elif arguments.command == 'fonts-lane-migration-plan':
+            result = fonts_lane_profile.migration_plan(arguments.workspace)
         elif arguments.command == 'fonts-lane-prepare':
             result = fonts_lane_profile.prepare(arguments.workspace)
+        elif arguments.command == 'fonts-lane-migration-stage':
+            from . import fonts_lane_migration
+            result = fonts_lane_migration.stage(
+                arguments.workspace,
+                expected_original_specification_sha256=arguments.expected_original_specification_sha256,
+                expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256,
+                prepared_initialize=arguments.prepared_initialize)
+        elif arguments.command == 'fonts-lane-migration-activate':
+            from . import fonts_lane_migration
+            result = fonts_lane_migration.activate(
+                arguments.workspace,
+                expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256)
         else:
             from . import image_build_lanes
             result = image_build_lanes.activate(
