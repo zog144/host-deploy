@@ -84,7 +84,7 @@ def test_committed_original_initializer_recovers_to_real_activation(
                 "root=Path(" + repr(str(physical)) + ")")
             code = code.replace(
                 "python=Path(spec['python_executable'])",
-                "python=Path(" + repr(sys.executable) + ")")
+                "python=Path(" + repr(os.path.realpath(sys.executable)) + ")")
             code = code.replace(
                 "socket=Path(spec['controller']['socket_path'])",
                 "socket=Path(" + repr(str(sock_path)) + ")")
