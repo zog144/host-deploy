@@ -20,6 +20,7 @@ from .runner import Host
 from .workspace import locked, save
 
 SCHEMA = "host-deploy-first-fonts-migration-intent-v1"
+INITIALIZATION_SCHEMA = "host-deploy-first-fonts-initialization-intent-v1"
 INTENT = "first-fonts-inherited-migration-v1.json"
 HISTORY = "first-fonts-original-evidence"
 _SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
@@ -128,36 +129,99 @@ def _copy_verified(host):
     return report
 
 
-def _intent(root, workspace, host, old, new, copy):
-    return {"schema": SCHEMA, "phase": "staged",
-            "binding": fonts._binding(workspace, host),
-            "old_specification_sha256": lanes.specification_sha256(old),
-            "new_specification_sha256": lanes.specification_sha256(new),
-            "project_root": str(lanes.FIRST_FONTS_MIGRATED_ROOT),
-            "copy_source_tree_sha256": copy["source_tree_sha256"],
-            "copy_report_sha256": _hash(fonts._canonical(copy)),
-            "source_revision": new["source_revision"],
-            "compiler_authorized": False}
+
+def _initialization_verified(host):
+    """Accept only a REAL owning installer initialization, never a copy receipt.
+
+    The original retained workspace record is separately required to be prepared.
+    Actual Git checkouts at the corrected Project root are individually hashed
+    and authenticated by host-install. Neither OLD nor migration copy is claimed.
+    """
+    report = json.loads(host.command("host-install-fonts-project-init --verify"))
+    expected = {
+        "source": {"repository": "zog144/image-build",
+                   "revision": lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION},
+        "companions/box-control": {"repository": lanes.BOX_CONTROL_REPOSITORY,
+                                   "revision": lanes.FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION},
+        "companions/build-record": {"repository": lanes.BUILD_RECORD_REPOSITORY,
+                                     "revision": lanes.expected_build_record_revision(
+                                         lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION)},
+    }
+    if (type(report) is not dict or report.get("schema") !=
+            "zog-fonts-project-first-initialization-v1"
+            or report.get("action") != "verify"
+            or report.get("old_project") != fonts.RETAINED_PROJECT_ROOT
+            or report.get("new_project") != fonts.PROJECT_ROOT
+            or report.get("historical_project_materialized") is not False
+            or report.get("copy_performed") is not False
+            or report.get("initialized_source_verified") is not True
+            or report.get("controller_installed") is not False
+            or report.get("compilation_authorized") is not False
+            or report.get("source_checkouts") != expected
+            or type(report.get("manifest_sha256")) is not str
+            or not re.fullmatch(r"[a-f0-9]{64}", report["manifest_sha256"])):
+        raise RuntimeError("native first Fonts initialization is not verified")
+    hashes = report.get("source_tree_sha256")
+    if (type(hashes) is not dict or set(hashes) != set(expected)
+            or any(type(v) is not str or not re.fullmatch(r"[a-f0-9]{64}", v)
+                   for v in hashes.values())):
+        raise RuntimeError("first Fonts initialized source trees differ from reviewed inputs")
+    dest = report.get("destination")
+    if (type(dest) is not dict or dest.get("read_write_traverse") is not True
+            or dest.get("state_accessible") is not True
+            or dest.get("source_accessible") is not True):
+        raise RuntimeError("initialized Fonts Project is not accessible to executing process")
+    return report
+
+
+def _intent(root, workspace, host, old, new, evidence, *, prepared_initialize=False):
+    result = {"schema": INITIALIZATION_SCHEMA if prepared_initialize else SCHEMA,
+              "phase": "staged",
+              "source_method": ("prepared-first-initialization" if prepared_initialize
+                                else "verified-legacy-copy"),
+              "binding": fonts._binding(workspace, host),
+              "old_specification_sha256": lanes.specification_sha256(old),
+              "new_specification_sha256": lanes.specification_sha256(new),
+              "project_root": str(lanes.FIRST_FONTS_MIGRATED_ROOT),
+              "source_revision": new["source_revision"],
+              "compiler_authorized": False}
+    if prepared_initialize:
+        result["initialization_manifest_sha256"] = evidence["manifest_sha256"]
+        result["initialized_source_tree_sha256"] = evidence["source_tree_sha256"]
+        result["historical_project_materialized"] = False
+        result["copy_performed"] = False
+    else:
+        result["copy_source_tree_sha256"] = evidence["source_tree_sha256"]
+        result["copy_report_sha256"] = _hash(fonts._canonical(evidence))
+    return result
 
 
 def stage(directory, *, expected_original_specification_sha256,
-          expected_corrected_specification_sha256, host_factory=Host):
-    """Record verified native copy without touching the old lane/controller.
+          expected_corrected_specification_sha256, prepared_initialize=False,
+          host_factory=Host):
+    """Record reviewed copy OR explicit never-materialized initialization.
 
-    Must run while the copied source is still the original checkout; Work then
-    retains the pin and selects the new immutable source/companions.
+    Both cases preserve the historical prepared lane record without changing it.
+    Only the explicit prepared_initialize path accepts initializer evidence.
     """
     with locked(directory) as root:
         workspace, config = fonts._owner(root)
-        _, old, digest = fonts._approved(root)
+        record, old, digest = fonts._approved(root)
         corrected = lanes.corrected_first_fonts_specification(old)
         if (digest != expected_original_specification_sha256 or
                 lanes.specification_sha256(corrected) != expected_corrected_specification_sha256):
             raise RuntimeError("first Fonts migration digest differs from reviewed inputs")
+        if type(prepared_initialize) is not bool:
+            raise RuntimeError("explicit prepared-initialization selector must be Boolean")
+        if prepared_initialize and record["state"] != "prepared":
+            raise RuntimeError("only a never-activated prepared lane may be initialized")
+        expected_schema = INITIALIZATION_SCHEMA if prepared_initialize else SCHEMA
         path = root / INTENT
         if path.exists() or path.is_symlink():
             current = _read(path)
-            if (current.get("schema") == SCHEMA and
+            if (current.get("schema") == expected_schema and
+                    current.get("source_method") ==
+                    ("prepared-first-initialization" if prepared_initialize else "verified-legacy-copy") and
                     current.get("old_specification_sha256") == digest and
                     current.get("new_specification_sha256") ==
                     expected_corrected_specification_sha256 and
@@ -165,8 +229,10 @@ def stage(directory, *, expected_original_specification_sha256,
                 return current  # repeat is read-only; do not redo SSM copy
             raise RuntimeError("existing Fonts migration intent conflicts with approved record")
         host = host_factory(config)
-        copy = _copy_verified(host)
-        expected = _intent(root, workspace, config, old, corrected, copy)
+        evidence = (_initialization_verified(host) if prepared_initialize
+                    else _copy_verified(host))
+        expected = _intent(root, workspace, config, old, corrected, evidence,
+                           prepared_initialize=prepared_initialize)
         # Preserve ordinary disk admission without reinstating RAM reservations.
         capacity = lanes._capacity(host, Path(corrected["project_root"]))
         others = [record for record in lanes._active_records(root)
@@ -240,8 +306,13 @@ def _new_record(spec, intent, archived_sha, archived_path):
             "corrected_specification_sha256": intent["new_specification_sha256"],
             "original_record_sha256": archived_sha,
             "historical_record_path": archived_path,
-            "copy_source_tree_sha256": intent["copy_source_tree_sha256"],
-            "copy_report_sha256": intent["copy_report_sha256"],
+            "source_method": intent.get("source_method", "verified-legacy-copy"),
+            **({"initialization_manifest_sha256": intent["initialization_manifest_sha256"],
+                "initialized_source_tree_sha256": intent["initialized_source_tree_sha256"],
+                "historical_project_materialized": False, "copy_performed": False}
+               if intent["schema"] == INITIALIZATION_SCHEMA else
+               {"copy_source_tree_sha256": intent["copy_source_tree_sha256"],
+                "copy_report_sha256": intent["copy_report_sha256"]}),
             "controller_file": runtime.CONTROLLER_FILE,
             "native_compiler_child_verified": False,
             "compilation_authorized": False,
@@ -286,7 +357,8 @@ def activate(directory, *, expected_corrected_specification_sha256, host_factory
             raise RuntimeError("corrected first Fonts digest differs from reviewed selection")
         intent_path = root / INTENT
         intent = _read(intent_path)
-        if (intent.get("schema") != SCHEMA or intent.get("phase") not in {"staged", "installing"}
+        if (intent.get("schema") not in {SCHEMA, INITIALIZATION_SCHEMA}
+                or intent.get("phase") not in {"staged", "installing"}
                 or intent.get("old_specification_sha256") != old_digest
                 or intent.get("new_specification_sha256") != new_digest
                 or intent.get("binding") != fonts._binding(workspace, config)
@@ -358,12 +430,24 @@ def verify_existing(root, workspace, host, record):
         if selected["producer_revision"] != spec["source_revision"]:
             raise RuntimeError("installed first Fonts companion source differs: " + name)
     intent = _read(root / INTENT)
-    if (intent.get("schema") != SCHEMA or intent.get("phase") != "installing"
+    if (meta.get("source_method") !=
+            ("prepared-first-initialization" if intent.get("schema") == INITIALIZATION_SCHEMA
+             else "verified-legacy-copy")):
+        raise RuntimeError("first Fonts establishment method differs from retained source intent")
+    if (intent.get("schema") not in {SCHEMA, INITIALIZATION_SCHEMA}
+            or intent.get("phase") != "installing"
             or intent.get("binding") != fonts._binding(workspace, host)
             or intent.get("old_specification_sha256") != approved
             or intent.get("new_specification_sha256") != lanes.specification_sha256(expected)
-            or intent.get("copy_source_tree_sha256") != meta.get("copy_source_tree_sha256")
-            or intent.get("copy_report_sha256") != meta.get("copy_report_sha256")):
+            or ((intent.get("initialization_manifest_sha256") !=
+                 meta.get("initialization_manifest_sha256") or
+                 intent.get("initialized_source_tree_sha256") !=
+                 meta.get("initialized_source_tree_sha256") or
+                 meta.get("historical_project_materialized") is not False or
+                 meta.get("copy_performed") is not False)
+                if intent["schema"] == INITIALIZATION_SCHEMA else
+                (intent.get("copy_source_tree_sha256") != meta.get("copy_source_tree_sha256")
+                 or intent.get("copy_report_sha256") != meta.get("copy_report_sha256")))):
         raise RuntimeError("migration intent differs from installed corrected lane")
     return {
         "schema": "host-deploy-first-fonts-activated-history-inspection-v1",

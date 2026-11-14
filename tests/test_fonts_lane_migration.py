@@ -200,3 +200,118 @@ def test_foreign_controller_before_migration_intent_never_accepted(tmp_path, mon
     with pytest.raises(RuntimeError, match="appeared before reviewed installation intent"):
         m.activate(root, expected_corrected_specification_sha256=digest, host_factory=FakeHost)
     assert path.read_bytes() == original
+
+class InitializedHost(FakeHost):
+    def command(self, script):
+        if script == "host-install-fonts-project-init --verify":
+            source = lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+            return json.dumps({
+                "schema": "zog-fonts-project-first-initialization-v1",
+                "action": "verify", "old_project": fonts.RETAINED_PROJECT_ROOT,
+                "new_project": fonts.PROJECT_ROOT,
+                "historical_project_materialized": False,
+                "copy_performed": False,
+                "initialized_source_verified": True,
+                "controller_installed": False,
+                "compilation_authorized": False,
+                "manifest_sha256": "1" * 64,
+                "source_checkouts": {
+                    "source": {"repository": "zog144/image-build", "revision": source},
+                    "companions/box-control": {"repository": lanes.BOX_CONTROL_REPOSITORY,
+                                               "revision": lanes.FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION},
+                    "companions/build-record": {"repository": lanes.BUILD_RECORD_REPOSITORY,
+                                                 "revision": lanes.expected_build_record_revision(source)},
+                },
+                "source_tree_sha256": {name: char * 64 for name, char in
+                                       (("source", "a"), ("companions/box-control", "b"),
+                                        ("companions/build-record", "c"))},
+                "destination": {"read_write_traverse": True, "state_accessible": True,
+                                "source_accessible": True},
+            })
+        if script == "host-install-fonts-project-migrate --verify":
+            raise AssertionError("prepared initialization must not invent a copy receipt")
+        return super().command(script)
+
+
+def test_prepared_never_materialized_initialization_distinct_from_copy(tmp_path, monkeypatch):
+    root, ws, host, path, old, digest = workspace(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    corrected = lanes.corrected_first_fonts_specification(old["specification"])
+    new_digest = lanes.specification_sha256(corrected)
+    intent = m.stage(root, expected_original_specification_sha256=digest,
+                     expected_corrected_specification_sha256=new_digest,
+                     prepared_initialize=True, host_factory=InitializedHost)
+    assert intent["schema"] == m.INITIALIZATION_SCHEMA
+    assert intent["source_method"] == "prepared-first-initialization"
+    assert intent["initialization_manifest_sha256"] == "1" * 64
+    assert "copy_report_sha256" not in intent
+    assert "copy_source_tree_sha256" not in intent
+    assert intent["historical_project_materialized"] is False
+    assert path.read_bytes() == original
+    assert m.stage(root, expected_original_specification_sha256=digest,
+                   expected_corrected_specification_sha256=new_digest,
+                   prepared_initialize=True,
+                   host_factory=lambda *_: pytest.fail("idempotent stage must not call SSM")) == intent
+    with pytest.raises(RuntimeError, match="conflicts"):
+        m.stage(root, expected_original_specification_sha256=digest,
+                expected_corrected_specification_sha256=new_digest,
+                prepared_initialize=False, host_factory=FakeHost)
+    assert path.read_bytes() == original
+
+
+def test_never_created_activation_uses_real_init_not_copy_receipt(tmp_path, monkeypatch):
+    root, ws, host, path, old, digest = workspace(tmp_path, monkeypatch)
+    original = path.read_bytes()
+    corrected = lanes.corrected_first_fonts_specification(old["specification"])
+    new_digest = lanes.specification_sha256(corrected)
+    m.stage(root, expected_original_specification_sha256=digest,
+            expected_corrected_specification_sha256=new_digest,
+            prepared_initialize=True, host_factory=InitializedHost)
+    observed = {"status": "prepared"}
+    writes = []
+    monkeypatch.setattr(m, "_source_selection", lambda *a: {"verified": True})
+    monkeypatch.setattr(m.runtime, "inspect", lambda *a: dict(observed))
+    def install(*_):
+        writes.append(True)
+        observed["status"] = "complete"
+    monkeypatch.setattr(m.runtime, "install", install)
+    active = m.activate(root, expected_corrected_specification_sha256=new_digest,
+                        host_factory=InitializedHost)
+    assert active["fonts_migration"]["source_method"] == "prepared-first-initialization"
+    assert active["fonts_migration"]["historical_project_materialized"] is False
+    assert "copy_report_sha256" not in active["fonts_migration"]
+    assert Path(active["fonts_migration"]["historical_record_path"]).read_bytes() == original
+    assert m.verify_existing(root, ws, host, active)["execution_authorized"] is False
+    assert m.activate(root, expected_corrected_specification_sha256=new_digest,
+                      host_factory=InitializedHost) == active
+    assert len(writes) == 1
+
+
+def test_previously_active_lane_cannot_be_reinitialized(tmp_path, monkeypatch):
+    root, ws, host, path, old, digest = workspace(tmp_path, monkeypatch)
+    old["state"] = "active"
+    from zog.host_deploy.workspace import save
+    save(path, old)
+    corrected = lanes.corrected_first_fonts_specification(old["specification"])
+    with pytest.raises(RuntimeError, match="only a never-activated prepared lane"):
+        m.stage(root, expected_original_specification_sha256=digest,
+                expected_corrected_specification_sha256=lanes.specification_sha256(corrected),
+                prepared_initialize=True,
+                host_factory=lambda *_: pytest.fail("must reject before contacting Host"))
+    assert not (root / m.INTENT).exists()
+
+
+def test_fabricated_copy_receipt_rejected_by_initialization_stage(tmp_path, monkeypatch):
+    root, ws, host, path, old, digest = workspace(tmp_path, monkeypatch)
+    class Fabricated(InitializedHost):
+        def command(self, script):
+            report = json.loads(super().command(script))
+            if script == "host-install-fonts-project-init --verify":
+                report["copy_performed"] = True
+            return json.dumps(report)
+    corrected = lanes.corrected_first_fonts_specification(old["specification"])
+    with pytest.raises(RuntimeError, match="initialization is not verified"):
+        m.stage(root, expected_original_specification_sha256=digest,
+                expected_corrected_specification_sha256=lanes.specification_sha256(corrected),
+                prepared_initialize=True, host_factory=Fabricated)
+    assert not (root / m.INTENT).exists()

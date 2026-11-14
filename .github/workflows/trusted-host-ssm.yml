@@ -28,6 +28,8 @@ on:
       - tests/test_fonts_catalogue_recovery.py
       - src/zog/host_deploy/fonts_lane_runtime.py
       - src/zog/host_deploy/fonts_pin_retention.py
+      - src/zog/host_deploy/fonts_lane_migration.py
+      - tests/test_fonts_prepared_pin_provenance.py
       - tests/test_fonts_pin_retention.py
       - tests/test_image_build_lanes.py
       - src/zog/host_deploy/gateway/image_build_execution.py
@@ -67,7 +69,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/host-install
-          ref: 1429ac6477fb230b428dc7e3e614543cace38ecb
+          ref: 0e435a21fc12a6950163b72733a9872494279a71
           path: companions/host-install
           persist-credentials: false
       - uses: actions/checkout@v4
@@ -131,7 +133,7 @@ jobs:
       - name: Verify selected inherited-process runtime and retained original source tuple
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = 6b9c4592438ff488646e59f025813d919119ab12
-          test "$(git -C companions/host-install rev-parse HEAD)" = 1429ac6477fb230b428dc7e3e614543cace38ecb
+          test "$(git -C companions/host-install rev-parse HEAD)" = 0e435a21fc12a6950163b72733a9872494279a71
           test "$(git -C companions/box-control-inherited rev-parse HEAD)" = fdafbfb3032847b73c77abd9d90d769e43fddf85
           test "$(git -C companions/image-build-inherited rev-parse HEAD)" = 620378bdd8075daeb5eaad45eedea4af7db36423
           cmp dependencies/image-build/project/bootstrap/graphics-fonts.py companions/image-build-inherited/project/bootstrap/graphics-fonts.py
@@ -164,8 +166,19 @@ jobs:
           assert Path("companions/root-control/src/zog/root_control/task_c_trusted_host.py").is_file()
           assert Path("companions/host-install/src/zog/host_install/task_c_local_install.py").is_file()
           assert Path("companions/host-install/src/zog/host_install/fonts_project_migration.py").is_file()
+          assert Path("companions/host-install/src/zog/host_install/fonts_project_initialization.py").is_file()
           assert not Path("companions/root-control-inherited").exists()
           assert not Path("companions/host-install-fonts-migration").exists()
+          PY
+      - name: Authenticate original pin object without a historical Project checkout
+        run: |
+          git clone --bare --no-hardlinks dependencies/image-build /tmp/first-fonts-original-provenance.git
+          git --git-dir=/tmp/first-fonts-original-provenance.git remote set-url origin https://github.com/zog144/image-build.git
+          PYTHONPATH=src python -B - <<'PY'
+          from pathlib import Path
+          from zog.host_deploy.fonts_pin_retention import _provenance_object, ORIGINAL_SOURCE, RELATIVE_PIN
+          raw = _provenance_object(Path('/tmp/first-fonts-original-provenance.git'), source_revision=ORIGINAL_SOURCE)
+          assert raw == (Path('dependencies/image-build') / RELATIVE_PIN).read_bytes()
           PY
       - name: Import both capabilities from each SAME selected runtime checkout
         env:
@@ -175,7 +188,7 @@ jobs:
           from pathlib import Path
           from zog.root_control.build import BuildBackend, canonical_request
           from zog.root_control.task_c_trusted_host import LocalTaskCJournal
-          from zog.host_install import fonts_project_migration, task_c_local_install
+          from zog.host_install import fonts_project_migration, fonts_project_initialization, task_c_local_install
           root=Path('companions/root-control/src/zog/root_control')
           host=Path('companions/host-install/src/zog/host_install')
           assert Path(BuildBackend.__module__.replace('.', '/')).name == 'build' or callable(BuildBackend.start)
@@ -183,6 +196,8 @@ jobs:
           assert Path(task_c_local_install.__file__).resolve().parent == host.resolve()
           assert Path(fonts_project_migration.__file__).resolve().parent == host.resolve()
           assert fonts_project_migration.NEW == '/var/lib/zog/image-build/projects/gateway-first-fonts-runtime'
+          assert fonts_project_initialization.SCHEMA == 'zog-fonts-project-first-initialization-v1'
+          assert callable(fonts_project_initialization.operation)
           assert Path(canonical_request.__code__.co_filename).resolve().parent == root.resolve()
           PY
       - name: Trusted Host selection + durable send-once + reconciliation
@@ -191,7 +206,7 @@ jobs:
           ZOG_HOSTDEPLOY_FONTS_PR7: ${{ github.workspace }}/companions/host-deploy-fonts-pr7
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = 6b9c4592438ff488646e59f025813d919119ab12
-          test "$(git -C companions/host-install rev-parse HEAD)" = 1429ac6477fb230b428dc7e3e614543cace38ecb
+          test "$(git -C companions/host-install rev-parse HEAD)" = 0e435a21fc12a6950163b72733a9872494279a71
           python -m pytest -q -rs \
             tests/test_gateway_trusted_host_ssm.py \
             tests/test_gateway_generic_pipeline.py \
@@ -204,6 +219,7 @@ jobs:
             tests/test_fonts_lane_profile.py \
             tests/test_fonts_lane_migration.py \
             tests/test_fonts_pin_retention.py \
+            tests/test_fonts_prepared_pin_provenance.py \
             tests/test_first_fonts_inherited_identity.py \
             tests/test_fonts_runtime_process_identity.py \
             tests/test_fonts_catalogue_recovery.py \

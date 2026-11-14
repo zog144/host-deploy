@@ -103,6 +103,8 @@ def main():
         if name == 'fonts-lane-activate':
             command.add_argument('--expected-specification-sha256', required=True)
         if name == 'fonts-lane-migration-stage':
+            command.add_argument('--prepared-initialize', action='store_true',
+                                 help='Use real prepared-only initialization, not copy migration evidence')
             command.add_argument('--expected-original-specification-sha256', required=True)
             command.add_argument('--expected-corrected-specification-sha256', required=True)
         if name == 'fonts-lane-migration-activate':
@@ -131,7 +133,8 @@ def main():
             result = fonts_lane_migration.stage(
                 arguments.workspace,
                 expected_original_specification_sha256=arguments.expected_original_specification_sha256,
-                expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256)
+                expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256,
+                prepared_initialize=arguments.prepared_initialize)
         elif arguments.command == 'fonts-lane-migration-activate':
             from . import fonts_lane_migration
             result = fonts_lane_migration.activate(

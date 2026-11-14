@@ -211,7 +211,7 @@ def migration_plan(directory):
         corrected = lanes.corrected_first_fonts_specification(original)
         return {
             "schema": "host-deploy-first-fonts-identity-migration-plan-v2",
-            "status": "requires-native-data-migration-and-compatible-producer",
+            "status": "requires-reviewed-project-establishment-and-compatible-producer",
             "execution_authorized": False,
             "corrected_specification_is_executable": False,
             "binding": _binding(workspace, host),
@@ -222,6 +222,8 @@ def migration_plan(directory):
             "corrected_specification_sha256": lanes.specification_sha256(corrected),
             "corrected_project_root": corrected["project_root"],
             "migration_producer": "host-install-fonts-project-migrate",
+            "prepared_initialization_producer": "host-install-fonts-project-init",
+            "prepared_initialization_requires_absent_historical_project": True,
             "migration_copy_verified": False,
             "controller_rebinding_verified": False,
             "compiler_child_identity_verified": False,

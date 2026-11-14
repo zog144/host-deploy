@@ -16,7 +16,7 @@ in an SSM shell measures *that SSM process*, not an installed build child.
 | Program | Reviewed commit | Role |
 |---|---|---|
 | root-control PR #49 | `6b9c4592438ff488646e59f025813d919119ab12` | Combined trusted-Host Task C and identity-free build backend in **one** installation |
-| host-install PR #37 | `1429ac6477fb230b428dc7e3e614543cace38ecb` | Combined trusted-Host installer and non-destructive Fonts Project migration in **one** installation |
+| host-install PR #38 | `0e435a21fc12a6950163b72733a9872494279a71` | Combined Task C, existing copy migrator and prepared-only initialization in **one** installation |
 | box-control PR #20 | `fdafbfb3032847b73c77abd9d90d769e43fddf85` | No selectable build UID/GID in registration or operations |
 | image-build PR #23 | `620378bdd8075daeb5eaad45eedea4af7db36423` | Identity-free executable with separately retained original October pin |
 | build-record | `a866c9c4b0dd385045f00ce2de7d809f5b67c104` | Producer-required companion |
@@ -57,8 +57,8 @@ authorization for copy and remote installation.
    by host-deploy**, not selected or typed by an operator. Inspect the entire
    plan and source/Host/copy destination before continuing.
 
-2. On the compiler Host, through its **existing authorized administrator process**,
-   run the reviewed host-install tool *as-is*, with no identity switching. The
+2. **ONLY when the historical Project genuinely exists**, on the compiler Host, through its **existing authorized administrator process**,
+   run the reviewed copy migrator *as-is*, with no identity switching. The
    destination is fixed at
    `/var/lib/zog/image-build/projects/gateway-first-fonts-runtime`:
 
@@ -75,7 +75,77 @@ authorization for copy and remote installation.
    original/new effective ownership. **Do not** edit the copied `controller.json`;
    it remains archival provenance.
 
-3. While copied `source` still points to the *original* immutable producer,
+**Prepared but never materialized (Work evidence of November 14):**
+
+The approved original lane is `prepared`, and native SSM found **both**
+`/home/certbot-build-owner/gateway-first-fonts-runtime` and
+`/var/lib/zog/image-build/projects/gateway-first-fonts-runtime` absent. This
+is NOT a failed copy migration. Do **not** create the old path or manufacture
+a copy receipt. In this case select the separate owner-supported initializer
+from host-install PR #38, which accepts three **real clean immutable Git
+checkouts** acquired via the ordinary reviewed source mechanism. Example
+inputs are placeholders for authenticated actual source trees; do not
+construct an empty `source` directory to satisfy validation:
+
+```sh
+host-install-fonts-project-init --inspect
+host-install-fonts-project-init --stage \
+  --source-checkout "$REVIEWED_IMAGE_BUILD_CHECKOUT" \
+  --box-control-checkout "$REVIEWED_BOX_CONTROL_CHECKOUT" \
+  --build-record-checkout "$REVIEWED_BUILD_RECORD_CHECKOUT"
+host-install-fonts-project-init --commit
+host-install-fonts-project-init --verify
+```
+
+The initializer rejects a present historical project or a conflicting
+pending/destination tree. Its `zog-fonts-project-first-initialization-v1`
+report describes **actual installation of the new source**; it expressly
+does not claim a historical copy, a historical controller, or a compilation.
+After a successful verified initialization, use this *different* host-deploy
+stage command:
+
+```sh
+host-deploy fonts-lane-migration-stage --prepared-initialize \
+  --workspace "$WORKSPACE" \
+  --expected-original-specification-sha256 "$OLD_DIGEST" \
+  --expected-corrected-specification-sha256 "$NEW_DIGEST"
+```
+
+This requires the original lane to be **prepared**, and binds the real init
+manifest/reviewed source tree identities in a distinct intent schema. A
+missing Project for an original `active` lane is recovery, never initialization.
+Old schema-4 record bytes stay untouched. Do not also run the copied-source
+stage command below.
+
+The original monthly pin is **not** present in the new source checkout, nor
+can the new revision be assumed to contain the original Git commit; the
+revisions have diverged. Obtain the genuine pin from the **original Git
+provenance object** in a separately reviewed bare repository, with the exact
+original commit fetched (no checkout of the old source anywhere in Project):
+
+```sh
+GIT_DIR='/var/lib/zog/image-build/provenance/original-image-build.git'
+# Acquire the bare provenance repository by the reviewed original source
+# acquisition mechanism; inspect its origin and actual commit object.
+git --git-dir="$GIT_DIR" rev-parse --verify \
+  '1f07e83dbd80dacb9bed0d6494c697375f0e26cd^{commit}'
+python3 -m zog.host_deploy.fonts_pin_retention \
+  --retain-from-provenance --provenance-git-dir "$GIT_DIR"
+```
+
+The command verifies the original Git origin, the exact commit and regular
+tracked pin blob, original schema/month, digest
+`d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`,
+and writes the verified artifact only into the initialized Project state.
+Do not fabricate pin bytes, create an old `source` directory or write an
+unverified JSON. The initialized Project already contains the exact new
+producer and companion Git checkouts; **skip the copy-path source replacement
+step 5**. Continue at controller activation in step 6.
+
+The previously active-but-missing case is **HOLD** pending recovery, regardless
+of the presence of valid bare Git objects or installer checkouts.
+
+3. **Copy path only:** while copied `source` still points to the *original* immutable producer,
    stage the verified data copy in the original owning host-deploy workspace:
 
    ```sh
@@ -92,7 +162,7 @@ authorization for copy and remote installation.
    copied original source checkout, because host-install must compare the
    original source and copy first.
 
-4. Still on the compiler Host and before replacing the copied checkout, capture
+4. **Copy path only:** still on the compiler Host and before replacing the copied checkout, capture
    the historical pin into its **existing** content-addressed build-record
    artifact store:
 
@@ -104,7 +174,7 @@ authorization for copy and remote installation.
    bytes and SHA-256, publishes only absent pin bytes without overwrite, and
    leaves the original private-home source untouched. Inspect its result.
 
-5. Install the exact new producer **into the copied Project** using normal
+5. **Copy path only:** install the exact new producer **into the copied Project** using normal
    Git source-acquisition facilities and existing process identity. For a
    pre-existing authenticated checkout with the reviewed origin available:
 
@@ -148,7 +218,8 @@ authorization for copy and remote installation.
    The corrected active schema-5 lane gets generated source-specific
    `runtime_companion`, `controller_companion`, source root, controller path,
    state path, old/new specification digests, original byte archive SHA and
-   reviewed copy digest. Repeated activation must verify the installed result
+   **either verified historical-copy evidence or separate genuine
+   first-initialization evidence (never a synthetic copy receipt)**. Repeated activation must verify the installed result
    and return without any file rewrite. Local history inspection continues to
    verify old SHA and exact original evidence. **An active lane record is not
    a compiler-child credential proof or permission to submit a job.**
