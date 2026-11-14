@@ -135,6 +135,9 @@ jobs:
           test "$(git -C companions/image-build-inherited rev-parse HEAD)" = e4724199155c1f2db4db17f30af53fd881aca8d3
           cmp dependencies/image-build/project/bootstrap/graphics-fonts.py companions/image-build-inherited/project/bootstrap/graphics-fonts.py
           test ! -e companions/image-build-inherited/project/pins/2026-10-01/commit-pin.py
+          test "$(sha256sum dependencies/image-build/project/pins/2026-10-01/commit-pin.py | cut -d' ' -f1)" = d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36
+          grep -q -- '--retained-pin-source-revision' companions/image-build-inherited/src/zog/image_build/remote_operations.py
+          grep -q -- 'monthly_pin_path=monthly_pin_path' companions/image-build-inherited/src/zog/image_build/recipe_snapshots.py
           PYTHONPATH=src python -B - <<'PY'
           from pathlib import Path
           from zog.host_deploy import image_build_lanes as lanes
