@@ -133,6 +133,12 @@ def operation(action, *, filesystem_root=Path("/"), source_revision=ORIGINAL_SOU
         _reject_linked_path(project, target)
         if _bytes(target) != raw:
             raise RuntimeError("retained pin changed after atomic publication")
+    # Inspect original source again so a checkout edit during staging cannot
+    # silently produce an artifact derived from stale filesystem evidence.
+    if (_git(source, "rev-parse", "--verify", "HEAD") != source_revision
+            or _git(source, "status", "--porcelain=v1", "--untracked-files=all")
+            or _bytes(original) != raw):
+        raise RuntimeError("original Fonts source changed during pin retention")
     return {
         "schema": SCHEMA,
         "action": action,
