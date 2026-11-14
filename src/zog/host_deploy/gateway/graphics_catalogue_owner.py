@@ -24,7 +24,8 @@ PIN_DATE = "2026-10-01"
 TASK = "graphics-fonts-image-v1"
 EVIDENCE_SCHEMA = "host-deploy-reviewed-compiler-base-selection-v1"
 READER_SOURCE = "1616f192ef9d8964a8f37f32a86c69c0242a213c"
-RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v1"
+RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v2"
+EXECUTABLE_SOURCE = image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
 STORE = Path("/var/lib/host-deploy-gateway")
 CATALOGUE = STORE / "first-fonts-catalogue-v1.json"
 RECEIPT = STORE / "first-fonts-catalogue-receipt-v1.json"
@@ -70,10 +71,18 @@ def _selection(lane_record, accepted_base, issuer):
     selection are the sources of these identifiers.
     """
     lane = image_build_lanes.validate(lane_record)
-    if (lane["schema"] != image_build_lanes.SCHEMA
+    # Schema-4 lane selection remains available ONLY for validating historical
+    # signed input evidence. New native catalogue installation requires schema 5
+    # and a newly verified identity-free executable revision.
+    historical = (lane["schema"] == image_build_lanes.SCHEMA
+                  and lane["source_revision"] == SOURCE)
+    corrected = (lane["schema"] == image_build_lanes.INHERITED_SCHEMA
+                 and lane["lane"] == "gateway-first-fonts-runtime"
+                 and lane["project_root"] == str(image_build_lanes.FIRST_FONTS_MIGRATED_ROOT)
+                 and lane["source_revision"] == EXECUTABLE_SOURCE)
+    if (not (historical or corrected)
             or lane["mode"] != "managed"
             or lane["source_repository"] != REPOSITORY
-            or lane["source_revision"] != SOURCE
             or lane["monthly_pin_repository_path"] != PIN_PATH
             or lane["monthly_pin_identity"] != "sha256:" + PIN_SHA256):
         _fail()
@@ -160,7 +169,7 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
     }
     retained_identity = _sha(_canonical(accepted_input))
     task = {
-        "source_repository": REPOSITORY, "source_revision": SOURCE,
+        "source_repository": REPOSITORY, "source_revision": lane["source_revision"],
         "lane": lane["lane"], "lane_owner": lane["provenance_host_id"],
         "monthly_pin_repository_path": PIN_PATH,
         "monthly_pin_identity": "sha256:" + PIN_SHA256,
@@ -195,6 +204,8 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             "accepted_base_environment_sha256": bound_base["execution_environment_sha256"],
             "accepted_base_historical_provenance": bound_base["historical_provenance"],
             "lane": lane["lane"], "host_id": selection["host_id"],
+            "source_revision": lane["source_revision"],
+            "lane_specification_sha256": image_build_lanes.specification_sha256(lane),
             "installation_id":selection["installation_id"],
             "accepted_base_generation_id":selection["accepted_base_generation_id"],
             "compiler_authorized": False}
@@ -268,7 +279,10 @@ def install_native(*, lane_name, generation_id,
                 read_compiler_base_receipt, read_compiler_base_issuer,
                 read_compiler_base_binding))):
         _fail()
+    # Keep the original compiler/October pin and its signed reader intact,
+    # while authenticating the new executable separately.
     if (attest_installed_source(SOURCE) is not True
+            or attest_installed_source(EXECUTABLE_SOURCE) is not True
             or attest_installed_source(READER_SOURCE) is not True):
         _fail()
     root = STORE
@@ -295,6 +309,7 @@ def install_native(*, lane_name, generation_id,
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
     )
     if (candidate["lane"] != lane_name
+            or candidate["source_revision"] != EXECUTABLE_SOURCE
             or candidate["accepted_base_generation_id"] != generation_id
             or attest_host_identity(
                 candidate["host_id"], candidate["installation_id"]) is not True):
@@ -303,7 +318,8 @@ def install_native(*, lane_name, generation_id,
     receipt = {
         "schema": RECEIPT_SCHEMA,
         "catalogue_sha256": candidate["sha256"],
-        "source_revision": SOURCE,
+        "source_revision": candidate["source_revision"],
+        "lane_specification_sha256": candidate["lane_specification_sha256"],
         "accepted_base_generation_id": candidate["accepted_base_generation_id"],
         "accepted_base_receipt_sha256": candidate["accepted_base_receipt_sha256"],
         "retained_acceptance_sha256": candidate["retained_acceptance_sha256"],

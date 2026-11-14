@@ -152,6 +152,10 @@ def verify(directory, *, now=None):
     """
     with locked(directory) as root:
         workspace, host = _owner(root)
+        selected = _read_regular(lanes._path(root, LANE))
+        if selected.get("schema") == lanes.INHERITED_SCHEMA:
+            from . import fonts_lane_migration
+            return fonts_lane_migration.verify_existing(root, workspace, host, selected)
         record, spec, digest = _approved(root)
         return {
             "schema": "host-deploy-first-fonts-historical-inspection-v1",

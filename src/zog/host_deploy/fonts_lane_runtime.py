@@ -10,6 +10,8 @@ import shlex
 from . import image_build_lanes as lanes
 
 _SUBDIRS = ("", "package", "application", "catalogue", "state", "source")
+# The copied historical controller.json is immutable provenance, not runtime policy.
+CONTROLLER_FILE = "controller-inherited-v1.json"
 
 
 def _controller_bytes(spec):
@@ -59,7 +61,7 @@ for path in paths:
     if not os.access(path,os.R_OK|os.W_OK|os.X_OK,effective_ids=True):
         raise RuntimeError('running process cannot access application directory: '+str(path))
     statuses.append(True)
-config=root/'controller.json'
+config=root/CONTROLLER
 try: fd=os.open(config,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC)
 except FileNotFoundError: fd=None
 present=fd is not None
@@ -102,6 +104,7 @@ if INSTALL:
     statuses=[True]*len(paths)
     present=True
 status=('complete' if all(statuses) and present else
+        'prepared' if all(statuses) and not present else
         'absent' if not any(statuses) and not present else 'partial')
 print(json.dumps({
     'status':status,'project_root':str(root),'socket_path':str(socket),
@@ -112,6 +115,7 @@ print(json.dumps({
 '''
     prefix = ("SPEC=" + repr(json.dumps(spec,sort_keys=True)) + "\n"
               "PARTS=" + repr(_SUBDIRS) + "\n"
+              "CONTROLLER=" + repr(CONTROLLER_FILE) + "\n"
               "EXPECTED=" + repr(_controller_bytes(spec)) + "\n"
               "INSTALL=" + repr(bool(install)) + "\n")
     return "python3 -c " + shlex.quote(prefix + code)
@@ -133,7 +137,7 @@ def inspect(host, spec):
     if (type(result) is not dict or
             set(result) != set(fixed)|{"status","effective_user_id","effective_group_id"} or
             any(result[key]!=value for key,value in fixed.items()) or
-            result["status"] not in {"complete","absent","partial"} or
+            result["status"] not in {"complete","absent","prepared","partial"} or
             type(result["effective_user_id"]) is not int or
             type(result["effective_group_id"]) is not int or
             min(result["effective_user_id"],result["effective_group_id"])<0):

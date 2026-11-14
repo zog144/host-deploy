@@ -227,7 +227,7 @@ def test_legacy_runtime_probe_is_refused_and_new_probe_never_selects_an_account(
     assert "getpwuid" not in script
     assert "getgrgid" not in script
     assert "os.chown" not in script
-    assert "controller.json" in script
+    assert runtime.CONTROLLER_FILE in script
     assert "/etc/zog/first-fonts-controller-facts" not in script
     assert "os.O_NOFOLLOW" in script
     assert runtime.expected_controller_sha256(new)

@@ -54,7 +54,7 @@ def test_local_probe_and_install_keep_existing_effective_credentials(tmp_path):
         installed = runtime.install(_ExecutingHost(), spec)
         assert installed["status"] == "complete"
         assert (installed["effective_user_id"], installed["effective_group_id"]) == (os.geteuid(), os.getegid())
-        assert json.loads((tmp_path / "local-fixture/controller.json").read_text()) == lanes._controller(spec)
+        assert json.loads((tmp_path / "local-fixture" / runtime.CONTROLLER_FILE).read_text()) == lanes._controller(spec)
         assert runtime.install(_ExecutingHost(), spec) == installed
 
 
@@ -66,9 +66,10 @@ def test_existing_archival_controller_file_is_not_replaced(tmp_path):
     (root / "controller.json").write_bytes(archival)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as endpoint:
         endpoint.bind(spec["controller"]["socket_path"])
-        with pytest.raises(RuntimeError, match="differs from corrected specification"):
-            runtime.install(_ExecutingHost(), spec)
+        installed = runtime.install(_ExecutingHost(), spec)
+    assert installed["status"] == "complete"
     assert (root / "controller.json").read_bytes() == archival
+    assert json.loads((root / runtime.CONTROLLER_FILE).read_text()) == lanes._controller(spec)
 
 
 def test_missing_parent_reports_access_failure_without_switching_identities(tmp_path):

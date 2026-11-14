@@ -29,6 +29,8 @@ def install_case(tmp_path, monkeypatch):
         "retained_acceptance_sha256": "sha256:" + "c" * 64,
         "host_id": "host-fixture", "installation_id": "installation-fixture",
         "lane": "synthetic-fonts", "compiler_authorized": False,
+        "source_revision": owner.EXECUTABLE_SOURCE,
+        "lane_specification_sha256": "sha256:" + "d" * 64,
     }
     invocations = []
     def vetted_prepare(**kwargs):

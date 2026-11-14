@@ -72,3 +72,13 @@ are unchanged. This source revision does not activate the lane, install a
 controller, select a new catalogue, send an SQS message or compile Fonts.
 A reviewed cross-program runtime source tuple, native migration/credential
 readback and explicit catalogue/controller binding review are still required.
+
+The source-owned combined migration implementation and exact Work procedure is
+`docs/host-deploy/FIRST-FONTS-COMBINED-INHERITED-MIGRATION-WORK-2026-11-14.md`.
+The supported commands `fonts-lane-migration-stage` and
+`fonts-lane-migration-activate` replace the previous non-executable-only hold
+only when the reviewed original lane, verified host-install copy, preserved
+October pin, new clean source/companions and installed controller readback
+match. The original copied `controller.json` is preserved; the new generated
+controller lives in `controller-inherited-v1.json`. No compilation permission,
+service-identity switching or preemptive gateway activation is implied.
