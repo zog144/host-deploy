@@ -905,7 +905,7 @@ def remote_operation_argv(record, request_path):
     ]
     observed_state = (
         spec["observed_state_dir"]
-        if spec["schema"] in {EXTERNAL_STATE_SCHEMA, SCHEMA}
+        if spec["schema"] in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}
         else None
     )
     if observed_state is None:

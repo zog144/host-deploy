@@ -20,11 +20,29 @@ def spec(name="rebuild-oct1", root=None, memory=2_000_000_000, disk=10_000_000_0
         thread_count_maximum=64,
         cpu_weight=50,
         disk_reservation_bytes=disk,
-        execution_user_id=1001,
-        execution_group_id=1001,
         project_root=root,
         observed_state_dir=observed,
+        python_executable="/usr/bin/python3.12",
     )
+
+
+def historical_spec(schema=3, **kwargs):
+    """Test-only serialized evidence from the old account-selecting schema.
+
+    Never expose an account selector through the runtime constructor.
+    """
+    value = spec(**kwargs)
+    value["schema"] = schema
+    value["controller"]["execution_user_id"] = 1001
+    value["controller"]["execution_group_id"] = 1001
+    if schema < 4:
+        value.pop("python_executable")
+    if schema < 3:
+        value.pop("observed_state_dir")
+    if schema == 1:
+        value["pin_identity"] = value.pop("monthly_pin_identity")
+        value.pop("monthly_pin_repository_path")
+    return lanes.validate(value)
 
 
 def workspace(tmp_path):
@@ -70,8 +88,7 @@ def test_resource_policy_and_cpu_weight_are_bounded():
             thread_count_maximum=1,
             cpu_weight=10001,
             disk_reservation_bytes=1,
-            execution_user_id=1001,
-            execution_group_id=1001,
+            python_executable="/usr/bin/python3.12",
         )
 
 
@@ -86,7 +103,7 @@ def test_remote_operation_argv_is_lane_bound(tmp_path):
         controller_config="/var/lib/zog/image-build-lanes/rebuild-oct1/controller.json",
     )
     argv = lanes.remote_operation_argv(record, "/run/zog/request.json")
-    assert argv[:4] == ["env", "PYTHONPATH=/var/lib/zog/image-build-lanes/rebuild-oct1/source/src", "python3", "-m"]
+    assert argv[:4] == ["env", "PYTHONPATH=/var/lib/zog/image-build-lanes/rebuild-oct1/source/src", "/usr/bin/python3.12", "-m"]
     assert argv[4] == "zog.image_build.remote_operations"
     assert "a" * 40 in argv
     assert "--provenance-host-id" in argv and "host-fixture" in argv
@@ -182,8 +199,7 @@ def test_activate_ignores_host_ram_and_other_lane_memory_values(
         thread_count_maximum=128,
         cpu_weight=200,
         disk_reservation_bytes=10_000_000_000,
-        execution_user_id=1001,
-        execution_group_id=1001,
+        python_executable="/usr/bin/python3.12",
         project_root="/var/lib/station-access/zog-compiler-view",
     )
     lanes.prepare(root, work)
@@ -260,8 +276,7 @@ def test_reservation_lane_accounts_for_existing_work_without_remote_mutation(tmp
         thread_count_maximum=128,
         cpu_weight=200,
         disk_reservation_bytes=20_000_000_000,
-        execution_user_id=1001,
-        execution_group_id=1001,
+        python_executable="/usr/bin/python3.12",
         project_root="/var/lib/station-access/zog-compiler-view",
     )
     lanes.prepare(root, work)
@@ -290,7 +305,7 @@ def test_reservation_lane_accounts_for_existing_work_without_remote_mutation(tmp
 
 def test_new_lane_schema_binds_explicit_monthly_pin_descriptor():
     value = spec()
-    assert value["schema"] == 3
+    assert value["schema"] == lanes.INHERITED_SCHEMA
     assert value["monthly_pin_repository_path"] == "project/pins/2026-10-01/commit-pin.py"
     assert value["monthly_pin_identity"] == "sha256:" + "b" * 64
     assert "pin_identity" not in value
@@ -320,18 +335,12 @@ def test_monthly_pin_path_must_be_safe_repository_relative(path):
             thread_count_maximum=1,
             cpu_weight=100,
             disk_reservation_bytes=1,
-            execution_user_id=1001,
-            execution_group_id=1001,
+            python_executable="/usr/bin/python3.12",
         )
 
 
 def test_legacy_lane_can_be_inspected_but_not_remote_executed():
-    value = spec()
-    legacy = dict(value)
-    legacy["schema"] = 1
-    legacy["pin_identity"] = legacy.pop("monthly_pin_identity")
-    legacy.pop("monthly_pin_repository_path")
-    legacy.pop("observed_state_dir")
+    legacy = historical_spec(schema=1)
     assert lanes.validate(legacy) == legacy
     record = {
         "schema": 1,
@@ -343,13 +352,13 @@ def test_legacy_lane_can_be_inspected_but_not_remote_executed():
         "state_dir": "/var/lib/zog/image-build-lanes/rebuild-oct1/state",
         "controller_config": "/var/lib/zog/image-build-lanes/rebuild-oct1/controller.json",
     }
-    with pytest.raises(RuntimeError, match="legacy image-build lane"):
+    with pytest.raises(RuntimeError, match="historical selected-account lane"):
         lanes.remote_operation_argv(record, "/run/request.json")
 
 
 def test_observation_lane_argv_binds_external_state_and_omits_controller():
     record = {
-        "schema": 3,
+        "schema": lanes.INHERITED_SCHEMA,
         "lane": "gateway-pass4-readonly",
         "specification": spec(
             "gateway-pass4-readonly",
@@ -378,10 +387,8 @@ def test_observed_state_must_be_absolute_and_distinct_from_control_state():
         )
 
 
-def test_schema2_lane_remains_remote_executable_without_observed_state():
-    value = spec()
-    value["schema"] = 2
-    value.pop("observed_state_dir")
+def test_schema2_lane_is_readable_but_cannot_dispatch_with_selected_identity():
+    value = historical_spec(schema=2)
     assert lanes.validate(value) == value
     record = {
         "schema": 2,
@@ -393,9 +400,8 @@ def test_schema2_lane_remains_remote_executable_without_observed_state():
         "state_dir": "/var/lib/zog/image-build-lanes/rebuild-oct1/state",
         "controller_config": "/var/lib/zog/image-build-lanes/rebuild-oct1/controller.json",
     }
-    argv = lanes.remote_operation_argv(record, "/run/request.json")
-    assert "--observed-state-dir" not in argv
-    assert "--controller-config" in argv
+    with pytest.raises(RuntimeError, match="historical selected-account lane"):
+        lanes.remote_operation_argv(record, "/run/request.json")
 
 def test_python_interpreter_path_validation():
     for value in ("python3", "/usr/bin/../bin/python3.12", "/usr/bin/python 3",
@@ -406,7 +412,7 @@ def test_python_interpreter_path_validation():
 
 
 def test_schema_four_requires_explicit_runtime_and_preserves_schema_three():
-    old = spec()
+    old = historical_spec(schema=3)
     assert old["schema"] == 3
     assert lanes.validate(old) == old
     versioned = json.loads(json.dumps(old))
@@ -419,7 +425,7 @@ def test_schema_four_requires_explicit_runtime_and_preserves_schema_three():
 
 def test_bind_python_runtime_upgrades_prepared_lane_once_with_audit(tmp_path):
     root = workspace(tmp_path)
-    before = lanes.prepare(root, spec(observed="/var/lib/existing/state"))
+    before = lanes.prepare(root, historical_spec(observed="/var/lib/existing/state"))
     digest = lanes.specification_sha256(before["specification"])
     original = json.loads(json.dumps(before))
     upgraded = lanes.bind_python_runtime(
@@ -448,7 +454,7 @@ def test_bind_python_runtime_upgrades_prepared_lane_once_with_audit(tmp_path):
 
 def test_bind_python_runtime_refuses_stale_specification_and_conflicting_retry(tmp_path):
     root = workspace(tmp_path)
-    before = lanes.prepare(root, spec())
+    before = lanes.prepare(root, historical_spec())
     digest = lanes.specification_sha256(before["specification"])
     with pytest.raises(ValueError, match="digest differs"):
         lanes.bind_python_runtime(
@@ -477,7 +483,7 @@ def test_bind_python_runtime_refuses_stale_specification_and_conflicting_retry(t
 @pytest.mark.parametrize("state", ["active", "retired"])
 def test_bind_python_runtime_refuses_nonprepared_lane(tmp_path, state):
     root = workspace(tmp_path)
-    prepared = lanes.prepare(root, spec())
+    prepared = lanes.prepare(root, historical_spec())
     digest = lanes.specification_sha256(prepared["specification"])
     path = root / "image-build-lanes" / "rebuild-oct1.json"
     changed = {**prepared, "state": state}
@@ -500,7 +506,7 @@ def test_bind_python_runtime_refuses_nonmanaged_and_partial_records(tmp_path):
         provenance_host_id="host", provenance_project_id="project",
         memory_maximum_bytes=100, thread_count_maximum=1,
         cpu_weight=100, disk_reservation_bytes=100,
-        execution_user_id=1000, execution_group_id=1000,
+        python_executable="/usr/bin/python3.12",
     )
     lane = lanes.prepare(root, reservation)
     digest = lanes.specification_sha256(lane["specification"])
@@ -509,7 +515,7 @@ def test_bind_python_runtime_refuses_nonmanaged_and_partial_records(tmp_path):
             root, "reserved", "/usr/bin/python3.12",
             expected_specification_sha256=digest,
         )
-    ordinary = lanes.prepare(root, spec())
+    ordinary = lanes.prepare(root, historical_spec())
     ordinary_digest = lanes.specification_sha256(ordinary["specification"])
     path = root / "image-build-lanes" / "rebuild-oct1.json"
     ordinary["source_root"] = "/var/lib/example"
@@ -524,7 +530,7 @@ def test_bind_python_runtime_refuses_nonmanaged_and_partial_records(tmp_path):
 
 def test_bind_python_runtime_rejects_symlinked_lane_record(tmp_path):
     root = workspace(tmp_path)
-    before = lanes.prepare(root, spec())
+    before = lanes.prepare(root, historical_spec())
     digest = lanes.specification_sha256(before["specification"])
     path = root / "image-build-lanes" / "rebuild-oct1.json"
     destination = tmp_path / "external-lane.json"
@@ -544,7 +550,7 @@ def test_bind_python_runtime_cli_command_requires_explicit_contract(tmp_path, mo
     from zog.host_deploy.cli import main
 
     root = workspace(tmp_path)
-    before = lanes.prepare(root, spec())
+    before = lanes.prepare(root, historical_spec())
     digest = lanes.specification_sha256(before["specification"])
     monkeypatch.setattr(sys, "argv", [
         "host-deploy", "lane-bind-python",
@@ -619,11 +625,9 @@ def test_preflight_refuses_request_controlled_capability_names():
         )
 
 
-def test_active_schema_four_lane_binds_reviewed_companion_once(tmp_path):
+def test_active_schema_five_lane_binds_reviewed_companion_once(tmp_path):
     root = workspace(tmp_path)
     original = spec()
-    original["schema"] = 4
-    original["python_executable"] = "/usr/bin/python3.12"
     prepared = lanes.prepare(root, original)
     path = root / "image-build-lanes" / "rebuild-oct1.json"
     prepared["state"] = "active"
@@ -665,7 +669,7 @@ def test_companion_binding_requires_active_managed_immutable_source(tmp_path):
             before["specification"]
         ),
     }
-    with pytest.raises(RuntimeError, match="active managed schema-4"):
+    with pytest.raises(RuntimeError, match="active inherited-identity schema-5"):
         lanes.bind_runtime_companion(root, before["lane"], **kw)
     with pytest.raises(ValueError, match="owned lane companions"):
         lanes.validate_runtime_companion(
