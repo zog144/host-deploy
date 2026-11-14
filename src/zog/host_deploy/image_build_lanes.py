@@ -417,6 +417,11 @@ TOOLCHAIN_BUILD_RECORD_COMPATIBILITY = "a866c9c4b0dd385045f00ce2de7d809f5b67c104
 # newly bound Fonts lane; never silently rewrite a retained lane binding.
 FIRST_FONTS_PRODUCER_REVISION = "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
 FIRST_FONTS_BUILD_RECORD_COMPATIBILITY = TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
+# Separate source-reviewed replacement; the original producer remains frozen
+# for historical receipts and the previously accepted catalogue.
+FIRST_FONTS_INHERITED_PRODUCER_REVISION = "614b9ff0fd6bdbe02834f9f9fe4f3b90f2577c5c"
+FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION = FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
+FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION = "fdafbfb3032847b73c77abd9d90d769e43fddf85"
 TOOLCHAIN_BOX_CONTROL_COMPATIBILITY = "644170fc441863307092f329bf7e23cb64eb33e2"
 # Separate fresh-only tuple. Historical source/companion bindings above remain
 # valid for readback and recovery; no prior lane may be silently promoted.
@@ -431,6 +436,8 @@ CONTROLLER_COMPANION_SCHEMA = 1
 def expected_build_record_revision(producer_revision):
     if producer_revision == FIRST_FONTS_PRODUCER_REVISION:
         return FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
+    if producer_revision == FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+        return FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BUILD_RECORD_REVISION
     if producer_revision in (
@@ -440,6 +447,8 @@ def expected_build_record_revision(producer_revision):
 
 
 def expected_controller_revision(producer_revision):
+    if producer_revision == FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+        return FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BOX_CONTROL_REVISION
     if producer_revision in (
@@ -541,7 +550,9 @@ def validate_runtime_companion(value, *, project_root=None):
         PurePosixPath(root).is_relative_to(PurePosixPath(project_root) / "companions")
     ):
         raise ValueError("runtime companion must be below the owned lane companions directory")
-    if value["producer_revision"] == FIRST_FONTS_PRODUCER_REVISION:
+    if value["producer_revision"] in (
+            FIRST_FONTS_PRODUCER_REVISION,
+            FIRST_FONTS_INHERITED_PRODUCER_REVISION):
         if value["revision"] != FIRST_FONTS_BUILD_RECORD_COMPATIBILITY:
             raise ValueError("first Fonts requires the producer-pinned build-record revision")
         if project_root is not None and root != str(
@@ -940,6 +951,10 @@ def corrected_first_fonts_specification(original):
         raise ValueError("migration requires historical managed first Fonts schema-4 lane")
     result = json.loads(json.dumps(old))
     result["schema"] = INHERITED_SCHEMA
+    # An immutable successor is mandatory: the original producer requested
+    # numerical execution identities and must remain available only for
+    # historical record verification, never new work.
+    result["source_revision"] = FIRST_FONTS_INHERITED_PRODUCER_REVISION
     result["project_root"] = str(FIRST_FONTS_MIGRATED_ROOT)
     result["controller"].pop("execution_user_id")
     result["controller"].pop("execution_group_id")
