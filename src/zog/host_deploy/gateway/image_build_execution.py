@@ -233,6 +233,7 @@ import base64
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -312,20 +313,56 @@ if (
     or relative_pin.parts[0] == ".git"
 ):
     fail("bound monthly provenance pin path is unsafe")
-pin_path = source_root.joinpath(*relative_pin.parts)
-current = source_root
-for part in relative_pin.parts:
-    current = current / part
-    if current.is_symlink():
-        fail("bound monthly provenance pin must not traverse a symlink")
-try:
-    resolved_root = source_root.resolve(strict=True)
-    resolved_pin = pin_path.resolve(strict=True)
-    resolved_pin.relative_to(resolved_root)
-except (OSError, ValueError):
-    fail("bound monthly provenance pin escapes deployed checkout")
-if not resolved_pin.is_file():
-    fail("bound monthly provenance pin is not a regular file")
+retained = "--retained-pin-source-revision" in argv
+if retained:
+    # The original source revision is a provenance identity, not executable
+    # code. Only a pre-existing build-record artifact below the same Project
+    # state is eligible; the public checkout must remain clean and pin-free.
+    for flag, required in (
+        ("--retained-pin-source-revision", "1f07e83dbd80dacb9bed0d6494c697375f0e26cd"),
+        ("--retained-pin-repository-path", monthly_pin_repository_path),
+    ):
+        if argv.count(flag) != 1:
+            fail("retained pin source binding is incomplete")
+        pos = argv.index(flag)
+        if pos + 1 >= len(argv) or argv[pos + 1] != required:
+            fail("retained pin source identity differs from reviewed original")
+    state = source_root.parent / "state"
+    pin_path = state / "image-build/build-record/artifacts" / monthly_pin_identity.removeprefix("sha256:")
+    if argv.count("--provenance-pin") != 1 or (
+        argv.index("--provenance-pin") + 1 >= len(argv)
+        or argv[argv.index("--provenance-pin") + 1] != str(pin_path)
+    ):
+        fail("producer pin argument differs from retained artifact")
+    current = state
+    if current.is_symlink() or not current.is_dir():
+        fail("retained image-build state is missing or linked")
+    for part in ("image-build", "build-record", "artifacts", monthly_pin_identity[7:]):
+        current = current / part
+        if current.is_symlink():
+            fail("retained original pin path traverses a symlink")
+    if not current.is_file():
+        fail("retained original pin artifact is absent")
+    st = current.lstat()
+    if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1
+            or st.st_size > 1048576 or st.st_mode & 0o022):
+        fail("retained original pin artifact type or permissions are unsafe")
+    resolved_pin = current
+else:
+    pin_path = source_root.joinpath(*relative_pin.parts)
+    current = source_root
+    for part in relative_pin.parts:
+        current = current / part
+        if current.is_symlink():
+            fail("bound monthly provenance pin must not traverse a symlink")
+    try:
+        resolved_root = source_root.resolve(strict=True)
+        resolved_pin = pin_path.resolve(strict=True)
+        resolved_pin.relative_to(resolved_root)
+    except (OSError, ValueError):
+        fail("bound monthly provenance pin escapes deployed checkout")
+    if not resolved_pin.is_file():
+        fail("bound monthly provenance pin is not a regular file")
 try:
     pin_digest = hashlib.sha256(resolved_pin.read_bytes()).hexdigest()
 except OSError:
