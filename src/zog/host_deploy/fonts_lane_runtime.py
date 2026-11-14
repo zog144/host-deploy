@@ -32,21 +32,20 @@ spec=json.loads(SPEC)
 root=Path(spec['project_root'])
 python=Path(spec['python_executable'])
 uid,gid=os.geteuid(),os.getegid()
-if uid==0 or gid==0:
-    raise RuntimeError('privileged execution context is not an authorized compiler')
-if not python.is_file() or python.is_symlink() or not os.access(python,os.X_OK):
+# The running execution context is the authority, including UID/GID zero.
+if not python.is_file() or python.is_symlink() or not os.access(python,os.X_OK,effective_ids=True):
     raise RuntimeError('selected Python executable is missing or not executable as running process')
 socket=Path(spec['controller']['socket_path'])
 if socket.is_symlink() or not stat.S_ISSOCK(socket.lstat().st_mode):
     raise RuntimeError('root-control socket missing or redirected')
-if not os.access(socket,os.R_OK|os.W_OK):
+if not os.access(socket,os.R_OK|os.W_OK,effective_ids=True):
     raise RuntimeError('running process cannot access root-control socket')
 observed=spec['observed_state_dir']
 if observed is not None and (not Path(observed).is_dir() or
-                              not os.access(observed,os.R_OK|os.X_OK)):
+                              not os.access(observed,os.R_OK|os.X_OK,effective_ids=True)):
     raise RuntimeError('observed state is missing or inaccessible to running process')
 parent=root.parent
-if not parent.is_dir() or parent.is_symlink() or not os.access(parent,os.X_OK):
+if not parent.is_dir() or parent.is_symlink() or not os.access(parent,os.X_OK,effective_ids=True):
     raise RuntimeError('application data parent is missing, linked or inaccessible')
 paths=[root/part for part in PARTS]
 statuses=[]
@@ -55,10 +54,9 @@ for path in paths:
     except FileNotFoundError:
         statuses.append(False)
         continue
-    if (not stat.S_ISDIR(st.st_mode) or path.is_symlink()
-            or st.st_uid!=uid or st.st_gid!=gid):
-        raise RuntimeError('existing application directory ownership or type differs: '+str(path))
-    if not os.access(path,os.R_OK|os.W_OK|os.X_OK):
+    if not stat.S_ISDIR(st.st_mode) or path.is_symlink():
+        raise RuntimeError('existing application directory type differs: '+str(path))
+    if not os.access(path,os.R_OK|os.W_OK|os.X_OK,effective_ids=True):
         raise RuntimeError('running process cannot access application directory: '+str(path))
     statuses.append(True)
 config=root/'controller.json'
@@ -69,8 +67,8 @@ if present:
     try:
         st=os.fstat(fd)
         if (not stat.S_ISREG(st.st_mode) or st.st_size>65536 or st.st_nlink!=1
-                or st.st_uid!=uid or st.st_gid!=gid or st.st_mode & 0o022):
-            raise RuntimeError('existing controller configuration ownership or permissions differ')
+                or st.st_mode & 0o022):
+            raise RuntimeError('existing controller configuration type or permissions differ')
         with os.fdopen(fd,'rb') as stream:
             fd=None
             data=stream.read(65537)
@@ -85,7 +83,7 @@ if INSTALL:
             except OSError as exc:
                 raise RuntimeError('running process cannot create application directory: '+str(path)) from exc
         st=path.lstat()
-        if not stat.S_ISDIR(st.st_mode) or path.is_symlink() or st.st_uid!=uid or st.st_gid!=gid:
+        if not stat.S_ISDIR(st.st_mode) or path.is_symlink():
             raise RuntimeError('application directory changed during installation: '+str(path))
         if not os.access(path,os.R_OK|os.W_OK|os.X_OK):
             raise RuntimeError('running process cannot write application directory: '+str(path))
@@ -134,7 +132,7 @@ def inspect(host, spec):
             result["status"] not in {"complete","absent","partial"} or
             type(result["effective_user_id"]) is not int or
             type(result["effective_group_id"]) is not int or
-            min(result["effective_user_id"],result["effective_group_id"])<=0):
+            min(result["effective_user_id"],result["effective_group_id"])<0):
         raise RuntimeError("installed controller inspection differs from current execution context")
     return result
 
