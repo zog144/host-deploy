@@ -16,7 +16,7 @@ in an SSM shell measures *that SSM process*, not an installed build child.
 | Program | Reviewed commit | Role |
 |---|---|---|
 | root-control PR #49 | `6b9c4592438ff488646e59f025813d919119ab12` | Combined trusted-Host Task C and identity-free build backend in **one** installation |
-| host-install PR #38 | `0e435a21fc12a6950163b72733a9872494279a71` | Combined Task C, existing copy migrator and prepared-only initialization in **one** installation |
+| host-install PR #38 | `a0745915f934dfff658a9b848d48c94894dcfb68` | Combined Task C, existing copy migrator and prepared-only initialization in **one** installation |
 | box-control PR #20 | `fdafbfb3032847b73c77abd9d90d769e43fddf85` | No selectable build UID/GID in registration or operations |
 | image-build PR #23 | `620378bdd8075daeb5eaad45eedea4af7db36423` | Identity-free executable with separately retained original October pin |
 | build-record | `a866c9c4b0dd385045f00ce2de7d809f5b67c104` | Producer-required companion |
@@ -75,7 +75,53 @@ authorization for copy and remote installation.
    original/new effective ownership. **Do not** edit the copied `controller.json`;
    it remains archival provenance.
 
-**Prepared but never materialized (Work evidence of November 14):**
+**Recovery of the Project already initialized on the compiler (Work evidence
+from November 14, updated SSM report):**
+
+The original initializer **already committed** the real Project at
+`/var/lib/zog/image-build/projects/gateway-first-fonts-runtime`. Its
+`.first-fonts-initialization-v1.json` is authentic, and its canonical
+manifest SHA-256 is
+`535c0c283599c8ad3e256d4cdf8db5bb4b16bf1350dfec59de10ebde52d79cb7`.
+The source, box-control and build-record trees were verified. The missing
+`package`, `application` and `catalogue` directories are a **layout
+completion** task, not a reason to stage or commit a new initialization.
+
+After installing and verifying the newly reviewed host-install PR #38
+revision in the **selected maintenance interpreter** and making its
+`host-install-fonts-project-init` entrypoint available to the selected
+SSM command process, run the following against the **existing Project**
+under that process's inherited identity:
+
+```sh
+host-install-fonts-project-init --verify
+# Confirm the historical manifest SHA and all three reviewed Git identities.
+# The current native instance may report layout_complete=false and exactly
+# package/application/catalogue as missing.
+host-install-fonts-project-init --complete-layout
+host-install-fonts-project-init --verify
+```
+
+The `--complete-layout` operation reauthenticates the original initializer
+manifest and source checkouts before any mutation, refuses symlinks, foreign
+or nonempty runtime directories and pre-existing controller configurations,
+and creates only the missing directories with the current process identity.
+It can resume an interrupted earlier completion or succeed again without
+rewriting existing files. The manifest bytes/SHA, copied-source=false claim
+and original prepared schema-4 lane remain unchanged. A bad readback or
+uncertain SSM acknowledgement requires inspecting the original command and
+doing a read-only verify; never delete or reinitialize the Project.
+
+Once `--verify` reports `layout_complete=true`,
+`missing_layout_directories=[]`, `runtime_layout.status=ready` and
+`controllers_present=[]`, run the **existing**
+`fonts-lane-migration-stage --prepared-initialize` below, then retain the
+genuine October pin and activate the separately generated inherited
+controller. Do not run `--stage` or `--commit` on this already published
+Project. Do not manually create directories, edit the manifest, substitute
+copy-migration evidence or bypass host-deploy's partial-state check.
+
+**Prepared but never materialized on other Hosts (initial creation):**
 
 The approved original lane is `prepared`, and native SSM found **both**
 `/home/certbot-build-owner/gateway-first-fonts-runtime` and
