@@ -64,7 +64,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: zog144/host-install
-          ref: a3dfce31fa65bc890777c22f90a56ab9dfedccd9
+          ref: 1429ac6477fb230b428dc7e3e614543cace38ecb
           path: companions/host-install
           persist-credentials: false
       - uses: actions/checkout@v4
@@ -128,7 +128,7 @@ jobs:
       - name: Verify selected inherited-process runtime and retained original source tuple
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = 6b9c4592438ff488646e59f025813d919119ab12
-          test "$(git -C companions/host-install rev-parse HEAD)" = a3dfce31fa65bc890777c22f90a56ab9dfedccd9
+          test "$(git -C companions/host-install rev-parse HEAD)" = 1429ac6477fb230b428dc7e3e614543cace38ecb
           test "$(git -C companions/box-control-inherited rev-parse HEAD)" = fdafbfb3032847b73c77abd9d90d769e43fddf85
           test "$(git -C companions/image-build-inherited rev-parse HEAD)" = aa65dfe264eea92ce210895f462d4a8c63e23ff2
           cmp dependencies/image-build/project/bootstrap/graphics-fonts.py companions/image-build-inherited/project/bootstrap/graphics-fonts.py
@@ -185,7 +185,7 @@ jobs:
           ZOG_HOSTDEPLOY_FONTS_PR7: ${{ github.workspace }}/companions/host-deploy-fonts-pr7
         run: |
           test "$(git -C companions/root-control rev-parse HEAD)" = 6b9c4592438ff488646e59f025813d919119ab12
-          test "$(git -C companions/host-install rev-parse HEAD)" = a3dfce31fa65bc890777c22f90a56ab9dfedccd9
+          test "$(git -C companions/host-install rev-parse HEAD)" = 1429ac6477fb230b428dc7e3e614543cace38ecb
           python -m pytest -q -rs \
             tests/test_gateway_trusted_host_ssm.py \
             tests/test_gateway_generic_pipeline.py \
