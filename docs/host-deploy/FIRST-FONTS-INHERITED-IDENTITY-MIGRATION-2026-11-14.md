@@ -21,3 +21,54 @@ The reviewed replacement producer is the image-build PR #23 source (identity-fre
 **Source hold:** the public image-build successor does not carry `project/pins/2026-10-01/commit-pin.py`, because its public-source preflight explicitly rejects that historical source path. The current remote-operation source-root/pin resolver still expects the original file in the selected checkout. The runtime tuple is not executable until source/pin binding is reviewed to authenticate the original retained pin without republishing it or executing old UID-selecting Python code. The old PR7/Task C catalogue still selects the original producer and may only be explicitly rebound after checking the exact new source/lane relationship. Neither a passing source CI nor these migrated specification bytes authorizes a task.
 
 **Native verification remains separate:** root-control PR #49 includes an opt-in PID1 transient child probe that reads effective and filesystem UID/GID from `/proc/<pid>/status`, compares them with the real installed service PID, and accepts root where already configured. Omitting `User=`/`Group=` in a transient unit is not itself proof of inheritance for nonroot services: PID1 normally applies its own default execution identity unless configured otherwise. Check the real running child and reject a mismatched native tuple, without creating accounts, impersonating a user or adding a root prohibition. The host-install copy remains unperformed, queue submission disabled and historical source intact.
+
+
+## November 14 — supported original-pin retention and new execution-source binding
+
+The preceding source HOLD about placing the October pin inside the public
+producer checkout is **resolved in source**. Source-owned operations now keep
+these identities distinct:
+
+1. **Original evidence:** untouched historical first Fonts commit
+   `1f07e83dbd80dacb9bed0d6494c697375f0e26cd`, original checkout-relative
+   `project/pins/2026-10-01/commit-pin.py`, and SHA-256
+   `d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
+2. **Retained State input:** a genuine byte-for-byte copy at
+   `/var/lib/zog/image-build/projects/gateway-first-fonts-runtime/state/image-build/build-record/artifacts/d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36`.
+   The state directory is the existing copied Project's persistent state.
+3. **New executable:** a clean, exact Git checkout of the identity-free image-build
+   successor under `<project>/source`. It has the original reviewed recipe
+   definitions but **does not contain** the prohibited October pin file.
+
+**Source-owned ordered native preparation, not yet executed:**
+After host-install's reviewed copy-not-move from the private legacy location,
+while the copied historical `<project>/source` checkout is still unchanged,
+use the reviewed host-deploy module
+`python3 -m zog.host_deploy.fonts_pin_retention` for read-only inspection and
+`python3 -m zog.host_deploy.fonts_pin_retention --retain` for the single explicit
+artifact publication. It verifies exact original Git HEAD/cleanliness, the pin
+literal/schema/digest, and target-path safety; writes only the same genuine
+bytes, with exclusive content-addressed publication and readback. It does not
+create/select a build account, alter the historical checkout or old home, use
+sudo/setuid, trigger a compilation, or edit the retained lane specification.
+The test-only filesystem-root/revision parameters cannot be selected through
+the production CLI. If the historical checkout is unavailable or dirty, or the
+pin differs, **stop** rather than synthesizing a replacement.
+
+After retention, use an independently reviewed installation to select the
+new image-build source in `<project>/source` without disturbing original
+evidence or the retained artifact. The inherited schema-5 lane's
+`remote_operation_argv` then binds `--repository-root` to the new checkout,
+`--provenance-pin` to the fixed state artifact, and passes the exact original
+revision/path to the producer. The gateway SSM wrapper checks both the new
+Git HEAD/cleanliness and retained pin identity/hash **before writing its remote
+request or starting its child**, while its schema validator rejects substituted
+pin paths, flags and origin revisions.
+
+The companion accepted compiler generation `3805294fc8ccd9589aa75d3a6c5cb9367b7baf84b6ce131a84adafed7d34f9dc`
+(`kind=image`) and receipt SHA-256
+`a205c07bde4e6cf61e48061affd9a0b40c3a101e18dff67a9871995a3a2afafc`
+are unchanged. This source revision does not activate the lane, install a
+controller, select a new catalogue, send an SQS message or compile Fonts.
+A reviewed cross-program runtime source tuple, native migration/credential
+readback and explicit catalogue/controller binding review are still required.
