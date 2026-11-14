@@ -238,3 +238,22 @@ def activation_intent(root, workspace, host, spec):
     else:
         save(path, expected)
     return expected
+
+
+def migration_plan(directory):
+    """Read-only conversion preview; preserves the original lane and digest."""
+    with locked(directory) as root:
+        workspace, host = _owner(root)
+        record, original, old_digest = _approved(root)
+        corrected = lanes.corrected_first_fonts_specification(original)
+        return {
+            "schema": "host-deploy-first-fonts-identity-migration-plan-v1",
+            "status": "requires-native-data-migration",
+            "binding": _binding(workspace, host),
+            "original_state": record["state"],
+            "original_specification_sha256": old_digest,
+            "original_project_root": original["project_root"],
+            "corrected_specification": corrected,
+            "corrected_specification_sha256": lanes.specification_sha256(corrected),
+            "corrected_project_root": corrected["project_root"],
+        }

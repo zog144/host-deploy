@@ -756,6 +756,8 @@ def activate(directory, lane, *, expected_specification_sha256=None):
         path = _path(root, lane)
         record = json.loads(path.read_text())
         spec = validate(record["specification"])
+        if spec["schema"] != INHERITED_SCHEMA:
+            raise RuntimeError("historical account-selecting lane must be migrated before activation")
         if lane == "gateway-first-fonts-runtime" or "fonts_lane_profile" in record:
             from . import fonts_lane_profile
             if lane != fonts_lane_profile.LANE or expected_specification_sha256 is None:

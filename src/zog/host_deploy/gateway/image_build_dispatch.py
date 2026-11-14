@@ -369,14 +369,14 @@ def verify_current_target(gateway_root, binding):
         raise RuntimeError("image-build lane monthly pin differs from prepared dispatch")
     current_observed_state = (
         lane_spec["observed_state_dir"]
-        if lane_spec.get("schema") == image_build_lanes.SCHEMA
+        if lane_spec.get("schema") == image_build_lanes.INHERITED_SCHEMA
         else None
     )
     if current_observed_state != binding["observed_state_dir"]:
         raise RuntimeError("image-build observed state differs from prepared dispatch")
     if binding.get("schema") in {2, 3}:
         if (
-            lane_spec["schema"] != image_build_lanes.SCHEMA
+            lane_spec["schema"] != image_build_lanes.INHERITED_SCHEMA
             or lane_spec["python_executable"] != binding.get("python_executable")
         ):
             raise RuntimeError("image-build Python runtime differs from prepared dispatch")

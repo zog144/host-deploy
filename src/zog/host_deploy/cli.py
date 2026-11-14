@@ -95,7 +95,7 @@ def main():
             command.add_argument('--request-path',required=True)
     # Reviewed first-Fonts path: no caller-supplied spec or identity overrides.
     for name in ('fonts-lane-profile', 'fonts-lane-verify',
-                 'fonts-lane-prepare', 'fonts-lane-activate'):
+                 'fonts-lane-prepare', 'fonts-lane-activate', 'fonts-lane-migration-plan'):
         command = commands.add_parser(name)
         if name != 'fonts-lane-profile':
             command.add_argument('--workspace', required=True)
@@ -116,6 +116,8 @@ def main():
             result = fonts_lane_profile.profile()
         elif arguments.command == 'fonts-lane-verify':
             result = fonts_lane_profile.verify(arguments.workspace)
+        elif arguments.command == 'fonts-lane-migration-plan':
+            result = fonts_lane_profile.migration_plan(arguments.workspace)
         elif arguments.command == 'fonts-lane-prepare':
             result = fonts_lane_profile.prepare(arguments.workspace)
         else:
