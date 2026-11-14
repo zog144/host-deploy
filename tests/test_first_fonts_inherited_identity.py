@@ -21,6 +21,11 @@ def test_first_fonts_inherited_schema_has_no_account_selector():
     new = lanes.corrected_first_fonts_specification(old)
     assert lanes.specification_sha256(old) == former
     assert new["schema"] == 5
+    assert old["source_revision"] == "a"*40
+    assert new["source_revision"] == lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+    assert new["source_revision"] != old["source_revision"]
+    assert lanes.expected_build_record_revision(new["source_revision"]) == lanes.FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
+    assert lanes.expected_controller_revision(new["source_revision"]) == lanes.FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION
     assert lanes.specification_sha256(new) != former
     assert new["project_root"] == "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
     assert "execution_user_id" not in new["controller"]
