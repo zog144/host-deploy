@@ -21,7 +21,7 @@ from .workspace import locked, save
 PROFILE = "host-deploy-first-fonts-retained-lane-v3"
 FACTS_SCHEMA = "host-deploy-verified-first-fonts-installed-v2"
 LANE = "gateway-first-fonts-runtime"
-PROJECT_ROOT = str(lanes.DEFAULT_ROOT / LANE)  # fresh-profile root, NOT historical root
+PROJECT_ROOT = str(lanes.FIRST_FONTS_MIGRATED_ROOT)  # reviewed host-install copy destination
 RETAINED_PROJECT_ROOT = "/home/certbot-build-owner/gateway-first-fonts-runtime"
 RETAINED_SPECIFICATION_SHA256 = "sha256:c7ab129937330fab5f74ae37b16a0b3e8de35cf87cef1fdda33d18bbcf1779f2"
 COMPILER_INSTANCE = "i-00ad300038a599044"
