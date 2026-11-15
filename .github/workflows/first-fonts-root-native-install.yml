@@ -1,0 +1,58 @@
+name: First Fonts real root-owned installation entry contract
+on:
+  pull_request:
+    paths:
+      - 'src/zog/host_deploy/gateway/graphics_catalogue_native_install.py'
+      - 'src/zog/host_deploy/gateway/graphics_catalogue_owner.py'
+      - 'tests/test_graphics_catalogue_root_entrypoint.py'
+      - 'tests/test_fonts_catalogue_recovery.py'
+      - 'pyproject.toml'
+      - '.github/workflows/first-fonts-root-native-install.yml'
+  push:
+    branches: [regular/first-fonts-root-native-install-entry-20261115]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-readers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/image-build
+          ref: 31e6121cdf9fd05336286529666e2c35cdbe0831
+          path: pinned-image-build
+          persist-credentials: false
+      - name: Confirm original October pin source
+        run: |
+          test "$(git -C pinned-image-build rev-parse HEAD)" = "31e6121cdf9fd05336286529666e2c35cdbe0831"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          pin = Path("pinned-image-build/project/pins/2026-10-01/commit-pin.py")
+          assert hashlib.sha256(pin.read_bytes()).hexdigest() == "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
+          PY
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install component and compile supported root entry
+        run: |
+          python -m pip install 'setuptools>=80,<83' 'wheel>=0.45,<1' 'pytest>=8,<10' 'dbus-next==0.2.3'
+          python -m pip install --no-build-isolation -e .
+          python -m compileall -q src/zog/host_deploy/gateway/graphics_catalogue_native_install.py tests/test_graphics_catalogue_root_entrypoint.py
+          host-deploy-first-fonts-install --help
+      - name: Verify unprivileged request rejects installation
+        run: python -m pytest -q tests/test_graphics_catalogue_root_entrypoint.py
+      - name: Exercise real root-owned evidence, immutable sources and idempotent writer
+        run: |
+          sudo -E env PYTHONPATH="$PWD/src:$PWD/tests" "$(command -v python)" -m pytest -q             tests/test_graphics_catalogue_root_entrypoint.py             tests/test_fonts_catalogue_recovery.py
+      - name: Gate remains native-only
+        if: always()
+        run: echo 'SOURCE ONLY; original signed receipt/installed generation, actual Host and gateway readiness must be authenticated by Work' >> "$GITHUB_STEP_SUMMARY"
