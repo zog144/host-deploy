@@ -1006,13 +1006,11 @@ def remote_operation_argv(record, request_path):
     request_path = Path(request_path)
     if not request_path.is_absolute():
         raise ValueError("remote request path must be absolute")
-    retained_fonts = (
-        spec["lane"] == "gateway-first-fonts-runtime"
-        and spec["source_revision"] == FIRST_FONTS_INHERITED_PRODUCER_REVISION
-    )
+    # The reviewed identity-free producer needs the separately retained
+    # original October pin regardless of the selected existing Project/lane.
+    # The lane name is NOT an authority for source provenance or pin choice.
+    retained_fonts = (spec["source_revision"] == FIRST_FONTS_INHERITED_PRODUCER_REVISION)
     if retained_fonts:
-        # The accepted October pin is a pre-existing content-addressed
-        # build-record artifact, never part of the public executable checkout.
         if (spec["source_repository"] != "zog144/image-build"
                 or spec["monthly_pin_repository_path"] != FIRST_FONTS_ORIGINAL_PIN_PATH
                 or spec["monthly_pin_identity"] != FIRST_FONTS_ORIGINAL_PIN_IDENTITY
