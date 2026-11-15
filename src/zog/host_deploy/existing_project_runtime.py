@@ -46,7 +46,10 @@ for node in (root,*root.parents):
         raise RuntimeError('running process cannot traverse existing Project')
 for name in REQUIRED:
     path=root/name
-    st=path.lstat()
+    try:
+        st=path.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError('existing Project directory missing: '+name) from exc
     if not stat.S_ISDIR(st.st_mode) or path.is_symlink():
         raise RuntimeError('existing Project directory is foreign: '+name)
     access=os.R_OK|os.X_OK
