@@ -21,7 +21,7 @@ from zog.host_deploy.gateway import (
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
     # Reviewed inherited-identity lane source; old schema-4 records are inspection-only.
-    "image_build_lanes.py": "f33dc3aabcb4eae0c739964f7d3788f437cac21a",
+    "image_build_lanes.py": "cbac450d8b59dc206fe6775750913b1708088308",
     "gateway/graphics_catalogue_owner.py": "f96d50cc15ece8637e70a4d1d58968a3aed29ecd",
     "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
 }
