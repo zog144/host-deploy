@@ -24,6 +24,21 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/image-build
+          ref: 31e6121cdf9fd05336286529666e2c35cdbe0831
+          path: pinned-image-build
+          persist-credentials: false
+      - name: Confirm original October pin source
+        run: |
+          test "$(git -C pinned-image-build rev-parse HEAD)" = "31e6121cdf9fd05336286529666e2c35cdbe0831"
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          pin = Path("pinned-image-build/project/pins/2026-10-01/commit-pin.py")
+          assert hashlib.sha256(pin.read_bytes()).hexdigest() == "d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
+          PY
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
