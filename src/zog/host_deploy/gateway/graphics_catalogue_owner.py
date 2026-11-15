@@ -24,7 +24,7 @@ PIN_DATE = "2026-10-01"
 TASK = "graphics-fonts-image-v1"
 EVIDENCE_SCHEMA = "host-deploy-reviewed-compiler-base-selection-v1"
 READER_SOURCE = "1616f192ef9d8964a8f37f32a86c69c0242a213c"
-RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v2"
+RECEIPT_SCHEMA = "host-deploy-graphics-catalogue-installed-v3"
 EXECUTABLE_SOURCE = image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
 STORE = Path("/var/lib/host-deploy-gateway")
 CATALOGUE = STORE / "first-fonts-catalogue-v1.json"
@@ -76,9 +76,9 @@ def _selection(lane_record, accepted_base, issuer):
     # and a newly verified identity-free executable revision.
     historical = (lane["schema"] == image_build_lanes.SCHEMA
                   and lane["source_revision"] == SOURCE)
+    # The independently read installed lane names the execution Project.
+    # Never allocate a Fonts-only Project, or infer "latest" from timestamps.
     corrected = (lane["schema"] == image_build_lanes.INHERITED_SCHEMA
-                 and lane["lane"] == "gateway-first-fonts-runtime"
-                 and lane["project_root"] == str(image_build_lanes.FIRST_FONTS_MIGRATED_ROOT)
                  and lane["source_revision"] == EXECUTABLE_SOURCE)
     if (not (historical or corrected)
             or lane["mode"] != "managed"
@@ -117,7 +117,8 @@ def _selection(lane_record, accepted_base, issuer):
 def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             compiler_base_receipt_bytes=None,
             compiler_base_issuer_policy=None, compiler_base_binding=None,
-            compiler_base_origin_lane=None):
+            compiler_base_origin_lane=None,
+            verified_shared_project_compatibility=False):
     """Pure catalogue candidate from native-selected lane and compiler evidence.
 
     This does not read, write, or require a Fonts approval file. The monthly
@@ -126,24 +127,26 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
     """
     lane, selection = _selection(
         lane_record, accepted_base, compiler_base_issuer_policy)
-    # The original compiler generation may have been accepted in an older
-    # project, while the Fonts build uses a distinct managed lane. Keep these
-    # identities separate: the immutable original issuer/producer binding
-    # verifies the original project, and the new lane independently verifies
-    # the current reviewed source revision, October pin, and Host.
+    # Original signed acceptance identifies the compiler-origin Project.
+    # Execution may use that same Project only with a reviewed native proof
+    # that separately named lanes do not collide in the controller.
     try:
         origin = (image_build_lanes.validate(compiler_base_origin_lane)
                   if compiler_base_origin_lane is not None else lane)
     except (ValueError, TypeError, KeyError):
         _fail()
+    shared = (origin["lane"] != lane["lane"]
+              and (origin["project_root"] == lane["project_root"]
+                   or origin["provenance_project_id"] ==
+                       lane["provenance_project_id"]))
     if (origin["schema"] != image_build_lanes.SCHEMA
             or origin["mode"] != "managed"
             or origin["source_repository"] != REPOSITORY
             or origin["provenance_host_id"] != lane["provenance_host_id"]
-            or (origin["lane"] != lane["lane"]
-                and (origin["project_root"] == lane["project_root"]
-                     or origin["provenance_project_id"] ==
-                        lane["provenance_project_id"]))):
+            or (shared and not (
+                origin["project_root"] == lane["project_root"]
+                and origin["provenance_project_id"] == lane["provenance_project_id"]
+                and verified_shared_project_compatibility is True))):
         _fail()
     # Signed Ed25519 receipt and independently authenticated producer
     # binding are still required; no cloned or reissued compiler evidence.
@@ -204,6 +207,11 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             "accepted_base_environment_sha256": bound_base["execution_environment_sha256"],
             "accepted_base_historical_provenance": bound_base["historical_provenance"],
             "lane": lane["lane"], "host_id": selection["host_id"],
+            "execution_project_root": lane["project_root"],
+            "execution_project_id": lane["provenance_project_id"],
+            "compiler_origin_project_root": origin["project_root"],
+            "compiler_origin_project_id": origin["provenance_project_id"],
+            "shared_project_compatible": bool(shared),
             "source_revision": lane["source_revision"],
             "lane_specification_sha256": image_build_lanes.specification_sha256(lane),
             "installation_id":selection["installation_id"],
@@ -257,7 +265,8 @@ def install_native(*, lane_name, generation_id,
                    attest_host_identity, read_compiler_base_receipt=None,
                    read_compiler_base_issuer=None,
                    read_compiler_base_binding=None,
-                   read_compiler_base_origin_lane=None):
+                   read_compiler_base_origin_lane=None,
+                   attest_shared_project_compatibility=None):
     """Install the small catalogue and receipt once, without extra policy files.
 
     Work selects a managed lane and compiler generation through this trusted
@@ -269,6 +278,9 @@ def install_native(*, lane_name, generation_id,
         raise PermissionError("protected graphical catalogue requires root")
     if (read_compiler_base_origin_lane is not None
             and not callable(read_compiler_base_origin_lane)):
+        _fail()
+    if (attest_shared_project_compatibility is not None
+            and not callable(attest_shared_project_compatibility)):
         _fail()
     if (type(lane_name) is not str or not lane_name
             or type(generation_id) is not str
@@ -296,16 +308,23 @@ def install_native(*, lane_name, generation_id,
             or accepted.get("generation_id") != generation_id
             or type(accepted.get("acceptance_receipt_sha256")) is not str):
         _fail()
+    installed_lane = read_managed_lane(lane_name)
+    original_origin = (read_compiler_base_origin_lane(generation_id)
+                       if read_compiler_base_origin_lane is not None else None)
+    # The optional compatibility reader is selected by the trusted installer,
+    # never supplied by a GitHub issue. False or missing => strict HOLD.
+    sharing_verified = (attest_shared_project_compatibility(
+        original_origin, installed_lane) is True
+        if attest_shared_project_compatibility is not None else False)
     candidate = prepare(
-        lane_record=read_managed_lane(lane_name),
+        lane_record=installed_lane,
         accepted_base=accepted,
         compiler_base_receipt_bytes=read_compiler_base_receipt(generation_id),
         compiler_base_issuer_policy=read_compiler_base_issuer(),
         compiler_base_binding=read_compiler_base_binding(
             generation_id, accepted["acceptance_receipt_sha256"]),
-        compiler_base_origin_lane=(
-            read_compiler_base_origin_lane(generation_id)
-            if read_compiler_base_origin_lane is not None else None),
+        compiler_base_origin_lane=original_origin,
+        verified_shared_project_compatibility=sharing_verified,
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
     )
     if (candidate["lane"] != lane_name
@@ -326,6 +345,11 @@ def install_native(*, lane_name, generation_id,
         "host_id": candidate["host_id"],
         "installation_id": candidate["installation_id"],
         "lane": candidate["lane"],
+        "execution_project_root": candidate["execution_project_root"],
+        "execution_project_id": candidate["execution_project_id"],
+        "compiler_origin_project_root": candidate["compiler_origin_project_root"],
+        "compiler_origin_project_id": candidate["compiler_origin_project_id"],
+        "shared_project_compatible": candidate["shared_project_compatible"],
         "compiler_authorized": False,
         "status": "installed-catalogue-not-build-authorization",
     }
