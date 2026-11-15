@@ -31,6 +31,7 @@ SCHEMA = "host-deploy-first-fonts-installed-native-evidence-v1"
 SOURCE_SCHEMA = "host-deploy-first-fonts-installed-sources-v1"
 IDENTITY_SCHEMA = "host-deploy-first-fonts-installed-host-identity-v1"
 HEX64 = re.compile(r"[a-f0-9]{64}\Z")
+COMMIT = re.compile(r"[a-f0-9]{40}\Z")
 SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 FIELDS = {
     "schema", "lane_record", "accepted_base", "issuer_policy",
@@ -188,7 +189,7 @@ class RootReaders:
         for revision, source in self.sources.items():
             if (type(source) is not dict
                     or set(source) != {"root", "tree_sha256"}
-                    or not HEX64.fullmatch(revision)):
+                    or not COMMIT.fullmatch(revision)):
                 _hold()
 
     def read_managed_lane(self, name):
