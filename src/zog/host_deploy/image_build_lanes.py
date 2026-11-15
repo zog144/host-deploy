@@ -102,6 +102,10 @@ def validate(spec):
         }
         if schema in {SCHEMA, INHERITED_SCHEMA}:
             required.add("python_executable")
+        # Schema-5 may bind a *verified pre-existing* Project. Historical
+        # schemas and ordinary newly-created lanes retain exact original keys.
+        if schema == INHERITED_SCHEMA and spec.get("project_selection") == "existing":
+            required.add("project_selection")
     else:
         raise ValueError("unsupported image-build lane specification")
     if set(spec) != required:
@@ -153,7 +157,18 @@ def validate(spec):
     project_root = Path(spec["project_root"])
     if not project_root.is_absolute():
         raise ValueError("lane project_root must be absolute")
-    if spec["mode"] == "managed" and project_root.name != lane:
+    existing = (schema == INHERITED_SCHEMA
+                and spec.get("project_selection") == "existing")
+    if existing and spec["mode"] != "managed":
+        raise ValueError("existing Project selection requires a managed lane")
+    if existing:
+        normalized = PurePosixPath(spec["project_root"])
+        if (str(normalized) != spec["project_root"]
+                or any(piece in {".", ".."} for piece in spec["project_root"].split("/")[1:])
+                or len(str(normalized)) > 1024
+                or normalized == PurePosixPath("/")):
+            raise ValueError("existing Project root must be a normalized absolute path")
+    if spec["mode"] == "managed" and project_root.name != lane and not existing:
         raise ValueError("managed lane project_root must end with the lane name")
     policy = spec["resource_policy"]
     if not isinstance(policy, dict) or set(policy) != {
@@ -229,13 +244,17 @@ def specification(
     transport_timeout_seconds=45,
     observed_state_dir=None,
     python_executable=None,
+    existing_project=False,
 ):
+    if type(existing_project) is not bool:
+        raise ValueError("existing_project must be an explicit boolean")
     project_root = Path(project_root) if project_root else DEFAULT_ROOT / lane
     if python_executable is None:
         raise ValueError("new inherited-identity lane requires an explicit Python executable")
     return validate(
         {
             "schema": INHERITED_SCHEMA,
+            **({"project_selection": "existing"} if existing_project else {}),
             **({"python_executable": python_executable} if python_executable is not None else {}),
             "lane": lane,
             "mode": mode,
@@ -291,13 +310,15 @@ def prepare(directory, spec):
                     others.append(json.loads(candidate.read_text()))
                 except (OSError, ValueError, TypeError):
                     raise RuntimeError("invalid retained image-build lane record")
-        project_root = Path(spec["project_root"]).resolve()
+        # Compare canonical lexical remote roots, not registry-machine
+        # realpath() (the selected Project lives on a different Host).
+        project_root = PurePosixPath(spec["project_root"])
         basename = project_root.name
         for item in others:
             if item.get("state") == "retired":
                 continue
             other = item["specification"]
-            other_root = Path(other["project_root"]).resolve()
+            other_root = PurePosixPath(other["project_root"])
             if other_root == project_root:
                 raise ValueError("image-build project root is already owned by another lane")
             if (
@@ -306,17 +327,35 @@ def prepare(directory, spec):
                 and other_root.name == basename
             ):
                 raise ValueError("managed image-build project basename must be host-unique")
+        existing_record = None
         if path.exists():
-            record = json.loads(path.read_text())
-            if record.get("schema") not in _RECORD_SCHEMAS or record["specification"] != spec:
+            existing_record = json.loads(path.read_text())
+            if (existing_record.get("schema") not in _RECORD_SCHEMAS
+                    or existing_record.get("specification") != spec):
                 raise ValueError("existing image-build lane is bound to different inputs")
-            return record
+        verified = None
+        if spec.get("project_selection") == "existing":
+            from . import existing_project_runtime
+            # Native read-only inspection is required *before* recording a
+            # lane. No new Project, account or source directory is created.
+            _, host_config = configuration(root)
+            verified = existing_project_runtime.inspect(Host(host_config), spec)
+            if existing_record is None and verified["status"] != "prepared":
+                raise RuntimeError("existing Project already has this controller; inspect its owner")
+        if existing_record is not None:
+            if spec.get("project_selection") == "existing" and (
+                    existing_record.get("project_inspection", {}).get("project_root")
+                    != verified["project_root"]):
+                raise RuntimeError("retained Project selection lacks matching verification")
+            return existing_record
         record = {
             "schema": spec["schema"],
             "lane": spec["lane"],
             "specification": spec,
             "state": "prepared",
         }
+        if verified is not None:
+            record["project_inspection"] = verified
         save(path, record)
         return record
 
@@ -712,6 +751,64 @@ def _activate_retained_fonts(root, path, record, spec, workspace, host_config):
     return record
 
 
+def _activate_existing_project(root, path, record, spec, host_config):
+    """Normal managed lane activation against a verified existing Project.
+
+    No mkdir, chown, controller.json replacement or extra Project allocation.
+    A lost remote acknowledgement has a durable intent; recovery is read-only.
+    """
+    from . import existing_project_runtime as runtime
+    if record.get("project_inspection", {}).get("project_root") != spec["project_root"]:
+        raise RuntimeError("existing Project lane has no authenticated preparation")
+    if record.get("state") not in {"prepared", "active"}:
+        raise RuntimeError("existing Project must be prepared or already active")
+    host = Host(host_config)
+    observed = runtime.inspect(host, spec)
+    controller_path = observed["controller_file"]
+    if record["state"] == "active":
+        if observed["status"] != "complete" or record.get("controller_config") != controller_path:
+            raise RuntimeError("active existing Project controller differs; no overwrites")
+        return record
+    intent_path = Path(root) / "image-build-lane-intents" / (spec["lane"] + ".json")
+    expected = {
+        "schema": "host-deploy-existing-project-lane-activation-v1",
+        "lane": spec["lane"],
+        "specification_sha256": specification_sha256(spec),
+        "project_root": spec["project_root"],
+        "source_revision": spec["source_revision"],
+    }
+    if intent_path.exists() or intent_path.is_symlink():
+        if intent_path.is_symlink() or json.loads(intent_path.read_text()) != expected:
+            raise RuntimeError("existing Project activation intent differs")
+        if observed["status"] != "complete":
+            raise RuntimeError("previous Project controller write unresolved; read-only recovery required")
+    else:
+        if observed["status"] != "prepared":
+            raise RuntimeError("existing Project already contains an unowned controller")
+        capacity = _capacity(host, Path(spec["project_root"]))
+        reserved = sum(
+            other["specification"]["resource_policy"]["disk_reservation_bytes"]
+            for other in _active_records(root) if other["lane"] != spec["lane"]
+        )
+        if reserved + spec["resource_policy"]["disk_reservation_bytes"] > capacity["disk_free_bytes"]:
+            raise RuntimeError("image-build lane disk reservations exceed free capacity")
+        save(intent_path, expected)  # durable before the only remote write
+        runtime.install(host, spec)
+        observed = runtime.inspect(host, spec)
+    if observed["status"] != "complete":
+        raise RuntimeError("existing Project controller was not verified after installation")
+    project = Path(spec["project_root"])
+    record.update(
+        controller_config=controller_path,
+        source_root=str(project / "source"),
+        package_dir=str(project / "source" / "project" / "package"),
+        state_dir=str(project / "state"),
+        state="active",
+    )
+    save(path, record)
+    return record
+
+
 def activate(directory, lane, *, expected_specification_sha256=None):
     with locked(directory) as root:
         workspace, host_config = configuration(root)
@@ -724,6 +821,11 @@ def activate(directory, lane, *, expected_specification_sha256=None):
             raise RuntimeError("historical account-selecting first Fonts requires fonts-lane-migration-activate")
         if spec["schema"] != INHERITED_SCHEMA:
             raise RuntimeError("historical account-selecting lane must be migrated before activation")
+        if spec.get("project_selection") == "existing":
+            if (expected_specification_sha256 is not None and
+                    specification_sha256(spec) != expected_specification_sha256):
+                raise RuntimeError("existing Project specification digest differs")
+            return _activate_existing_project(root, path, record, spec, host_config)
         if "fonts_lane_profile" in record:
             from . import fonts_lane_profile
             if lane != fonts_lane_profile.LANE or expected_specification_sha256 is None:
