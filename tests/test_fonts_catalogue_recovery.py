@@ -29,6 +29,11 @@ def install_case(tmp_path, monkeypatch):
         "retained_acceptance_sha256": "sha256:" + "c" * 64,
         "host_id": "host-fixture", "installation_id": "installation-fixture",
         "lane": "synthetic-fonts", "compiler_authorized": False,
+        "execution_project_root": "/var/lib/zog/image-build/projects/synthetic-fonts",
+        "execution_project_id": "synthetic-project",
+        "compiler_origin_project_root": "/home/owner/original-compiler",
+        "compiler_origin_project_id": "synthetic-project",
+        "shared_project_compatible": False,
         "source_revision": owner.EXECUTABLE_SOURCE,
         "lane_specification_sha256": "sha256:" + "d" * 64,
     }
