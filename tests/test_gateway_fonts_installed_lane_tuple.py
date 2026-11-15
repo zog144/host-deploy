@@ -21,8 +21,8 @@ from zog.host_deploy.gateway import (
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
     # Reviewed inherited-identity lane source; old schema-4 records are inspection-only.
-    "image_build_lanes.py": "f33dc3aabcb4eae0c739964f7d3788f437cac21a",
-    "gateway/graphics_catalogue_owner.py": "03da908204bc651a6278f889724f9e4f382f0d9d",
+    "image_build_lanes.py": "6cbc4a4d12f6137cfa7023fb295d9ab3aeb088fd",
+    "gateway/graphics_catalogue_owner.py": "f96d50cc15ece8637e70a4d1d58968a3aed29ecd",
     "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
 }
 
@@ -196,3 +196,119 @@ def test_corrected_first_fonts_catalogue_binds_new_executable_to_original_signed
     assert task["retained_acceptance_sha256"] == result["retained_acceptance_sha256"]
     assert result["accepted_base_kind"] == "image"
     assert result["compiler_authorized"] is False
+
+
+def test_existing_project_selection_does_not_require_fonts_only_root(monkeypatch):
+    """No Project path is selected by the source; caller chooses verified lane."""
+    source = Path(os.environ["ZOG_HOSTDEPLOY_FONTS_PR7"])
+    sys.path.insert(0, str(source / "tests"))
+    from test_gateway_first_graphics_catalogue import (
+        example, base_evidence, accepted_pin_bytes)
+    with monkeypatch.context() as patch:
+        patch.setattr(image_build_lanes, "specification", historical_specification)
+        evidence, origin, selected = example("image")
+    spec = _CURRENT_SPECIFICATION(
+        "reviewed-existing", mode="managed",
+        project_root="/var/lib/zog/image-build/projects/reviewed-existing",
+        provenance_host_id=origin["provenance_host_id"],
+        provenance_project_id="reviewed-existing-project",
+        source_repository=owner.REPOSITORY,
+        source_revision=image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        monthly_pin_repository_path=owner.PIN_PATH,
+        monthly_pin_identity="sha256:" + owner.PIN_SHA256,
+        memory_maximum_bytes=1024**3, thread_count_maximum=4,
+        cpu_weight=100, disk_reservation_bytes=1,
+        python_executable="/usr/bin/python3",
+    )
+    raw, issuer, binding = base_evidence(evidence, origin, "image")
+    result = owner.prepare(
+        lane_record=spec, accepted_base=selected,
+        installed_pin_bytes=accepted_pin_bytes(),
+        compiler_base_receipt_bytes=raw,
+        compiler_base_issuer_policy=issuer,
+        compiler_base_binding=binding,
+        compiler_base_origin_lane=origin)
+    assert result["execution_project_root"] == spec["project_root"]
+    assert result["execution_project_id"] == spec["provenance_project_id"]
+    assert result["compiler_origin_project_root"] == origin["project_root"]
+    assert result["compiler_origin_project_id"] == origin["provenance_project_id"]
+    assert result["shared_project_compatible"] is False
+    assert result["accepted_base_generation_id"] == evidence["accepted_base_generation_id"]
+    assert result["accepted_base_receipt_sha256"] == evidence["accepted_base_receipt_sha256"]
+    assert result["source_revision"] == image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+
+
+def test_same_existing_project_and_same_named_lane_needs_no_second_project(monkeypatch):
+    """Original acceptance binds the project; schema-5 execution uses it."""
+    source = Path(os.environ["ZOG_HOSTDEPLOY_FONTS_PR7"])
+    sys.path.insert(0, str(source / "tests"))
+    from test_gateway_first_graphics_catalogue import (
+        example, base_evidence, accepted_pin_bytes)
+    with monkeypatch.context() as patch:
+        patch.setattr(image_build_lanes, "specification", historical_specification)
+        evidence, origin, selected = example("image")
+    spec = _CURRENT_SPECIFICATION(
+        origin["lane"], mode="managed",
+        project_root=origin["project_root"],
+        provenance_host_id=origin["provenance_host_id"],
+        provenance_project_id=origin["provenance_project_id"],
+        source_repository=owner.REPOSITORY,
+        source_revision=image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        monthly_pin_repository_path=owner.PIN_PATH,
+        monthly_pin_identity="sha256:" + owner.PIN_SHA256,
+        memory_maximum_bytes=1024**3, thread_count_maximum=4,
+        cpu_weight=100, disk_reservation_bytes=1,
+        python_executable="/usr/bin/python3",
+    )
+    raw, issuer, binding = base_evidence(evidence, origin, "image")
+    result = owner.prepare(
+        lane_record=spec, accepted_base=selected,
+        installed_pin_bytes=accepted_pin_bytes(),
+        compiler_base_receipt_bytes=raw,
+        compiler_base_issuer_policy=issuer,
+        compiler_base_binding=binding,
+        compiler_base_origin_lane=origin)
+    assert result["execution_project_root"] == origin["project_root"]
+    assert result["compiler_origin_project_root"] == origin["project_root"]
+    assert result["execution_project_id"] == origin["provenance_project_id"]
+    assert result["shared_project_compatible"] is False
+    assert result["compiler_authorized"] is False
+
+
+def test_existing_project_selection_rejects_unapproved_source_and_identity(monkeypatch):
+    source = Path(os.environ["ZOG_HOSTDEPLOY_FONTS_PR7"])
+    sys.path.insert(0, str(source / "tests"))
+    from test_gateway_first_graphics_catalogue import (
+        example, base_evidence, accepted_pin_bytes)
+    with monkeypatch.context() as patch:
+        patch.setattr(image_build_lanes, "specification", historical_specification)
+        evidence, origin, selected = example("image")
+    raw, issuer, binding = base_evidence(evidence, origin, "image")
+    spec = _CURRENT_SPECIFICATION(
+        "reviewed-existing", mode="managed",
+        project_root="/var/lib/zog/image-build/projects/reviewed-existing",
+        provenance_host_id=origin["provenance_host_id"],
+        provenance_project_id="reviewed-existing-project",
+        source_repository=owner.REPOSITORY,
+        source_revision=image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        monthly_pin_repository_path=owner.PIN_PATH,
+        monthly_pin_identity="sha256:" + owner.PIN_SHA256,
+        memory_maximum_bytes=1024**3, thread_count_maximum=4,
+        cpu_weight=100, disk_reservation_bytes=1,
+        python_executable="/usr/bin/python3",
+    )
+    opts = dict(
+        accepted_base=selected, installed_pin_bytes=accepted_pin_bytes(),
+        compiler_base_receipt_bytes=raw,
+        compiler_base_issuer_policy=issuer,
+        compiler_base_binding=binding,
+        compiler_base_origin_lane=origin)
+    for change in (
+        {"source_revision": "f" * 40},
+        {"provenance_host_id": "foreign-host"},
+        {"monthly_pin_identity": "sha256:" + "f" * 64},
+    ):
+        other = copy.deepcopy(spec)
+        other.update(change)
+        with pytest.raises((owner.GraphicalCatalogueBlocked, ValueError)):
+            owner.prepare(lane_record=other, **opts)
