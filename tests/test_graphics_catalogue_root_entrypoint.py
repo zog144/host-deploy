@@ -252,3 +252,134 @@ def test_cli_rejects_evidence_path_override():
     with pytest.raises(SystemExit):
         native.main(["--lane", "fixture", "--generation", "a" * 64,
                      "--evidence-directory", "/tmp/substitute"])
+
+
+def _genuine_disposable_approval(row):
+    """One test-owned Ed25519 issuer, never an installed real compiler authority."""
+    import base64
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+    from zog.host_deploy.gateway import graphics_base_acceptance as base
+
+    private = Ed25519PrivateKey.generate()
+    issuer = dict(row["issuer_policy"])
+    issuer.update({
+        "schema": base.ISSUER_SCHEMA,
+        "key_id": "test-native-root-owner",
+        "ed25519_public_key": private.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw).hex(),
+        "receipt_directory": "/state/accepted-disposable-receipts",
+        "execution_environment_sha256": "sha256:" + "e" * 64,
+    })
+    installed_paths = {
+        role: {"path": "usr/bin/" + role,
+               "sha256": "sha256:" + format(i + 1, "064x")}
+        for i, role in enumerate(base.ROLES)
+    }
+    probe = {
+        "isolation": {
+            "schema": "image-build-compiler-isolation-v2",
+            "profile": "selected-root-kernel-mounts-v1",
+            "witness_sha256": "sha256:" + "9" * 64,
+        }
+    }
+    history = {"status": "complete", "missing": [],
+               "retained_evidence_sha256": None}
+    claim = {
+        "schema": base.ACCEPTANCE_SCHEMA,
+        "status": "independently-accepted-for-compiler-use",
+        "generation_id": row["accepted_base"]["generation_id"],
+        "generation_kind": "toolchain",
+        "generation_manifest_sha256": "sha256:" + "1" * 64,
+        "generation_inventory_sha256": "sha256:" + "2" * 64,
+        "generation_record_sha256": "sha256:" + "3" * 64,
+        "host_id": issuer["host_id"],
+        "installation_id": issuer["installation_id"],
+        "state_volume_id": issuer["state_volume_id"],
+        "project_id": issuer["project_id"],
+        "execution_environment_sha256": issuer["execution_environment_sha256"],
+        "target_abi": "x86_64-zog-linux-gnu",
+        "installed_paths": installed_paths,
+        "historical_provenance": history,
+        "native_probe": probe,
+        "required_probe_command_sha256": "sha256:" + "7" * 64,
+    }
+    signature = base64.b64encode(
+        private.sign(base.DOMAIN + base.canonical(claim))).decode("ascii")
+    receipt = base.canonical({
+        "schema": base.ACCEPTANCE_SCHEMA, "key_id": issuer["key_id"],
+        "claim": claim, "signature": signature,
+    })
+    binding = {
+        "schema": base.BINDING_SCHEMA,
+        "generation_id": claim["generation_id"],
+        "generation_kind": claim["generation_kind"],
+        "generation_manifest_sha256": claim["generation_manifest_sha256"],
+        "generation_inventory_sha256": claim["generation_inventory_sha256"],
+        "generation_record_sha256": claim["generation_record_sha256"],
+        "host_id": claim["host_id"],
+        "installation_id": claim["installation_id"],
+        "state_volume_id": claim["state_volume_id"],
+        "project_id": claim["project_id"],
+        "execution_environment_sha256": claim["execution_environment_sha256"],
+        "target_abi": claim["target_abi"],
+        "compiler_files_sha256": base.digest(base.canonical(installed_paths)),
+        "native_probe_sha256": base.digest(base.canonical(probe)),
+        "historical_provenance": history,
+        "acceptance_receipt_sha256": base.digest(receipt),
+        "status": "independent-compiler-capability-observed-not-job-authorization",
+    }
+    row = copy.deepcopy(row)
+    row["issuer_policy"] = issuer
+    row["producer_binding"] = binding
+    row["accepted_base"]["acceptance_receipt_sha256"] = base.digest(receipt)
+    return row, receipt
+
+
+def test_real_signed_disposable_receipt_installs_twice_without_replacement(evidence):
+    row, write, directory, store, _ = evidence
+    pin = Path("pinned-image-build/project/pins/2026-10-01/commit-pin.py")
+    if not pin.is_file():
+        pytest.skip("exact original October pin checkout required")
+    pin_bytes = pin.read_bytes()
+    assert catalogue._sha(pin_bytes) == "sha256:" + catalogue.PIN_SHA256
+
+    signed_row, signed_bytes = _genuine_disposable_approval(row)
+    write(signed_row)
+    receipt_path = directory / native.RECEIPT_NAME
+    receipt_path.write_bytes(signed_bytes)
+    receipt_path.chmod(0o600)
+    pin_path = directory / native.PIN_NAME
+    pin_path.write_bytes(pin_bytes)
+    pin_path.chmod(0o600)
+
+    selected = signed_row["accepted_base"]["generation_id"]
+    lane = signed_row["lane_record"]["lane"]
+    installed = native.install(lane=lane, generation=selected)
+    assert installed["compiler_authorized"] is False
+    assert installed["status"] == "installed-catalogue-not-build-authorization"
+    assert installed["accepted_base_generation_id"] == selected
+    assert installed["compiler_origin_project_id"] == "original-project"
+    assert installed["execution_project_id"] == "original-project"
+    assert installed["host_id"] == signed_row["host_identity"]["host_id"]
+    assert installed["installation_id"] == signed_row["host_identity"]["installation_id"]
+    assert catalogue.CATALOGUE.is_file() and catalogue.RECEIPT.is_file()
+    inodes = {p.name: (p.stat().st_ino, p.read_bytes()) for p in store.iterdir()}
+    assert native.install(lane=lane, generation=selected) == installed
+    assert inodes == {p.name: (p.stat().st_ino, p.read_bytes())
+                     for p in store.iterdir()}
+    assert json.loads(catalogue.RECEIPT.read_bytes()) == installed
+
+
+def test_disposable_signed_receipt_bound_to_wrong_project_is_denied(evidence):
+    row, write, directory, store, _ = evidence
+    signed_row, signed_bytes = _genuine_disposable_approval(row)
+    signed_row["origin_lane"]["provenance_project_id"] = "foreign-project"
+    write(signed_row)
+    p = directory / native.RECEIPT_NAME
+    p.write_bytes(signed_bytes)
+    p.chmod(0o600)
+    with pytest.raises((native.NativeCatalogueHeld, ValueError)):
+        native.install(lane=row["lane_record"]["lane"],
+                       generation=row["accepted_base"]["generation_id"])
+    assert list(store.iterdir()) == []
