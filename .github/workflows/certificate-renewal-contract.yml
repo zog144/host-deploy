@@ -87,7 +87,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 Node 24
         with:
           repository: zog144/box-control
-          ref: 9111606eef306292d70fd4d941eeb73f48b33ff1
+          ref: c886e7a90bb4ea74e771a6c5dcefaa2069539ec7
           path: pinned-box-control
           persist-credentials: false
       - name: Install offline test dependency
