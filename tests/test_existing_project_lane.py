@@ -215,3 +215,39 @@ def test_activated_existing_project_rejects_changed_source(existing):
     (project / "source" / "tracked.py").write_text("changed\n")
     with pytest.raises(RuntimeError, match="clean reviewed checkout"):
         lanes.activate(workspace, spec["lane"])
+
+
+def test_retained_fonts_pin_uses_reviewed_producer_not_project_or_lane_name():
+    """First Fonts may execute from a verified existing Project named differently."""
+    root = "/var/lib/zog/image-build/projects/existing-compiler"
+    spec = lanes.specification(
+        "another-review-lane", existing_project=True, mode="managed",
+        source_repository="zog144/image-build",
+        source_revision=lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        monthly_pin_repository_path=lanes.FIRST_FONTS_ORIGINAL_PIN_PATH,
+        monthly_pin_identity=lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY,
+        provenance_host_id="reviewed-host", provenance_project_id="reviewed-project",
+        project_root=root, memory_maximum_bytes=1024**3,
+        thread_count_maximum=4, cpu_weight=100, disk_reservation_bytes=1,
+        python_executable="/usr/bin/python3",
+    )
+    record = {
+        "schema": lanes.INHERITED_SCHEMA, "state": "active",
+        "lane": spec["lane"], "specification": spec,
+        "source_root": root + "/source",
+        "state_dir": root + "/state",
+        "package_dir": root + "/source/project/package",
+        "controller_config": root + "/controller-" + spec["lane"] + "-inherited-v1.json",
+    }
+    argv = lanes.remote_operation_argv(record, "/run/reviewed-request.json")
+    assert argv[argv.index("--provenance-pin") + 1] == (
+        root + "/state/image-build/build-record/artifacts/"
+        + lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY.removeprefix("sha256:"))
+    assert argv[argv.index("--retained-pin-source-revision") + 1] == (
+        lanes.FIRST_FONTS_PRODUCER_REVISION)
+    assert argv[argv.index("--retained-pin-repository-path") + 1] == (
+        lanes.FIRST_FONTS_ORIGINAL_PIN_PATH)
+    wrong = copy.deepcopy(record)
+    wrong["specification"]["monthly_pin_identity"] = "sha256:" + "f" * 64
+    with pytest.raises(RuntimeError, match="retained pin differs"):
+        lanes.remote_operation_argv(wrong, "/run/reviewed-request.json")
