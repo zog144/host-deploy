@@ -126,7 +126,7 @@ class RootReaders:
             for name, limit in (
                 (EVIDENCE_NAME, 65536),
                 (RECEIPT_NAME, 65536),
-                (PIN_NAME, 65536),
+                (PIN_NAME, 1024 * 1024),
             )
         }
         self.evidence = _json(self.raw[EVIDENCE_NAME])
@@ -238,7 +238,7 @@ class RootReaders:
     def recheck(self):
         # Retained root-owned evidence must not change during publication.
         for name, original in self.raw.items():
-            if _read_exact(self.directory, name, 65536) != original:
+            if _read_exact(self.directory, name, (1024 * 1024 if name == PIN_NAME else 65536)) != original:
                 _hold()
         for revision in self.sources:
             if not self.attest_installed_source(revision):
