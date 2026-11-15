@@ -82,6 +82,9 @@ def main():
         command.add_argument('--lane',required=True)
         if name=='lane-prepare':
             command.add_argument('--spec',required=True)
+        if name=='lane-activate':
+            command.add_argument('--expected-specification-sha256',
+                                 help='Exact code-derived specification digest for selected lane')
         if name=='lane-bind-python':
             command.add_argument('--python-executable',required=True)
             command.add_argument('--expected-specification-sha256',required=True)
@@ -170,7 +173,9 @@ def main():
                 expected_specification_sha256=arguments.expected_specification_sha256,
             )
         elif arguments.command=='lane-activate':
-            result=image_build_lanes.activate(arguments.workspace,arguments.lane)
+            result=image_build_lanes.activate(
+                arguments.workspace, arguments.lane,
+                expected_specification_sha256=arguments.expected_specification_sha256)
         elif arguments.command=='lane-inspect':
             result=image_build_lanes.inspect(arguments.workspace,arguments.lane)
         elif arguments.command=='lane-retire':
