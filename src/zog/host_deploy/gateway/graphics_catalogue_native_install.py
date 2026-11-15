@@ -30,8 +30,8 @@ PIN_NAME = "october-commit-pin.py"
 SCHEMA = "host-deploy-first-fonts-installed-native-evidence-v1"
 SOURCE_SCHEMA = "host-deploy-first-fonts-installed-sources-v1"
 IDENTITY_SCHEMA = "host-deploy-first-fonts-installed-host-identity-v1"
-HEX64 = re.compile(r"[a-f0-9]{64}\\Z")
-SHA = re.compile(r"sha256:[a-f0-9]{64}\\Z")
+HEX64 = re.compile(r"[a-f0-9]{64}\Z")
+SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 FIELDS = {
     "schema", "lane_record", "accepted_base", "issuer_policy",
     "producer_binding", "origin_lane", "host_identity", "installed_sources",
@@ -146,8 +146,9 @@ class RootReaders:
                 or type(issuer) is not dict or type(binding) is not dict
                 or type(accepted) is not dict or type(installed_lane) is not dict
                 or installed_lane.get("state") != "active"
+                or type(installed_lane.get("specification")) is not dict
                 or installed_lane.get("lane") !=
-                   installed_lane.get("specification", {}).get("lane")
+                   installed_lane["specification"].get("lane")
                 or issuer.get("host_id") != identity["host_id"]
                 or issuer.get("installation_id") != identity["installation_id"]
                 or issuer.get("state_volume_id") != identity["state_volume_id"]
@@ -172,6 +173,7 @@ class RootReaders:
                 or origin["schema"] != image_build_lanes.SCHEMA
                 or origin["provenance_host_id"] != identity["host_id"]
                 or origin["provenance_project_id"] != issuer.get("project_id")
+                or type(row["installed_sources"]) is not dict
                 or row["installed_sources"].get("schema") != SOURCE_SCHEMA):
             _hold()
         sources = row["installed_sources"]
