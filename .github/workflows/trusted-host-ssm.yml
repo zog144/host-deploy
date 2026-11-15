@@ -33,6 +33,7 @@ on:
       - tests/test_fonts_prepared_pin_provenance.py
       - tests/test_fonts_pin_retention.py
       - tests/test_image_build_lanes.py
+      - tests/test_existing_project_lane.py
       - src/zog/host_deploy/gateway/image_build_execution.py
       - src/zog/host_deploy/gateway/graphics_catalogue_owner.py
       - src/zog/host_deploy/gateway/graphics_base_acceptance.py
@@ -217,6 +218,7 @@ jobs:
             tests/test_gateway_issue_fifo_first_fonts.py \
             tests/test_gateway_fonts_installed_lane_tuple.py \
             tests/test_image_build_lanes.py \
+            tests/test_existing_project_lane.py \
             tests/test_fonts_lane_profile.py \
             tests/test_fonts_lane_migration.py \
             tests/test_fonts_initialized_layout_integration.py \
