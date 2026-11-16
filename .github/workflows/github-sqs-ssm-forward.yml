@@ -45,4 +45,5 @@ jobs:
             tests/test_gateway_dispatch.py
       - name: Native run remains outside CI
         if: always()
-        run: echo 'SOURCE ONLY: no live GitHub issue, SQS, SSM or Fonts compilation submitted' >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo 'SOURCE ONLY: no live GitHub issue, SQS, SSM or Fonts compilation submitted' >> "$GITHUB_STEP_SUMMARY"
