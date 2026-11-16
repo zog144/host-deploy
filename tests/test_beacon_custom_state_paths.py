@@ -104,7 +104,15 @@ def test_installer_creates_unmounted_state_and_identity_before_key_bootstrap(nat
         identity_directory=str(identity), credential_directory=str(credentials)))
     assert not (root / "state").exists()
     assert not identity.exists()
-    beacon.state_directories(chosen)
+    # Fresh parent directories must remain traversable by the service even
+    # when the root install process has a restrictive 077 umask.
+    previous_umask = os.umask(0o077)
+    try:
+        beacon.state_directories(chosen)
+    finally:
+        os.umask(previous_umask)
+    assert (root / "state").stat().st_mode & 0o777 == 0o755
+    assert (root / "state/host-discover").stat().st_mode & 0o777 == 0o755
     assert identity.is_dir()
     assert (root / "state/host-discover").is_dir()
     assert credentials.is_dir()
