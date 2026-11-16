@@ -334,3 +334,80 @@ def test_direct_mode_rejects_legacy_catalogue_supervisor_configuration(tmp_path)
             approved_generic_catalogue={"schema": 2, "tasks": {}},
             approved_catalogue_identity="sha256:" + "a" * 64,
         )
+
+
+def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path, monkeypatch):
+    """Compile the actual frozen SSM wrapper from a schema-5 Fonts lane.
+
+    No synthetic signed compiler receipt, Project-origin lane or injected
+    task catalogue is present; no SSM call leaves this test.
+    """
+    from contextlib import nullcontext
+
+    value = approved()
+    root = tmp_path / "gateway"
+    admit(root, value)
+    project = "/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime"
+    spec = image_build_lanes.specification(
+        "gateway-first-fonts-runtime", mode="managed",
+        source_repository="zog144/image-build",
+        source_revision=image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        monthly_pin_repository_path=image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_PATH,
+        monthly_pin_identity=image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY,
+        provenance_host_id="compiler-test-host",
+        provenance_project_id="fonts-execution",
+        project_root=project, memory_maximum_bytes=2**30,
+        thread_count_maximum=8, cpu_weight=100, disk_reservation_bytes=2**30,
+        python_executable="/usr/bin/python3",
+    )
+    record = {
+        "schema": image_build_lanes.INHERITED_SCHEMA,
+        "state": "active",
+        "lane": spec["lane"],
+        "specification": spec,
+        "source_root": project + "/source",
+        "package_dir": project + "/source/project/package",
+        "state_dir": project + "/state",
+        "controller_config": project + "/controller.json",
+        "runtime_companion": {
+            "schema": image_build_lanes.RUNTIME_COMPANION_SCHEMA,
+            "repository": image_build_lanes.BUILD_RECORD_REPOSITORY,
+            "revision": image_build_lanes.FIRST_FONTS_BUILD_RECORD_COMPATIBILITY,
+            "source_root": project + "/companions/build-record",
+            "producer_revision": spec["source_revision"],
+        },
+    }
+    host = {**TARGET, "workspace_id": WORKSPACE}
+    monkeypatch.setattr(image_build_dispatch, "owned_workspace",
+                        lambda directory, workspace: "selected-workspace")
+    monkeypatch.setattr(image_build_dispatch, "locked_workspace",
+                        lambda directory: nullcontext(directory))
+    monkeypatch.setattr(image_build_dispatch, "configuration",
+                        lambda directory: ({}, host))
+    monkeypatch.setattr(image_build_dispatch, "_load_lane_locked",
+                        lambda directory, lane: (record, spec))
+    assert simple_forward.advance(root, value["request_id"])["phase"] == "prepared"
+    frozen = load_dispatch(root, value["request_id"])["binding"]
+    assert frozen["direct_forward"] is True
+    assert frozen["remote_request"]["arguments"]["recipe_snapshot"] == SNAPSHOT
+    assert frozen["remote_request"]["arguments"]["selection"] == SELECTION
+    assert "task" not in frozen and "task_catalogue_identity" not in frozen
+    # These are the real existing producer/SMM-wrapper validators, NOT mocks.
+    image_build_execution._binding({"phase": "prepared", "binding": frozen})
+    script = image_build_execution.remote_script(frozen)
+    assert "zog.image_build.remote_operations" in script
+    assert "compiler-selection.json" not in script
+    assert "compiler_provenance" not in script
+    assert "issuer_policy" not in script
+
+    sent = []
+    class Host:
+        def __init__(self, configuration):
+            assert configuration == TARGET
+        def submit_command(self, script, seconds):
+            sent.append((script, seconds))
+            return "fixed-command-1"
+    result = simple_forward.advance(root, value["request_id"], host_factory=Host)
+    assert result["phase"] == "submitted"
+    assert sent == [(script, simple_forward.CONTROL_TIMEOUT_SECONDS)]
+    assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"
