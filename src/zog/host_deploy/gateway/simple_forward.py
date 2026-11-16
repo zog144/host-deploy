@@ -2,8 +2,8 @@
 
 GitHub Actions validates issue-opened identity and allowlist before SQS.
 The trusted-Host queue/owned workspace and schema-5 lane select the SSM target,
-document and installed image-build executable. The producer owns interpretation
-of generation/recipe-snapshot references. One fsynced intent = one SendCommand
+document and installed image-build executable. The producer selects the active
+toolchain and immutable recipe snapshot from its own Project. One fsynced intent = one SendCommand
 attempt, even if the CommandId acknowledgement is lost.
 """
 import json
@@ -40,8 +40,7 @@ def _selected_request(root, request_id):
     request = state["request"]
     parameters = request["parameters"]
     if ((request["operation"], parameters.get("task")) not in SUPPORTED
-            or set(parameters) != {
-                "lane", "task", "selection", "recipe_snapshot"}):
+            or set(parameters) != {"lane", "task"}):
         raise ForwardingDenied("operation is not enabled for direct forwarding")
     return request
 
@@ -52,10 +51,8 @@ def _frozen_binding(root, request_id):
     original = _selected_request(root, request_id)
     if (binding.get("direct_forward") is not True
             or binding.get("request_id") != request_id
-            or binding["remote_request"].get("arguments", {}).get("selection") !=
-                original["parameters"]["selection"]
-            or binding["remote_request"]["arguments"].get("recipe_snapshot") !=
-                original["parameters"]["recipe_snapshot"]
+            or set(binding["remote_request"].get("arguments", {}))
+                != {"mode", "targets"}
             or binding["remote_request"].get("operation_id") != request_id):
         raise ForwardingDenied("frozen SSM operation differs from authorized request")
     return record, binding
