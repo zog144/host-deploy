@@ -210,9 +210,24 @@ def test_selected_pr7_files_match_exact_source_review():
     if base is None:
         pytest.skip("cross-repository source pin is exercised by trusted-host CI")
     root = Path(base)
-    # The signed compiler acceptance reader remains byte-identical to PR7.
+    # The signed compiler acceptance protocol (schema, claim, issuer, signer
+    # and immutable generation verifier) stays the original PR7 contract.
+    # Only its origin binding now uses native generation provenance instead
+    # of treating a historical lane as proof of the compiler Project.
     relative = Path("src/zog/host_deploy/gateway/graphics_base_acceptance.py")
-    assert (root / relative).read_bytes() == relative.read_bytes()
+    import ast
+    def assignment(path, name):
+        tree = ast.parse(path.read_text())
+        node = next(n for n in tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == name
+                            for t in n.targets))
+        return ast.dump(node.value, include_attributes=False)
+    old_base = root / relative
+    new_base = relative
+    for field in ("ACCEPTANCE_SCHEMA", "BINDING_SCHEMA", "ISSUER_SCHEMA",
+                  "DOMAIN", "CLAIM_FIELDS", "BINDING_FIELDS", "ISSUER_FIELDS",
+                  "ROLES", "SOURCE", "PIN"):
+        assert assignment(old_base, field) == assignment(new_base, field)
     # The catalogue owner's *native installer* now supports exact-repeat and
     # interrupted two-file recovery. The immutable selection and signed base
     # verification must still match the independently reviewed PR7 contract.
@@ -227,10 +242,22 @@ def test_selected_pr7_files_match_exact_source_review():
     # The catalogue selector/preparer necessarily change to bind the reviewed
     # identity-free producer and the preserved ORIGINAL compiler evidence.
     assert selected_function(old_owner, "_protected_store") == selected_function(new_owner, "_protected_store")
+    for name in ("canonical", "digest", "_unique", "valid_history",
+                 "retained_generation"):
+        assert selected_function(old_base, name) == selected_function(new_base, name)
+    for signature_fragment in (
+        "Ed25519PublicKey.from_public_bytes",
+        ".verify(sig,DOMAIN+canonical(claim))",
+        "producer_binding[\"native_probe_sha256\"]",
+    ):
+        assert signature_fragment in old_base.read_text()
+        assert signature_fragment in new_base.read_text()
+
     source = new_owner.read_text()
     assert "base_acceptance.checked_base(" in source
     assert "base_acceptance.retained_generation(" in source
-    assert "compiler_base_origin_lane" in source
+    assert "compiler_base_provenance" in source
+    assert "compiler_base_origin_lane" not in source
     assert "EXECUTABLE_SOURCE" in source
     # PR30 also retains the preexisting reviewed XCB/X11 predecessor argument.
     # It must match PR7's finite task map and Fonts receipt checks.

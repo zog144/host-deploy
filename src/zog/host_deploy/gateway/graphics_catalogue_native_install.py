@@ -1,7 +1,7 @@
 """Root-owned entry point for the existing first Fonts catalogue installer.
 
 The root administrator installs a *copy of the already verified* original
-compiler evidence at the fixed local path. This module reads those files and
+compiler evidence and generation provenance at the fixed local path. This module reads those files and
 installed immutable source trees; it does not create approval records, pick a
 generation, infer the newest output, query AWS or submit compiler work.
 
@@ -22,6 +22,7 @@ import stat
 from .. import image_build_lanes
 from . import graphics_attester_import as importer
 from . import graphics_catalogue_owner as catalogue
+from . import graphics_base_acceptance as acceptance
 
 EVIDENCE_DIRECTORY = "/etc/zog/host-deploy/first-fonts-native"
 EVIDENCE_NAME = "compiler-selection.json"
@@ -35,7 +36,7 @@ COMMIT = re.compile(r"[a-f0-9]{40}\Z")
 SHA = re.compile(r"sha256:[a-f0-9]{64}\Z")
 FIELDS = {
     "schema", "lane_record", "accepted_base", "issuer_policy",
-    "producer_binding", "origin_lane", "host_identity", "installed_sources",
+    "producer_binding", "compiler_provenance", "host_identity", "installed_sources",
 }
 
 
@@ -157,6 +158,13 @@ class RootReaders:
                 or binding.get("installation_id") != identity["installation_id"]
                 or binding.get("state_volume_id") != identity["state_volume_id"]
                 or accepted.get("generation_id") != binding.get("generation_id")
+                or not acceptance.valid_origin_provenance(row["compiler_provenance"])
+                or row["compiler_provenance"]["generation_id"] != accepted["generation_id"]
+                or row["compiler_provenance"]["generation_kind"] != accepted.get("kind")
+                or row["compiler_provenance"]["host_id"] != identity["host_id"]
+                or row["compiler_provenance"]["installation_id"] != identity["installation_id"]
+                or row["compiler_provenance"]["state_volume_id"] != identity["state_volume_id"]
+                or row["compiler_provenance"]["project_id"] != issuer.get("project_id")
                 or accepted.get("acceptance_receipt_sha256") !=
                    catalogue._sha(self.receipt)
                 or binding.get("acceptance_receipt_sha256") !=
@@ -165,15 +173,11 @@ class RootReaders:
             _hold()
         try:
             spec = image_build_lanes.validate(installed_lane["specification"])
-            origin = image_build_lanes.validate(row["origin_lane"])
         except (ValueError, KeyError, TypeError, AttributeError):
             _hold()
         if (spec["schema"] != image_build_lanes.INHERITED_SCHEMA
                 or spec["source_revision"] != catalogue.EXECUTABLE_SOURCE
                 or spec["provenance_host_id"] != identity["host_id"]
-                or origin["schema"] != image_build_lanes.SCHEMA
-                or origin["provenance_host_id"] != identity["host_id"]
-                or origin["provenance_project_id"] != issuer.get("project_id")
                 or type(row["installed_sources"]) is not dict
                 or row["installed_sources"].get("schema") != SOURCE_SCHEMA):
             _hold()
@@ -221,9 +225,12 @@ class RootReaders:
             _hold()
         return self.evidence["producer_binding"]
 
-    def read_compiler_base_origin_lane(self, generation):
+    def read_compiler_base_provenance(self, generation):
         self.read_accepted_base(generation)
-        return self.evidence["origin_lane"]
+        evidence = self.evidence["compiler_provenance"]
+        if generation != evidence["generation_id"]:
+            _hold()
+        return evidence
 
     def attest_installed_source(self, revision):
         source = self.sources.get(revision)
@@ -267,9 +274,7 @@ def install(*, lane, generation):
         read_compiler_base_receipt=readers.read_compiler_base_receipt,
         read_compiler_base_issuer=readers.read_compiler_base_issuer,
         read_compiler_base_binding=readers.read_compiler_base_binding,
-        read_compiler_base_origin_lane=readers.read_compiler_base_origin_lane,
-        # Separate shared-Project owner capability is not yet installed:
-        # distinct lane names on a shared Project must HOLD.
+        read_compiler_base_provenance=readers.read_compiler_base_provenance,
     )
     readers.recheck()
     return result

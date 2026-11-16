@@ -5,6 +5,7 @@ lane file writes, AWS, SQS or SSM execution.
 """
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -22,8 +23,8 @@ EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
     # Reviewed inherited-identity lane source; old schema-4 records are inspection-only.
     "image_build_lanes.py": "6cbc4a4d12f6137cfa7023fb295d9ab3aeb088fd",
-    "gateway/graphics_catalogue_owner.py": "f96d50cc15ece8637e70a4d1d58968a3aed29ecd",
-    "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
+    "gateway/graphics_catalogue_owner.py": "bf96526d7b7005258dac0b29f3ffe94427fe4cc3",
+    "gateway/graphics_base_acceptance.py": "66f5c0c57fc49688973e05c28ad1cf31d157344e",
 }
 
 
@@ -59,33 +60,56 @@ def test_reviewed_installed_module_tuple_is_exact_fonts_profile_successor_contra
     assert reader.PIN=="sha256:"+owner.PIN_SHA256
 
 
-def test_pr30_task_catalogue_and_lane_accept_exact_pr7_signed_fonts_selection(monkeypatch):
-    source=Path(os.environ["ZOG_HOSTDEPLOY_FONTS_PR7"])
+def test_original_pr7_signed_fonts_generation_still_selects_new_catalogue(monkeypatch):
+    """Original signed image/toolchain receipts survive without origin-lane lookup."""
+    source = Path(os.environ["ZOG_HOSTDEPLOY_FONTS_PR7"])
     assert source.is_dir()
-    sys.path.insert(0,str(source/"tests"))
-    from test_gateway_first_graphics_catalogue import example, candidate
-    # The immutable PR7 signed fixture was created with a historical schema-4
-    # lane. Construct ONLY that serialized test evidence; never revive the
-    # caller-selectable UID/GID constructor in production.
+    sys.path.insert(0, str(source / "tests"))
+    from test_gateway_first_graphics_catalogue import (
+        example, base_evidence, accepted_pin_bytes,
+    )
+    # PR7's historical fixture is used only to construct ORIGINAL signed
+    # compiler evidence. The current consumer receives no origin-lane record.
     with monkeypatch.context() as patch:
         patch.setattr(image_build_lanes, "specification", historical_specification)
         selections = [example(kind) for kind in ("image", "toolchain")]
-    for kind, (source_context,lane,selection) in zip(("image", "toolchain"), selections):
-        review=fonts_lane_review.review([
-            {"schema":lane["schema"],"lane":lane["lane"],
-             "specification":lane,"state":"active"}])
-        assert review["status"]=="MATCHING_ACTIVE_LANE_SOURCE_ONLY"
-        assert review["specification_sha256"]==image_build_lanes.specification_sha256(lane)
-        selected=candidate(source_context,lane,selection)
-        assert selected["accepted_base_kind"]==kind
+    for kind, (source_context, original, selection) in zip(
+            ("image", "toolchain"), selections):
+        raw, issuer, binding = base_evidence(source_context, original, kind)
+        execution = _CURRENT_SPECIFICATION(
+            "reviewed-fonts-" + kind, mode="managed",
+            project_root="/var/lib/zog/image-build/projects/reviewed-fonts-" + kind,
+            provenance_host_id=original["provenance_host_id"],
+            provenance_project_id="fonts-execution-" + kind,
+            source_repository=owner.REPOSITORY,
+            source_revision=image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+            monthly_pin_repository_path=owner.PIN_PATH,
+            monthly_pin_identity="sha256:" + owner.PIN_SHA256,
+            memory_maximum_bytes=1024**3, thread_count_maximum=4,
+            cpu_weight=100, disk_reservation_bytes=1,
+            python_executable="/usr/bin/python3",
+        )
+        selected = owner.prepare(
+            lane_record=execution, accepted_base=selection,
+            installed_pin_bytes=accepted_pin_bytes(),
+            compiler_base_receipt_bytes=raw,
+            compiler_base_issuer_policy=issuer,
+            compiler_base_binding=binding,
+            compiler_base_provenance=compiler_origin(raw, original["project_root"]),
+        )
+        assert selected["accepted_base_kind"] == kind
         assert selected["compiler_authorized"] is False
-        parsed=task_catalogue.loads(selected["bytes"])
-        task=parsed["tasks"][owner.TASK]
-        assert task["arguments"]["selection"]==source_context["accepted_base_generation_id"]
-        assert task["arguments"]["compiler_base"]==source_context["accepted_base_receipt_sha256"]
-        assert task["retained_acceptance_sha256"]==selected["retained_acceptance_sha256"]
-        assert task["monthly_pin_identity"]=="sha256:"+owner.PIN_SHA256
-        assert list(parsed["tasks"])==[owner.TASK]
+        assert selected["compiler_origin_project_id"] == original["provenance_project_id"]
+        assert selected["execution_project_id"] == execution["provenance_project_id"]
+        assert selected["compiler_origin_project_root"] != selected["execution_project_root"]
+        parsed = task_catalogue.loads(selected["bytes"])
+        task = parsed["tasks"][owner.TASK]
+        assert task["arguments"]["selection"] == source_context["accepted_base_generation_id"]
+        assert task["arguments"]["compiler_base"] == source_context["accepted_base_receipt_sha256"]
+        assert task["retained_acceptance_sha256"] == selected["retained_acceptance_sha256"]
+        assert task["monthly_pin_identity"] == "sha256:" + owner.PIN_SHA256
+        assert list(parsed["tasks"]) == [owner.TASK]
+
 
 
 def lane(name, *, source=None, pin=None, project=None, project_id=None):
@@ -101,6 +125,20 @@ def lane(name, *, source=None, pin=None, project=None, project_id=None):
         thread_count_maximum=4,cpu_weight=100,disk_reservation_bytes=1,
         execution_user_id=24302,execution_group_id=24302,
         python_executable="/usr/bin/python3")
+
+
+def compiler_origin(receipt, project_root):
+    """Extract independently attestable generation identity, not a lane record."""
+    claim = json.loads(receipt)["claim"]
+    return {
+        key: (
+            reader.ORIGIN_SCHEMA if key == "schema"
+            else project_root if key == "project_root"
+            else reader.digest(receipt) if key == "acceptance_receipt_sha256"
+            else claim[key]
+        )
+        for key in reader.ORIGIN_FIELDS
+    }
 
 
 def record(spec, state="active"):
@@ -186,7 +224,7 @@ def test_corrected_first_fonts_catalogue_binds_new_executable_to_original_signed
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin,
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]),
     )
     assert result["source_revision"] == revised["source_revision"]
     assert result["lane_specification_sha256"] == image_build_lanes.specification_sha256(revised)
@@ -227,7 +265,7 @@ def test_existing_project_selection_does_not_require_fonts_only_root(monkeypatch
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin)
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]))
     assert result["execution_project_root"] == spec["project_root"]
     assert result["execution_project_id"] == spec["provenance_project_id"]
     assert result["compiler_origin_project_root"] == origin["project_root"]
@@ -267,7 +305,7 @@ def test_same_existing_project_and_same_named_lane_needs_no_second_project(monke
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin)
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]))
     assert result["execution_project_root"] == origin["project_root"]
     assert result["compiler_origin_project_root"] == origin["project_root"]
     assert result["execution_project_id"] == origin["provenance_project_id"]
@@ -302,7 +340,7 @@ def test_existing_project_selection_rejects_unapproved_source_and_identity(monke
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin)
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]))
     for change in (
         {"source_revision": "f" * 40},
         {"provenance_host_id": "foreign-host"},

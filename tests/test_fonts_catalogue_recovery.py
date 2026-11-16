@@ -59,6 +59,7 @@ def install_case(tmp_path, monkeypatch):
             read_compiler_base_receipt=lambda _: b"receipt-fixture",
             read_compiler_base_issuer=lambda: {"installation_id": "installation-fixture"},
             read_compiler_base_binding=lambda *args: {},
+            read_compiler_base_provenance=lambda _: {"writer-fixture-only": True},
             attest_installed_source=lambda src: True,
             attest_host_identity=lambda host, installation:
                 (host, installation) == ("host-fixture", "installation-fixture"),

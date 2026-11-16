@@ -117,8 +117,7 @@ def _selection(lane_record, accepted_base, issuer):
 def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             compiler_base_receipt_bytes=None,
             compiler_base_issuer_policy=None, compiler_base_binding=None,
-            compiler_base_origin_lane=None,
-            verified_shared_project_compatibility=False):
+            compiler_base_provenance=None):
     """Pure catalogue candidate from native-selected lane and compiler evidence.
 
     This does not read, write, or require a Fonts approval file. The monthly
@@ -127,32 +126,20 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
     """
     lane, selection = _selection(
         lane_record, accepted_base, compiler_base_issuer_policy)
-    # Original signed acceptance identifies the compiler-origin Project.
-    # Execution may use that same Project only with a reviewed native proof
-    # that separately named lanes do not collide in the controller.
-    try:
-        origin = (image_build_lanes.validate(compiler_base_origin_lane)
-                  if compiler_base_origin_lane is not None else lane)
-    except (ValueError, TypeError, KeyError):
-        _fail()
-    shared = (origin["lane"] != lane["lane"]
-              and (origin["project_root"] == lane["project_root"]
-                   or origin["provenance_project_id"] ==
-                       lane["provenance_project_id"]))
-    if (origin["schema"] != image_build_lanes.SCHEMA
-            or origin["mode"] != "managed"
-            or origin["source_repository"] != REPOSITORY
-            or origin["provenance_host_id"] != lane["provenance_host_id"]
-            or (shared and not (
-                origin["project_root"] == lane["project_root"]
-                and origin["provenance_project_id"] == lane["provenance_project_id"]
-                and verified_shared_project_compatibility is True))):
-        _fail()
-    # Signed Ed25519 receipt and independently authenticated producer
-    # binding are still required; no cloned or reissued compiler evidence.
+    # The signed claim identifies the compiler Project ID, not a separate
+    # origin-lane record or filesystem pathname. The independent native
+    # producer provenance identifies the origin root and generation. Their
+    # Project/Host/STATE/generation digests are checked by checked_base.
+    origin = compiler_base_provenance
     bound_base = base_acceptance.checked_base(
         compiler_base_receipt_bytes, compiler_base_issuer_policy,
-        compiler_base_binding, approval=selection, lane=origin)
+        compiler_base_binding, approval=selection, origin_provenance=origin)
+    # One Project cannot have an independently different Project ID for a
+    # matching root (or vice versa). No origin-lane compatibility grant exists.
+    same_root = origin["project_root"] == lane["project_root"]
+    same_project = origin["project_id"] == lane["provenance_project_id"]
+    if same_root != same_project:
+        _fail()
     if (bound_base["kind"] != accepted_base["kind"]
             or bound_base["generation_id"] != accepted_base["generation_id"]
             or bound_base["accepted_receipt_sha256"] !=
@@ -210,8 +197,8 @@ def prepare(*, lane_record, accepted_base, installed_pin_bytes,
             "execution_project_root": lane["project_root"],
             "execution_project_id": lane["provenance_project_id"],
             "compiler_origin_project_root": origin["project_root"],
-            "compiler_origin_project_id": origin["provenance_project_id"],
-            "shared_project_compatible": bool(shared),
+            "compiler_origin_project_id": origin["project_id"],
+            "shared_project_compatible": False,
             "source_revision": lane["source_revision"],
             "lane_specification_sha256": image_build_lanes.specification_sha256(lane),
             "installation_id":selection["installation_id"],
@@ -265,8 +252,7 @@ def install_native(*, lane_name, generation_id,
                    attest_host_identity, read_compiler_base_receipt=None,
                    read_compiler_base_issuer=None,
                    read_compiler_base_binding=None,
-                   read_compiler_base_origin_lane=None,
-                   attest_shared_project_compatibility=None):
+                   read_compiler_base_provenance=None):
     """Install the small catalogue and receipt once, without extra policy files.
 
     Work selects a managed lane and compiler generation through this trusted
@@ -276,12 +262,6 @@ def install_native(*, lane_name, generation_id,
     """
     if os.geteuid() != 0:
         raise PermissionError("protected graphical catalogue requires root")
-    if (read_compiler_base_origin_lane is not None
-            and not callable(read_compiler_base_origin_lane)):
-        _fail()
-    if (attest_shared_project_compatibility is not None
-            and not callable(attest_shared_project_compatibility)):
-        _fail()
     if (type(lane_name) is not str or not lane_name
             or type(generation_id) is not str
             or _HEX64.fullmatch(generation_id) is None
@@ -289,7 +269,7 @@ def install_native(*, lane_name, generation_id,
                 read_managed_lane, read_accepted_base, read_installed_pin,
                 attest_installed_source, attest_host_identity,
                 read_compiler_base_receipt, read_compiler_base_issuer,
-                read_compiler_base_binding))):
+                read_compiler_base_binding, read_compiler_base_provenance))):
         _fail()
     # Keep the original compiler/October pin and its signed reader intact,
     # while authenticating the new executable separately.
@@ -309,13 +289,7 @@ def install_native(*, lane_name, generation_id,
             or type(accepted.get("acceptance_receipt_sha256")) is not str):
         _fail()
     installed_lane = read_managed_lane(lane_name)
-    original_origin = (read_compiler_base_origin_lane(generation_id)
-                       if read_compiler_base_origin_lane is not None else None)
-    # The optional compatibility reader is selected by the trusted installer,
-    # never supplied by a GitHub issue. False or missing => strict HOLD.
-    sharing_verified = (attest_shared_project_compatibility(
-        original_origin, installed_lane) is True
-        if attest_shared_project_compatibility is not None else False)
+    original_provenance = read_compiler_base_provenance(generation_id)
     candidate = prepare(
         lane_record=installed_lane,
         accepted_base=accepted,
@@ -323,8 +297,7 @@ def install_native(*, lane_name, generation_id,
         compiler_base_issuer_policy=read_compiler_base_issuer(),
         compiler_base_binding=read_compiler_base_binding(
             generation_id, accepted["acceptance_receipt_sha256"]),
-        compiler_base_origin_lane=original_origin,
-        verified_shared_project_compatibility=sharing_verified,
+        compiler_base_provenance=original_provenance,
         installed_pin_bytes=read_installed_pin(SOURCE, PIN_PATH),
     )
     if (candidate["lane"] != lane_name
