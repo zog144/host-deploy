@@ -78,7 +78,7 @@ def test_original_pr7_signed_fonts_generation_still_selects_new_catalogue(monkey
         raw, issuer, binding = base_evidence(source_context, original, kind)
         execution = _CURRENT_SPECIFICATION(
             "reviewed-fonts-" + kind, mode="managed",
-            project_root="/var/lib/zog/image-build/projects/fonts-" + kind,
+            project_root="/var/lib/zog/image-build/projects/reviewed-fonts-" + kind,
             provenance_host_id=original["provenance_host_id"],
             provenance_project_id="fonts-execution-" + kind,
             source_repository=owner.REPOSITORY,
