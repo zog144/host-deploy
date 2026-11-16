@@ -139,10 +139,27 @@ def advance_one(root, *, host_factory=Host):
     directory = Path(root) / "requests"
     if not directory.exists():
         return None
-    for candidate in sorted(directory.iterdir()):
+    # SQS delivers in FIFO order but a restart may leave several admitted
+    # requests in the durable ledger. Preserve their original receipt order;
+    # lexicographic request IDs are not FIFO.
+    ordered = []
+    for candidate in directory.iterdir():
         if candidate.is_symlink() or not candidate.is_dir():
             raise ForwardingDenied("unsafe gateway request directory")
-        state = load_request(root, candidate.name)
+        transport = candidate / "transport.json"
+        if transport.is_symlink() or not transport.is_file():
+            raise ForwardingDenied("missing durable SQS delivery")
+        try:
+            value = json.loads(transport.read_text())
+            arrival = value["first_seen_at"]
+            if (type(arrival) is not str or not arrival.endswith("Z")
+                    or value["request_id"] != candidate.name):
+                raise ValueError("invalid FIFO receipt")
+        except (KeyError, ValueError, TypeError):
+            raise ForwardingDenied("invalid durable SQS delivery") from None
+        ordered.append((arrival, candidate.name))
+    for _, request_id in sorted(ordered):
+        state = load_request(root, request_id)
         parameters = state["request"]["parameters"]
         if (state["states"]["admission"] != "admitted"
                 or (state["request"]["operation"], parameters.get("task"))
@@ -151,5 +168,5 @@ def advance_one(root, *, host_factory=Host):
         if state["states"]["completion"] in (
                 "completed", "failed", "timed_out", "cancelled"):
             continue
-        return advance(root, candidate.name, host_factory=host_factory)
+        return advance(root, request_id, host_factory=host_factory)
     return None
