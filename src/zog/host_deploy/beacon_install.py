@@ -96,6 +96,21 @@ def candidate(old, request):
     if request.get('ca_path'):value['ca_file']=request['ca_path']
     return value
 
+def _prepare_state_parent(parent):
+    """Create only missing root-owned ancestors, traversable despite umask."""
+    safe_path(parent)
+    missing=[]
+    current=parent
+    while not current.exists():
+        missing.append(current)
+        current=current.parent
+    for path in reversed(missing):
+        path.mkdir(mode=0o755)
+        path.chmod(0o755)
+        safe_path(path)
+    safe_path(parent)
+
+
 def state_directories(value):
     try:u=pwd.getpwnam('host-discover')
     except KeyError:
@@ -109,9 +124,7 @@ def state_directories(value):
         # Only root-owned, non-writable, nonsymlink ancestors may be created.
         # Create the identity directory before the host-discover fingerprint
         # invocation: fresh legacy-bootstrap must not provision its own parent.
-        safe_path(p.parent)
-        p.parent.mkdir(mode=0o755,parents=True,exist_ok=True)
-        safe_path(p.parent)
+        _prepare_state_parent(p.parent)
         if p.is_symlink():raise ValueError('Symlink state directory')
         if not p.exists():p.mkdir(mode=mode);os.chown(p,u.pw_uid,gid)
         st=p.lstat()
