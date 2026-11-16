@@ -121,6 +121,7 @@ def test_installer_creates_unmounted_state_and_identity_before_key_bootstrap(nat
     assert identity.stat().st_mode & 0o777 == 0o700
     assert credentials.stat().st_mode & 0o777 == 0o750
     assert beacon.CONFIG.parent.is_dir()
+    assert beacon.CONFIG.parent.stat().st_mode & 0o777 == 0o750
     # Retry doesn't reinitialize or change a legitimate existing key.
     key = identity / "identity.pem"
     key.write_bytes(b"persistent-test-key")
