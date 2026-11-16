@@ -245,7 +245,12 @@ def install(request, release):
         # Fresh bootstrap must not consume an orphan key at the *selected*
         # location. Hard-coded /var/lib checks miss custom identity paths.
         for name in (value['identity_directory'],value['credential_directory']):
-            p=Path(name);safe_path(p)
+            p=Path(name);safe_path(p.parent)
+            # The leaf is intentionally service-owned rather than root-owned;
+            # never follow a symlink here or read an orphan credential outside
+            # the selected state root.
+            if p.is_symlink() or (p.exists() and not p.is_dir()):
+                raise ValueError('Unsafe existing state directory')
             if p.exists() and any(p.iterdir()):
                 raise ValueError('Unbound existing identity state: refuse image-cloned or orphan state')
     if not owner.exists():atomic(owner,json.dumps({'cloud':request['cloud']}).encode(),0o600)
