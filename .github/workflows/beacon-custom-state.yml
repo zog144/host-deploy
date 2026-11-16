@@ -1,0 +1,44 @@
+name: Beacon custom identity-state installer contract
+on:
+  pull_request:
+    paths:
+      - src/zog/host_deploy/beacon_install.py
+      - tests/test_beacon_custom_state_paths.py
+      - tests/test_beacon_activation.py
+      - tests/test_discovery.py
+      - .github/workflows/beacon-custom-state.yml
+  push:
+    branches: [regular/beacon-custom-state-directory-20261116]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  state-paths:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install source dependencies
+        run: |
+          python -m pip install 'setuptools>=80,<83' 'wheel>=0.45,<1' 'pytest>=8,<10' 'boto3>=1.34,<2'
+          python -m pip install --no-build-isolation --no-deps -e .
+          python -m compileall -q src/zog/host_deploy/beacon_install.py tests/test_beacon_custom_state_paths.py
+      - name: Check selected configuration and nonprivileged installation contracts
+        run: |
+          python -m pytest -q tests/test_beacon_custom_state_paths.py tests/test_beacon_activation.py
+          python -m pytest -q tests/test_discovery.py -k 'identity_and_path_guards or signed_reinstall_preserves_custom_trust_and_role_settings or migrate_bearer_preserves_identity_and_requires_opt_in'
+      - name: Exercise real protected directory creation as root
+        run: |
+          sudo -E env PYTHONPATH="$PWD/src" "$(command -v python)" -m pytest -q \
+            tests/test_beacon_custom_state_paths.py
+      - name: Preserve native activation gate
+        if: always()
+        run: echo 'SOURCE ONLY; no running Host, enrollment, key or service was changed' >> "$GITHUB_STEP_SUMMARY"
