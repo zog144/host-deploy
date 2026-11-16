@@ -23,8 +23,8 @@ EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
     # Reviewed inherited-identity lane source; old schema-4 records are inspection-only.
     "image_build_lanes.py": "6cbc4a4d12f6137cfa7023fb295d9ab3aeb088fd",
-    "gateway/graphics_catalogue_owner.py": "f96d50cc15ece8637e70a4d1d58968a3aed29ecd",
-    "gateway/graphics_base_acceptance.py": "fab7f59bb43afdc057339a9e80d7d3b548b4d5b2",
+    "gateway/graphics_catalogue_owner.py": "bf96526d7b7005258dac0b29f3ffe94427fe4cc3",
+    "gateway/graphics_base_acceptance.py": "66f5c0c57fc49688973e05c28ad1cf31d157344e",
 }
 
 
