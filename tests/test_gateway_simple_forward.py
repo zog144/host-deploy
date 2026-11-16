@@ -23,7 +23,7 @@ from zog.host_deploy.gateway.protocol import canonical_bytes, validate_request
 from test_gateway_consumer import FakeSQS, PRIMARY_ARN, DLQ_ARN, message
 
 
-REQUEST_ID = "f" * 32
+REQUEST_ID = github_dispatch.first_fonts_request_id(77)
 WORKSPACE = "1" * 32
 SELECTION = "a" * 64
 SNAPSHOT = "sha256:" + "b" * 64
