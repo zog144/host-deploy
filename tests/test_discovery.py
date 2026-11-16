@@ -30,8 +30,12 @@ def test_identity_and_path_guards():
     with pytest.raises(ValueError):candidate({'cloud':{},'provider':'aws'},request())
     r=request();r['settings']={'token':'secret'}
     with pytest.raises(ValueError):candidate({},r)
-    r['settings']={'identity_directory':'/copied'}
-    with pytest.raises(ValueError):candidate({},r)
+    r['server']=SERVER
+    r['settings']={'identity_directory':'/state/host-discover/identity'}
+    assert candidate({},r)['identity_directory']=='/state/host-discover/identity'
+    r['settings']={'identity_directory':'relative/identity'}
+    with pytest.raises(ValueError,match='absolute normalized'):candidate({},r)
+    r['server']=None
     r['settings']={'server':'http://bad'}
     with pytest.raises(ValueError):candidate({},r)
 

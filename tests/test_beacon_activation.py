@@ -16,7 +16,9 @@ def target(tmp_path,monkeypatch):
     # Source-only ownership simulation: preserve all atomic/fchmod/fsync/rename
     # behavior without requesting a root-owned inode as an ordinary UID.
     monkeypatch.setattr(b, '_set_atomic_owner', lambda fd, uid, gid: None)
-    def directories():
+    def directories(value):
+        assert value["identity_directory"] == str(ident)
+        assert value["credential_directory"] == str(cred)
         ident.mkdir(parents=True,exist_ok=True);cred.mkdir(exist_ok=True)
         return SimpleNamespace(pw_gid=0)
     monkeypatch.setattr(b,'state_directories',directories)
@@ -30,10 +32,16 @@ def target(tmp_path,monkeypatch):
         },
     }))
     template=release/'deployment/signed-identity';template.mkdir(parents=True)
-    (template/'host-discover.service').write_text('ExecStart=/opt/host-discover/venv/bin/host-discover\n')
-    old={'server':'https://registry.test','cloud':{'account_id':'1','instance_id':'i-1','region':'r'},'provider':'aws','host_id':'00000000-0000-4000-8000-000000000001','token':'legacy-secret'}
+    (template/'host-discover.service').write_text(
+        '[Service]\nProtectSystem=strict\n'
+        'ExecStart=/opt/host-discover/venv/bin/host-discover\n'
+        'ReadWritePaths=/var/lib/host-discover/identity '
+        '/var/lib/host-discover/credentials\n')
+    old={'server':'https://registry.test','cloud':{'account_id':'1','instance_id':'i-1','region':'r'},'provider':'aws','host_id':'00000000-0000-4000-8000-000000000001','token':'legacy-secret',
+         'identity_directory':str(ident),'credential_directory':str(cred)}
     cfg.write_text(json.dumps(old));unit.write_text('old-unit')
-    request={'cloud':old['cloud'],'migrate':True,'system_ca':True,'python':'python3.12','expected_host_id':old['host_id']}
+    request={'cloud':old['cloud'],'migrate':True,'system_ca':True,'python':'python3.12','expected_host_id':old['host_id'],
+             'settings':{'identity_directory':str(ident),'credential_directory':str(cred)}}
     calls=[]
     def run(args,**kw):
         calls.append(args)
@@ -65,6 +73,11 @@ def test_staging_failure_keeps_old_service_and_configuration(target,monkeypatch)
     with pytest.raises(RuntimeError):b.install(req,release)
     assert cfg.read_bytes()==before and unit.read_text()=='old-unit'
     assert not any('systemctl' in a for a in calls)
+
+def test_activation_probe_uses_host_discover_identity_admission_api():
+    from zog.host_deploy.beacon_install import PROBE
+    assert 'identity_key(c)' in PROBE
+    assert 'storage.load_key(c[\'identity_directory\'])' not in PROBE
 
 def test_failed_probe_restores_old_config_and_preserves_key(target,monkeypatch):
     req,release,cfg,unit,ident,calls,run=target;before=cfg.read_bytes()

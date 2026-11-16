@@ -77,40 +77,84 @@ def candidate(old, request):
     if o.scheme!='https' or not o.hostname or o.username or o.password or o.path not in ('','/') or o.query or o.fragment:raise ValueError('HTTPS origin required')
     if old.get('server') and old['server'].rstrip('/')!=server.rstrip('/') and not request['migrate']:raise ValueError('Server change requires --migrate')
     value.update(server=server.rstrip('/'),provider='aws',cloud=cloud)
-    value.setdefault('identity_directory',IDENTITY);value.setdefault('credential_directory',CREDENTIALS)
-    if value['identity_directory']!=IDENTITY or value['credential_directory']!=CREDENTIALS:raise ValueError('Custom state paths require a separately reviewed installer')
+    # The selected state locations may be ordinary directories, including
+    # /state/host-discover/identity when /state is not a separate mount.
+    # Keep an installed identity at its original location across reinstalls.
+    for name,default in (('identity_directory',IDENTITY),('credential_directory',CREDENTIALS)):
+        if old and name in settings and settings[name]!=old.get(name,default):
+            raise ValueError('Cannot replace existing identity or runtime ownership settings')
+        path=value.setdefault(name,default)
+        if (type(path) is not str or not path.startswith('/') or path=='/'
+                or str(Path(path))!=path or '..' in Path(path).parts):
+            raise ValueError('State directory must be an absolute normalized path')
+    identity=Path(value['identity_directory']);credentials=Path(value['credential_directory'])
+    if (identity==credentials or identity in credentials.parents
+            or credentials in identity.parents):
+        raise ValueError('Identity and credential directories must be separate')
     if value.get('host_id'):uuid.UUID(value['host_id'])
     if request['system_ca']:value.pop('ca_file',None)
     if request.get('ca_path'):value['ca_file']=request['ca_path']
     return value
 
-def state_directories():
+def _prepare_state_parent(parent):
+    """Create only missing root-owned ancestors, traversable despite umask."""
+    safe_path(parent)
+    missing=[]
+    current=parent
+    while not current.exists():
+        missing.append(current)
+        current=current.parent
+    for path in reversed(missing):
+        path.mkdir(mode=0o755)
+        path.chmod(0o755)
+        safe_path(path)
+    safe_path(parent)
+
+
+def state_directories(value):
     try:u=pwd.getpwnam('host-discover')
     except KeyError:
         run(['useradd','--system','--no-create-home','--shell','/sbin/nologin','host-discover']);u=pwd.getpwnam('host-discover')
     try:g=grp.getgrnam('archive-consumers')
     except KeyError:
         run(['groupadd','--system','archive-consumers']);g=grp.getgrnam('archive-consumers')
-    parent=Path(IDENTITY).parent;safe_path(parent);parent.mkdir(mode=0o755,parents=True,exist_ok=True)
-    for name,mode,gid in [(IDENTITY,0o700,u.pw_gid),(CREDENTIALS,0o750,g.gr_gid)]:
+    for name,mode,gid in [(value['identity_directory'],0o700,u.pw_gid),
+                          (value['credential_directory'],0o750,g.gr_gid)]:
         p=Path(name)
+        # Only root-owned, non-writable, nonsymlink ancestors may be created.
+        # Create the identity directory before the host-discover fingerprint
+        # invocation: fresh legacy-bootstrap must not provision its own parent.
+        _prepare_state_parent(p.parent)
         if p.is_symlink():raise ValueError('Symlink state directory')
-        if not p.exists():p.mkdir(mode=mode);os.chown(p,u.pw_uid,gid)
-        st=p.stat()
-        if not p.is_dir() or st.st_uid!=u.pw_uid or st.st_gid!=gid or stat.S_IMODE(st.st_mode)!=mode:raise ValueError('Unsafe existing state directory')
+        if not p.exists():
+            p.mkdir(mode=mode)
+            os.chown(p,u.pw_uid,gid)
+            p.chmod(mode)  # mkdir is masked by the installer's umask
+        st=p.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or st.st_uid!=u.pw_uid
+                or st.st_gid!=gid or stat.S_IMODE(st.st_mode)!=mode):
+            raise ValueError('Unsafe existing state directory')
         for f in p.iterdir():
             st=f.lstat()
-            if not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or st.st_uid!=u.pw_uid or stat.S_IMODE(st.st_mode)!=(0o600 if name==IDENTITY else 0o640):raise ValueError('Unsafe existing state file')
-    safe_path(CONFIG.parent);CONFIG.parent.mkdir(mode=0o750,parents=True,exist_ok=True);os.chown(CONFIG.parent,0,u.pw_gid)
+            if (not stat.S_ISREG(st.st_mode) or st.st_nlink!=1
+                    or st.st_uid!=u.pw_uid
+                    or stat.S_IMODE(st.st_mode)!=(0o600 if name==value['identity_directory'] else 0o640)):
+                raise ValueError('Unsafe existing state file')
+    safe_path(CONFIG.parent)
+    new_config_parent=not CONFIG.parent.exists()
+    CONFIG.parent.mkdir(mode=0o750,parents=True,exist_ok=True)
+    os.chown(CONFIG.parent,0,u.pw_gid)
+    if new_config_parent:CONFIG.parent.chmod(0o750)
+    safe_path(CONFIG.parent)
     return u
 
 # Runs as service user, outputs only public/sanitized observations.
 PROBE = '''import json,sys,time
 from pathlib import Path
-from zog.host_discover.daemon import validate_configuration,collect,announce
+from zog.host_discover.daemon import validate_configuration,collect,announce,identity_key
 from zog.host_identify import storage,signatures
 c=validate_configuration(json.loads(Path(sys.argv[1]).read_text()))
-k=storage.load_key(c['identity_directory']); fingerprint=signatures.fingerprint(k.public_key())
+k=identity_key(c); fingerprint=signatures.fingerprint(k.public_key())
 p=Path(c['identity_directory'])/'binding.json'
 before=json.loads(storage.read_owned(p,0o600)) if p.exists() else {}
 announce(c,collect(c))
@@ -203,6 +247,25 @@ def _check_staged_versions(release, expected):
             " ".join(name + "=" + expected[name] for name in PACKAGES) + "\n").encode()
 
 
+def service_unit(source, venv, value):
+    """Bind systemd write access to the selected state directories."""
+    unit = source.replace('/opt/host-discover/venv', str(venv))
+    write_paths = " ".join(
+        path.replace("\\", "\\x5c").replace(" ", "\\x20")
+        for path in (value['identity_directory'], value['credential_directory']))
+    updated, count = re.subn(r'(?m)^ReadWritePaths=.*$',
+                             lambda _: 'ReadWritePaths=' + write_paths, unit)
+    if count > 1:
+        raise ValueError('Beacon service unit has duplicate ReadWritePaths directives')
+    if count == 1:
+        return updated
+    service, count = re.subn(r'(?m)^\[Service\]\s*$',
+                             '[Service]\nReadWritePaths=' + write_paths, unit, count=1)
+    if count != 1:
+        raise ValueError('Beacon service unit has no Service section')
+    return service
+
+
 def install(request, release):
     # Python/version and disk checks precede service or identity changes.
     python=request['python']
@@ -218,10 +281,20 @@ def install(request, release):
     owner=BASE/'identity-owner.json'
     if owner.exists():
         if json.loads(owner.read_text())['cloud']!=request['cloud']:raise ValueError('Identity belongs to another instance')
-    elif not old and any(Path(p).exists() and any(Path(p).iterdir()) for p in (IDENTITY,CREDENTIALS)):
-        raise ValueError('Unbound existing identity state: refuse image-cloned or orphan state')
+    elif not old:
+        # Fresh bootstrap must not consume an orphan key at the *selected*
+        # location. Hard-coded /var/lib checks miss custom identity paths.
+        for name in (value['identity_directory'],value['credential_directory']):
+            p=Path(name);safe_path(p.parent)
+            # The leaf is intentionally service-owned rather than root-owned;
+            # never follow a symlink here or read an orphan credential outside
+            # the selected state root.
+            if p.is_symlink() or (p.exists() and not p.is_dir()):
+                raise ValueError('Unsafe existing state directory')
+            if p.exists() and any(p.iterdir()):
+                raise ValueError('Unbound existing identity state: refuse image-cloned or orphan state')
     if not owner.exists():atomic(owner,json.dumps({'cloud':request['cloud']}).encode(),0o600)
-    u=state_directories()
+    u=state_directories(value)
     venv=release/'venv'
     if not (release/'ready').exists():
         run([python,'-m','venv',str(venv)])
@@ -237,7 +310,7 @@ def install(request, release):
     atomic(staged,json.dumps(value).encode(),gid=u.pw_gid)
     # Generate missing key and validate existing key with the service UID; never copy it.
     fingerprint=run(['runuser','-u','host-discover','-g','host-discover','-G','archive-consumers','--',executable,'-m','zog.host_discover','--configuration',str(staged),'--fingerprint'])
-    unit=(release/'deployment/signed-identity/host-discover.service').read_text().replace('/opt/host-discover/venv',str(venv))
+    unit=service_unit((release/'deployment/signed-identity/host-discover.service').read_text(),venv,value)
     # Preserve administrator drop-ins. Keep a root-only rollback reference, including legacy token.
     backup=BASE/'rollback'/uuid.uuid4().hex;backup.mkdir(parents=True,mode=0o700)
     for p in (CONFIG,UNIT):

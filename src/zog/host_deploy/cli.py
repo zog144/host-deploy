@@ -26,7 +26,7 @@ def main():
         if name in {'install-discover','host-install'}:
             command.add_argument('--server-ready',action='store_true',help='Confirm command center pass3 and database migration 0005 are deployed')
             command.add_argument('--python',default='python3.12',help='Target Python >=3.12 executable')
-            command.add_argument('--source',help='Directory containing exact pinned host-discover and host-identify source checkouts')
+            command.add_argument('--source',help='Directory containing exact pinned host-discover, host-identify and host-install source checkouts')
             command.add_argument('--configuration-file',help='Explicit nonsecret daemon JSON configuration')
             command.add_argument('--registry-workspace',help='Explicit command-center workspace for migration identity checks')
             command.add_argument('--server', help='HTTPS command-center origin; otherwise use explicit configuration or preserve the installed server (no default)')
