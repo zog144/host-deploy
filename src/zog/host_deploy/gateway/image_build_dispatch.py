@@ -89,7 +89,9 @@ def _remote_request(
                 or parameters["lane"] != "gateway-first-fonts-runtime"
                 or gateway_request.get("source") != FIRST_FONTS_SOURCE
                 or source["repository"] != FIRST_FONTS_SOURCE["repository"]
-                or source["revision"] != image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+                or source["revision"] not in (
+                    image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+                    image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION)
                 or task_catalogue is not None
                 or task_catalogue_identity is not None):
             raise RuntimeError("operation is not supported by direct SSM forwarding")
