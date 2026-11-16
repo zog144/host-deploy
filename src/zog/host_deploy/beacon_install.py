@@ -126,7 +126,10 @@ def state_directories(value):
         # invocation: fresh legacy-bootstrap must not provision its own parent.
         _prepare_state_parent(p.parent)
         if p.is_symlink():raise ValueError('Symlink state directory')
-        if not p.exists():p.mkdir(mode=mode);os.chown(p,u.pw_uid,gid)
+        if not p.exists():
+            p.mkdir(mode=mode)
+            os.chown(p,u.pw_uid,gid)
+            p.chmod(mode)  # mkdir is masked by the installer's umask
         st=p.lstat()
         if (not stat.S_ISDIR(st.st_mode) or st.st_uid!=u.pw_uid
                 or st.st_gid!=gid or stat.S_IMODE(st.st_mode)!=mode):
@@ -137,7 +140,12 @@ def state_directories(value):
                     or st.st_uid!=u.pw_uid
                     or stat.S_IMODE(st.st_mode)!=(0o600 if name==value['identity_directory'] else 0o640)):
                 raise ValueError('Unsafe existing state file')
-    safe_path(CONFIG.parent);CONFIG.parent.mkdir(mode=0o750,parents=True,exist_ok=True);os.chown(CONFIG.parent,0,u.pw_gid)
+    safe_path(CONFIG.parent)
+    new_config_parent=not CONFIG.parent.exists()
+    CONFIG.parent.mkdir(mode=0o750,parents=True,exist_ok=True)
+    os.chown(CONFIG.parent,0,u.pw_gid)
+    if new_config_parent:CONFIG.parent.chmod(0o750)
+    safe_path(CONFIG.parent)
     return u
 
 # Runs as service user, outputs only public/sanitized observations.
