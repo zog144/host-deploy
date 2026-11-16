@@ -5,6 +5,7 @@ lane file writes, AWS, SQS or SSM execution.
 """
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -103,6 +104,20 @@ def lane(name, *, source=None, pin=None, project=None, project_id=None):
         python_executable="/usr/bin/python3")
 
 
+def compiler_origin(receipt, project_root):
+    """Extract independently attestable generation identity, not a lane record."""
+    claim = json.loads(receipt)["claim"]
+    return {
+        key: (
+            reader.ORIGIN_SCHEMA if key == "schema"
+            else project_root if key == "project_root"
+            else reader.digest(receipt) if key == "acceptance_receipt_sha256"
+            else claim[key]
+        )
+        for key in reader.ORIGIN_FIELDS
+    }
+
+
 def record(spec, state="active"):
     return {"schema":spec["schema"],"lane":spec["lane"],
             "specification":spec,"state":state}
@@ -186,7 +201,7 @@ def test_corrected_first_fonts_catalogue_binds_new_executable_to_original_signed
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin,
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]),
     )
     assert result["source_revision"] == revised["source_revision"]
     assert result["lane_specification_sha256"] == image_build_lanes.specification_sha256(revised)
@@ -227,7 +242,7 @@ def test_existing_project_selection_does_not_require_fonts_only_root(monkeypatch
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin)
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]))
     assert result["execution_project_root"] == spec["project_root"]
     assert result["execution_project_id"] == spec["provenance_project_id"]
     assert result["compiler_origin_project_root"] == origin["project_root"]
@@ -267,7 +282,7 @@ def test_same_existing_project_and_same_named_lane_needs_no_second_project(monke
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin)
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]))
     assert result["execution_project_root"] == origin["project_root"]
     assert result["compiler_origin_project_root"] == origin["project_root"]
     assert result["execution_project_id"] == origin["provenance_project_id"]
@@ -302,7 +317,7 @@ def test_existing_project_selection_rejects_unapproved_source_and_identity(monke
         compiler_base_receipt_bytes=raw,
         compiler_base_issuer_policy=issuer,
         compiler_base_binding=binding,
-        compiler_base_origin_lane=origin)
+        compiler_base_provenance=compiler_origin(raw, origin["project_root"]))
     for change in (
         {"source_revision": "f" * 40},
         {"provenance_host_id": "foreign-host"},
