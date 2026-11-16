@@ -54,6 +54,30 @@ def test_independent_credential_directory_is_allowed():
     assert chosen["credential_directory"] == "/state/host-discover/credentials"
 
 
+def test_service_write_allowlist_tracks_selected_identity_and_credentials():
+    chosen = beacon.candidate({}, request(
+        identity_directory=CUSTOM,
+        credential_directory="/state/host-discover/credentials"))
+    source = ("[Service]\nProtectSystem=strict\n"
+              "ReadWritePaths=/var/lib/host-discover/identity "
+              "/var/lib/host-discover/credentials\n")
+    unit = beacon.service_unit(source, "/opt/host-discover/releases/test/venv", chosen)
+    assert "ReadWritePaths=/state/host-discover/identity /state/host-discover/credentials\n" in unit
+    assert "/var/lib/host-discover/identity" not in unit
+    assert "/var/lib/host-discover/credentials" not in unit
+
+
+def test_service_write_allowlist_escapes_spaces_in_selected_paths():
+    chosen = beacon.candidate({}, request(
+        identity_directory="/state/host discover/identity",
+        credential_directory="/state/host discover/credentials"))
+    source = ("[Service]\nProtectSystem=strict\n"
+              "ReadWritePaths=/var/lib/host-discover/identity "
+              "/var/lib/host-discover/credentials\n")
+    unit = beacon.service_unit(source, "/opt/host-discover/releases/test/venv", chosen)
+    assert "ReadWritePaths=/state/host\\x20discover/identity /state/host\\x20discover/credentials\n" in unit
+
+
 @pytest.mark.parametrize("credential", (
     CUSTOM, CUSTOM + "/credentials", "/state/host-discover",
 ))

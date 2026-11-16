@@ -247,6 +247,25 @@ def _check_staged_versions(release, expected):
             " ".join(name + "=" + expected[name] for name in PACKAGES) + "\n").encode()
 
 
+def service_unit(source, venv, value):
+    """Bind systemd write access to the selected state directories."""
+    unit = source.replace('/opt/host-discover/venv', str(venv))
+    write_paths = " ".join(
+        path.replace("\\", "\\x5c").replace(" ", "\\x20")
+        for path in (value['identity_directory'], value['credential_directory']))
+    updated, count = re.subn(r'(?m)^ReadWritePaths=.*$',
+                             lambda _: 'ReadWritePaths=' + write_paths, unit)
+    if count > 1:
+        raise ValueError('Beacon service unit has duplicate ReadWritePaths directives')
+    if count == 1:
+        return updated
+    service, count = re.subn(r'(?m)^\[Service\]\s*$',
+                             '[Service]\nReadWritePaths=' + write_paths, unit, count=1)
+    if count != 1:
+        raise ValueError('Beacon service unit has no Service section')
+    return service
+
+
 def install(request, release):
     # Python/version and disk checks precede service or identity changes.
     python=request['python']
@@ -291,7 +310,7 @@ def install(request, release):
     atomic(staged,json.dumps(value).encode(),gid=u.pw_gid)
     # Generate missing key and validate existing key with the service UID; never copy it.
     fingerprint=run(['runuser','-u','host-discover','-g','host-discover','-G','archive-consumers','--',executable,'-m','zog.host_discover','--configuration',str(staged),'--fingerprint'])
-    unit=(release/'deployment/signed-identity/host-discover.service').read_text().replace('/opt/host-discover/venv',str(venv))
+    unit=service_unit((release/'deployment/signed-identity/host-discover.service').read_text(),venv,value)
     # Preserve administrator drop-ins. Keep a root-only rollback reference, including legacy token.
     backup=BASE/'rollback'/uuid.uuid4().hex;backup.mkdir(parents=True,mode=0o700)
     for p in (CONFIG,UNIT):

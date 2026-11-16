@@ -32,7 +32,11 @@ def target(tmp_path,monkeypatch):
         },
     }))
     template=release/'deployment/signed-identity';template.mkdir(parents=True)
-    (template/'host-discover.service').write_text('ExecStart=/opt/host-discover/venv/bin/host-discover\n')
+    (template/'host-discover.service').write_text(
+        '[Service]\nProtectSystem=strict\n'
+        'ExecStart=/opt/host-discover/venv/bin/host-discover\n'
+        'ReadWritePaths=/var/lib/host-discover/identity '
+        '/var/lib/host-discover/credentials\n')
     old={'server':'https://registry.test','cloud':{'account_id':'1','instance_id':'i-1','region':'r'},'provider':'aws','host_id':'00000000-0000-4000-8000-000000000001','token':'legacy-secret',
          'identity_directory':str(ident),'credential_directory':str(cred)}
     cfg.write_text(json.dumps(old));unit.write_text('old-unit')
