@@ -21,8 +21,8 @@ from zog.host_deploy.gateway import (
 
 EXPECTED_BLOBS = {
     "gateway/task_catalogue.py": "c96218c9312fd5447aa386711438e9b458008d16",
-    # Reviewed inherited-identity lane source; old schema-4 records are inspection-only.
-    "image_build_lanes.py": "6cbc4a4d12f6137cfa7023fb295d9ab3aeb088fd",
+    # The old lane module is allowed an additive immutable producer successor.
+    # Its historical exact source identities are checked below instead.
     "gateway/graphics_catalogue_owner.py": "bf96526d7b7005258dac0b29f3ffe94427fe4cc3",
     "gateway/graphics_base_acceptance.py": "66f5c0c57fc49688973e05c28ad1cf31d157344e",
 }
@@ -52,6 +52,17 @@ def test_reviewed_installed_module_tuple_is_exact_fonts_profile_successor_contra
     root=Path(__file__).resolve().parents[1]/"src/zog/host_deploy"
     for path,sha in EXPECTED_BLOBS.items():
         assert git_blob(root/path)==sha, path
+    assert image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION == (
+        "620378bdd8075daeb5eaad45eedea4af7db36423")
+    assert image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION == (
+        "6b344aad3d3389d3f444bd69b63214a4a5903ad5")
+    assert image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY == (
+        "sha256:d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36")
+    assert image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_PATH == (
+        "project/pins/2026-10-01/commit-pin.py")
+    assert image_build_lanes.expected_build_record_revision(
+        image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION) == (
+        image_build_lanes.FIRST_FONTS_BUILD_RECORD_COMPATIBILITY)
     assert owner.SOURCE=="1f07e83dbd80dacb9bed0d6494c697375f0e26cd"
     assert owner.PIN_SHA256=="d3104eeddbbbe63fe3279c58ce9807f3b5250632ecdca4826abc028bcf923b36"
     assert owner.READER_SOURCE=="1616f192ef9d8964a8f37f32a86c69c0242a213c"

@@ -143,10 +143,12 @@ def _binding(record):
                 or binding["schema"] != 3
                 or "task" in binding or "task_catalogue_identity" in binding
                 or binding.get("lane") != "gateway-first-fonts-runtime"
-                or binding.get("source") != {
-                    "repository": "zog144/image-build",
-                    "revision": image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
-                }
+                or binding.get("source") not in (
+                    {"repository": "zog144/image-build",
+                     "revision": image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION},
+                    {"repository": "zog144/image-build",
+                     "revision": image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION},
+                )
                 or binding["remote_request"].get("operation") != "pipeline.submit"
                 or binding["remote_request"].get("arguments", {}).get("mode") != "image"
                 or binding["remote_request"]["arguments"].get("targets") !=
@@ -184,7 +186,9 @@ def _binding(record):
         )
     ):
         raise RuntimeError("image-build dispatch monthly pin identity is invalid")
-    if binding["source"]["revision"] == image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+    if binding["source"]["revision"] in (
+            image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+            image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION):
         if (binding["lane"] != "gateway-first-fonts-runtime"
                 or binding["monthly_pin_identity"] != image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY
                 or monthly_path != image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_PATH):

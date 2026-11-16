@@ -80,18 +80,18 @@ def _remote_request(
             "external observed state permits only build.status"
         )
     if operation == "build.submit" and direct_forward:
-        # A single supported mapping. The authorized caller supplies only
-        # image-build's existing generation and recipe-snapshot references.
-        # They are validated by image-build itself at execution time.
+        # A single supported mapping. The configured image-build Project owns
+        # its toolchain and recipe inputs; the GitHub actor supplies neither.
         from .github_dispatch import FIRST_FONTS_SOURCE, FIRST_FONTS_TASK
         from .task_catalogue import REVIEWED_IMAGE_TASKS
         if (parameters.get("task") != FIRST_FONTS_TASK
-                or set(parameters) !=
-                   {"lane", "task", "selection", "recipe_snapshot"}
+                or set(parameters) != {"lane", "task"}
                 or parameters["lane"] != "gateway-first-fonts-runtime"
                 or gateway_request.get("source") != FIRST_FONTS_SOURCE
                 or source["repository"] != FIRST_FONTS_SOURCE["repository"]
-                or source["revision"] != image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+                or source["revision"] not in (
+                    image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+                    image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION)
                 or task_catalogue is not None
                 or task_catalogue_identity is not None):
             raise RuntimeError("operation is not supported by direct SSM forwarding")
@@ -102,9 +102,7 @@ def _remote_request(
             "source": source,
             "arguments": {
                 "mode": "image",
-                "selection": parameters["selection"],
                 "targets": list(REVIEWED_IMAGE_TASKS[FIRST_FONTS_TASK]["targets"]),
-                "recipe_snapshot": parameters["recipe_snapshot"],
             },
         }, None)
 

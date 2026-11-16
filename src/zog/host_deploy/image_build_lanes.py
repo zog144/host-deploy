@@ -459,6 +459,9 @@ FIRST_FONTS_BUILD_RECORD_COMPATIBILITY = TOOLCHAIN_BUILD_RECORD_COMPATIBILITY
 # Separate source-reviewed replacement; the original producer remains frozen
 # for historical receipts and the previously accepted catalogue.
 FIRST_FONTS_INHERITED_PRODUCER_REVISION = "620378bdd8075daeb5eaad45eedea4af7db36423"
+# A distinct immutable successor from image-build PR #26: the producer reads
+# local Project defaults. Existing active source records are NEVER rewritten.
+FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION = "6b344aad3d3389d3f444bd69b63214a4a5903ad5"
 FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION = FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
 FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION = "fdafbfb3032847b73c77abd9d90d769e43fddf85"
 FIRST_FONTS_ORIGINAL_PIN_PATH = "project/pins/2026-10-01/commit-pin.py"
@@ -477,7 +480,8 @@ CONTROLLER_COMPANION_SCHEMA = 1
 def expected_build_record_revision(producer_revision):
     if producer_revision == FIRST_FONTS_PRODUCER_REVISION:
         return FIRST_FONTS_BUILD_RECORD_COMPATIBILITY
-    if producer_revision == FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+    if producer_revision in (FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+                            FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION):
         return FIRST_FONTS_INHERITED_BUILD_RECORD_REVISION
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BUILD_RECORD_REVISION
@@ -488,7 +492,8 @@ def expected_build_record_revision(producer_revision):
 
 
 def expected_controller_revision(producer_revision):
-    if producer_revision == FIRST_FONTS_INHERITED_PRODUCER_REVISION:
+    if producer_revision in (FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+                            FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION):
         return FIRST_FONTS_INHERITED_BOX_CONTROL_REVISION
     if producer_revision == FRESH_CROSS_BOOTSTRAP_PRODUCER_REVISION:
         return FRESH_CROSS_BOOTSTRAP_BOX_CONTROL_REVISION
@@ -593,7 +598,8 @@ def validate_runtime_companion(value, *, project_root=None):
         raise ValueError("runtime companion must be below the owned lane companions directory")
     if value["producer_revision"] in (
             FIRST_FONTS_PRODUCER_REVISION,
-            FIRST_FONTS_INHERITED_PRODUCER_REVISION):
+            FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+            FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION):
         if value["revision"] != FIRST_FONTS_BUILD_RECORD_COMPATIBILITY:
             raise ValueError("first Fonts requires the producer-pinned build-record revision")
         if project_root is not None and root != str(
@@ -1009,7 +1015,10 @@ def remote_operation_argv(record, request_path):
     # The reviewed identity-free producer needs the separately retained
     # original October pin regardless of the selected existing Project/lane.
     # The lane name is NOT an authority for source provenance or pin choice.
-    retained_fonts = (spec["source_revision"] == FIRST_FONTS_INHERITED_PRODUCER_REVISION)
+    retained_fonts = (spec["source_revision"] in (
+        FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION,
+    ))
     if retained_fonts:
         if (spec["source_repository"] != "zog144/image-build"
                 or spec["monthly_pin_repository_path"] != FIRST_FONTS_ORIGINAL_PIN_PATH
