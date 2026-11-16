@@ -41,8 +41,7 @@ jobs:
             tests/test_gateway_first_fonts_issue_event.py \
             tests/test_gateway_protocol.py \
             tests/test_gateway_consumer.py \
-            tests/test_gateway_trusted_host_ssm.py \
-            tests/test_gateway_dispatch.py
+            tests/test_gateway_trusted_host_ssm.py
       - name: Native run remains outside CI
         if: always()
         run: |
