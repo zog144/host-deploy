@@ -263,3 +263,74 @@ def test_no_catalogue_or_compiler_dossier_required_in_simple_forward():
         "AWS-RunShellScript",
     ):
         assert forbidden not in source
+
+
+def test_real_sqs_delivery_is_acked_then_forwarded_once(forwarding, monkeypatch):
+    """SQS consumer admission, immutable request, one SSM send and readback."""
+    from zog.host_deploy.gateway import consumer as consumer_module
+    from zog.host_deploy.gateway import ledger
+    from zog.host_deploy.gateway.protocol import transition
+    from zog.host_deploy.workspace import save
+    root, value, binding, Host, counters = forwarding
+    # The fixture created the same admitted request already; simulate duplicate
+    # SQS delivery from the original authorized GitHub issue.
+    sqs = FakeSQS([message(value, message_id="msg-2", receive_count=2)])
+    service = GatewayConsumer(root, PRIMARY_ARN, DLQ_ARN, client=sqs,
+                              direct_forward=True)
+
+    original = simple_forward.advance_one
+    monkeypatch.setattr(simple_forward, "advance_one",
+                        lambda selected: original(selected, host_factory=Host))
+    result = service.poll_once(wait_seconds=0)
+    assert result["accepted"] is True and result["duplicate"] is True
+    assert result["acknowledgement"] == "acked"
+    assert len(sqs.deleted) == 1
+    assert load_dispatch(root, value["request_id"])["phase"] == "prepared"
+    assert counters["send"] == []
+
+    service.poll_once(wait_seconds=0)
+    assert len(counters["send"]) == 1
+    assert load_dispatch(root, value["request_id"])["command_id"] == "command-123"
+
+    service.poll_once(wait_seconds=0)
+    assert load_request(root, value["request_id"])["states"]["completion"] == "completed"
+    assert counters["inspect"] == ["command-123"]
+    assert len(counters["send"]) == 1
+
+
+def test_ssm_wrong_command_identity_or_forged_success_never_completes(forwarding, monkeypatch):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+
+    class WrongCommand(Host):
+        def inspect_command(self, identifier):
+            return {"CommandId": "different", "InstanceId": TARGET["instance_id"],
+                    "Status": "Success"}
+    with pytest.raises(simple_forward.ForwardingDenied, match="identity"):
+        simple_forward.advance(root, REQUEST_ID, host_factory=WrongCommand)
+    assert load_request(root, REQUEST_ID)["states"]["completion"] != "completed"
+
+    class WrongReceipt(Host):
+        def inspect_command(self, identifier):
+            return {"CommandId": identifier, "InstanceId": TARGET["instance_id"],
+                    "Status": "Success",
+                    "StandardOutputContent": json.dumps({
+                        "schema": image_build_execution.RECEIPT_SCHEMA,
+                        "request_id": REQUEST_ID,
+                        "remote_request_sha256": "9" * 64,
+                        "result": {"status": "completed"}})}
+    with pytest.raises(simple_forward.ForwardingDenied, match="differs"):
+        simple_forward.advance(root, REQUEST_ID, host_factory=WrongReceipt)
+    assert len(counters["send"]) == 1
+
+
+def test_direct_mode_rejects_legacy_catalogue_supervisor_configuration(tmp_path):
+    client = FakeSQS()
+    with pytest.raises(ValueError, match="cannot be mixed"):
+        GatewayConsumer(
+            tmp_path / "gateway", PRIMARY_ARN, DLQ_ARN, client=client,
+            direct_forward=True,
+            approved_generic_catalogue={"schema": 2, "tasks": {}},
+            approved_catalogue_identity="sha256:" + "a" * 64,
+        )
