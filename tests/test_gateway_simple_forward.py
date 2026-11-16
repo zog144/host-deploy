@@ -217,13 +217,15 @@ def test_compiler_state_arguments_are_not_accepted_from_github(field, value):
         github_dispatch.prepare_event(event, frozenset({"zog144"}))
 
 
-def test_wrong_lane_is_not_direct_forwardable(tmp_path):
-    root = tmp_path / "gateway"
+def test_wrong_lane_is_not_direct_forwardable():
     value = approved()
     value["parameters"]["lane"] = "unreviewed-lane"
-    admit(root, value)
+    lane = {
+        "source_repository": SOURCE["repository"],
+        "source_revision": SOURCE["revision"],
+    }
     with pytest.raises(RuntimeError, match="not supported"):
-        simple_forward.advance(root, value["request_id"])
+        image_build_dispatch._remote_request(value, lane, direct_forward=True)
 
 
 def test_source_owned_finite_mapping_uses_producer_request_not_catalogue():
@@ -405,3 +407,15 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path
     assert result["phase"] == "submitted"
     assert sent == [(script, simple_forward.CONTROL_TIMEOUT_SECONDS)]
     assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"
+
+
+def test_issue_body_has_no_compiler_selection_or_snapshot():
+    event = issue()
+    selected = github_dispatch.prepare_event(event, frozenset({"zog144"}))
+    assert selected["parameters"] == {
+        "lane": "gateway-first-fonts-runtime",
+        "task": github_dispatch.FIRST_FONTS_TASK,
+    }
+    assert set(selected["parameters"]) == {"lane", "task"}
+    assert "selection" not in json.dumps(event)
+    assert "recipe_snapshot" not in json.dumps(event)
