@@ -6,8 +6,6 @@ only covers the candidate beacon-source tree, using exact clean Git checkouts
 under one explicit --source directory. No network, AWS, credentials or install.
 """
 import argparse
-import base64
-import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -167,12 +165,12 @@ def main():
         print("BEACON_CANDIDATE_VERIFIED " + " ".join(
             name + "=" + COMMITS[name] for name in sorted(COMMITS)))
     else:
-        raw = json.dumps(found, indent=2, sort_keys=True).encode() + b"\n"
-        encoded = base64.b64encode(gzip.compress(raw)).decode("ascii")
-        # Print bounded chunks for log transport; no secrets in public sources.
-        for number, offset in enumerate(range(0, len(encoded), 850)):
-            print("BEACON_CANDIDATE_CHUNK %04d %s" % (
-                number, encoded[offset:offset + 850]))
+        raw = json.dumps(found, sort_keys=True, separators=(",", ":"))
+        # Print bounded *plain JSON* chunks, so the exact public inventory
+        # can be reviewed without artifact extraction or local Git access.
+        for number, offset in enumerate(range(0, len(raw), 850)):
+            print("BEACON_CANDIDATE_JSON_PART %04d %s" % (
+                number, raw[offset:offset + 850]))
 
 
 if __name__ == "__main__":
