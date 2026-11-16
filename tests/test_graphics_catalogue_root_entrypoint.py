@@ -14,28 +14,20 @@ from zog.host_deploy.gateway import graphics_catalogue_native_install as native
 from zog.host_deploy.gateway import graphics_attester_import as importer
 
 
-def _old(host="fixture-compiler-host"):
-    return {
-        "schema": lanes.SCHEMA, "lane": "gateway-first-fonts-runtime",
-        "mode": "managed", "source_repository": catalogue.REPOSITORY,
-        "source_revision": catalogue.SOURCE,
-        "monthly_pin_repository_path": catalogue.PIN_PATH,
-        "monthly_pin_identity": "sha256:" + catalogue.PIN_SHA256,
-        "observed_state_dir": None, "python_executable": "/usr/bin/python3",
-        "provenance_host_id": host, "provenance_project_id": "original-project",
-        "project_root": "/home/owner/gateway-first-fonts-runtime",
-        "resource_policy": {
-            "memory_maximum_bytes": 2**30, "thread_count_maximum": 8,
-            "cpu_weight": 100, "disk_reservation_bytes": 2**30,
-        },
-        "controller": {
-            "socket_path": "/run/zog/root-control.sock",
-            "execution_user_id": 24202, "execution_group_id": 24202,
-            "startup_timeout_seconds": 30, "execution_timeout_seconds": 3600,
-            "termination_grace_seconds": 10, "wait_timeout_seconds": 0,
-            "transport_timeout_seconds": 45,
-        },
-    }
+def execution_spec(host="fixture-compiler-host"):
+    """Only the active execution lane; no historical origin lane is invented."""
+    return lanes.specification(
+        "gateway-first-fonts-runtime", mode="managed",
+        source_repository=catalogue.REPOSITORY,
+        source_revision=catalogue.EXECUTABLE_SOURCE,
+        monthly_pin_repository_path=catalogue.PIN_PATH,
+        monthly_pin_identity="sha256:" + catalogue.PIN_SHA256,
+        provenance_host_id=host, provenance_project_id="fonts-execution-project",
+        project_root="/var/lib/zog/image-build/projects/gateway-first-fonts-runtime",
+        memory_maximum_bytes=2**30, thread_count_maximum=8,
+        cpu_weight=100, disk_reservation_bytes=2**30,
+        python_executable="/usr/bin/python3",
+    )
 
 
 @pytest.fixture
@@ -66,8 +58,7 @@ def evidence(monkeypatch):
     monkeypatch.setattr(catalogue, "STORE", store)
     monkeypatch.setattr(catalogue, "CATALOGUE", store / "first-fonts-catalogue-v1.json")
     monkeypatch.setattr(catalogue, "RECEIPT", store / "first-fonts-catalogue-receipt-v1.json")
-    original = lanes.validate(_old())
-    inherited = lanes.corrected_first_fonts_specification(original)
+    inherited = execution_spec()
     generation = "a" * 64
     receipt = b"original-signed-receipt-placeholder"
     digest = catalogue._sha(receipt)
@@ -84,22 +75,36 @@ def evidence(monkeypatch):
             "verified_source_revision": catalogue.READER_SOURCE,
         },
         "issuer_policy": {
-            "host_id": original["provenance_host_id"],
+            "host_id": inherited["provenance_host_id"],
             "installation_id": "issuer-install-1",
             "state_volume_id": "state-1",
-            "project_id": original["provenance_project_id"],
+            "project_id": "original-compiler-project",
         },
         "producer_binding": {
-            "host_id": original["provenance_host_id"],
+            "host_id": inherited["provenance_host_id"],
             "installation_id": "issuer-install-1",
             "state_volume_id": "state-1",
             "generation_id": generation,
             "acceptance_receipt_sha256": digest,
         },
-        "origin_lane": original,
+        "compiler_provenance": {
+            "schema": "host-deploy-verified-compiler-generation-origin-v1",
+            "project_root": "/home/certbot-build-owner/certbot-seed",
+            "project_id": "original-compiler-project",
+            "generation_id": generation,
+            "generation_kind": "toolchain",
+            "host_id": inherited["provenance_host_id"],
+            "installation_id": "issuer-install-1",
+            "state_volume_id": "state-1",
+            "generation_manifest_sha256": "sha256:" + "1" * 64,
+            "generation_inventory_sha256": "sha256:" + "2" * 64,
+            "generation_record_sha256": "sha256:" + "3" * 64,
+            "execution_environment_sha256": "sha256:" + "e" * 64,
+            "acceptance_receipt_sha256": digest,
+        },
         "host_identity": {
             "schema": native.IDENTITY_SCHEMA,
-            "host_id": original["provenance_host_id"],
+            "host_id": inherited["provenance_host_id"],
             "installation_id": "issuer-install-1",
             "state_volume_id": "state-1",
         },
@@ -131,7 +136,7 @@ def test_root_owned_entry_uses_real_selected_readers(evidence, monkeypatch):
             "read_accepted_base", "read_installed_pin",
             "attest_installed_source", "attest_host_identity",
             "read_compiler_base_receipt", "read_compiler_base_issuer",
-            "read_compiler_base_binding", "read_compiler_base_origin_lane",
+            "read_compiler_base_binding", "read_compiler_base_provenance",
         }
         lane = callbacks["lane_name"]
         gen = callbacks["generation_id"]
@@ -140,7 +145,7 @@ def test_root_owned_entry_uses_real_selected_readers(evidence, monkeypatch):
         assert callbacks["read_compiler_base_receipt"](gen) == (
             directory / native.RECEIPT_NAME).read_bytes()
         assert callbacks["read_compiler_base_issuer"]() == row["issuer_policy"]
-        assert callbacks["read_compiler_base_origin_lane"](gen) == row["origin_lane"]
+        assert callbacks["read_compiler_base_provenance"](gen) == row["compiler_provenance"]
         assert callbacks["read_compiler_base_binding"](
             gen, row["accepted_base"]["acceptance_receipt_sha256"]) == row["producer_binding"]
         assert callbacks["read_installed_pin"](
@@ -172,7 +177,8 @@ def test_root_owned_entry_uses_real_selected_readers(evidence, monkeypatch):
     ("accepted_base.generation_id", "b" * 64),
     ("lane_record.state", "prepared"),
     ("lane_record.lane", "wrong-lane"),
-    ("origin_lane.provenance_project_id", "wrong-origin"),
+    ("compiler_provenance.project_id", "wrong-origin"),
+    ("compiler_provenance.generation_id", "b" * 64),
 ])
 def test_conflicting_identity_fails_before_writer(evidence, monkeypatch, field, value):
     row, write, _, store, _ = evidence
@@ -333,6 +339,15 @@ def _genuine_disposable_approval(row):
     row["issuer_policy"] = issuer
     row["producer_binding"] = binding
     row["accepted_base"]["acceptance_receipt_sha256"] = base.digest(receipt)
+    row["compiler_provenance"].update({
+        key: claim[key] for key in (
+            "generation_id", "generation_kind", "project_id", "host_id",
+            "installation_id", "state_volume_id",
+            "generation_manifest_sha256", "generation_inventory_sha256",
+            "generation_record_sha256", "execution_environment_sha256",
+        )
+    })
+    row["compiler_provenance"]["acceptance_receipt_sha256"] = base.digest(receipt)
     return row, receipt
 
 
@@ -359,8 +374,11 @@ def test_real_signed_disposable_receipt_installs_twice_without_replacement(evide
     assert installed["compiler_authorized"] is False
     assert installed["status"] == "installed-catalogue-not-build-authorization"
     assert installed["accepted_base_generation_id"] == selected
-    assert installed["compiler_origin_project_id"] == "original-project"
-    assert installed["execution_project_id"] == "original-project"
+    assert installed["compiler_origin_project_id"] == "original-compiler-project"
+    assert installed["compiler_origin_project_root"] == "/home/certbot-build-owner/certbot-seed"
+    assert installed["execution_project_id"] == "fonts-execution-project"
+    assert installed["execution_project_root"] == "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
+    assert installed["compiler_origin_project_root"] != installed["execution_project_root"]
     assert installed["host_id"] == signed_row["host_identity"]["host_id"]
     assert installed["installation_id"] == signed_row["host_identity"]["installation_id"]
     assert catalogue.CATALOGUE.is_file() and catalogue.RECEIPT.is_file()
@@ -374,7 +392,7 @@ def test_real_signed_disposable_receipt_installs_twice_without_replacement(evide
 def test_disposable_signed_receipt_bound_to_wrong_project_is_denied(evidence):
     row, write, directory, store, _ = evidence
     signed_row, signed_bytes = _genuine_disposable_approval(row)
-    signed_row["origin_lane"]["provenance_project_id"] = "foreign-project"
+    signed_row["compiler_provenance"]["project_id"] = "foreign-project"
     write(signed_row)
     p = directory / native.RECEIPT_NAME
     p.write_bytes(signed_bytes)
