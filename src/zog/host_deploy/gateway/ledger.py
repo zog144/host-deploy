@@ -471,7 +471,11 @@ def mark_dispatch_submitting(root, request_id, *, at=None):
             raise RuntimeError("dispatch is not eligible for a new SSM submission")
         if state["states"]["dispatch"] != "prepared":
             raise LedgerConflict("dispatch intent requires prepared gateway state")
-        if record["binding"].get("schema") == 3:
+        # The simple forwarding route does not perform another producer
+        # admission: it sends the bounded selected remote operation as-is.
+        # Older supervised schema-3 dispatches keep their original preflight.
+        if (record["binding"].get("schema") == 3
+                and record["binding"].get("direct_forward") is not True):
             evidence_path = directory / "runtime-preflight.json"
             if not evidence_path.is_file() or evidence_path.is_symlink():
                 raise RuntimeError("producer preflight evidence is missing")
