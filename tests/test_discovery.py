@@ -35,6 +35,7 @@ def test_identity_and_path_guards():
     assert candidate({},r)['identity_directory']=='/state/host-discover/identity'
     r['settings']={'identity_directory':'relative/identity'}
     with pytest.raises(ValueError,match='absolute normalized'):candidate({},r)
+    r['server']=None
     r['settings']={'server':'http://bad'}
     with pytest.raises(ValueError):candidate({},r)
 
