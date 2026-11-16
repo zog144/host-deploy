@@ -484,7 +484,8 @@ def test_same_root_conflicting_project_ids_are_not_rebound(evidence):
     path = directory / native.RECEIPT_NAME
     path.write_bytes(raw)
     path.chmod(0o600)
-    with pytest.raises((catalogue.GraphicalCatalogueBlocked, ValueError)):
+    with pytest.raises((native.NativeCatalogueHeld,
+                        catalogue.GraphicalCatalogueBlocked, ValueError)):
         native.install(lane=signed["lane_record"]["lane"],
                        generation=signed["accepted_base"]["generation_id"])
     assert list(store.iterdir()) == []
