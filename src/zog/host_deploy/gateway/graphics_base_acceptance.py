@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import re
+from pathlib import PurePosixPath
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -46,6 +47,49 @@ ISSUER_FIELDS = frozenset((
     "execution_environment_sha256",
 ))
 
+# The original signed claim includes project_id, but no Project root path.
+# Native producer generation provenance supplies that root and must agree with
+# the receipt AND independent producer binding; an origin lane is not evidence.
+ORIGIN_SCHEMA = "host-deploy-verified-compiler-generation-origin-v1"
+ORIGIN_FIELDS = frozenset((
+    "schema", "generation_id", "generation_kind", "project_root",
+    "project_id", "host_id", "installation_id", "state_volume_id",
+    "generation_manifest_sha256", "generation_inventory_sha256",
+    "generation_record_sha256", "execution_environment_sha256",
+    "acceptance_receipt_sha256",
+))
+
+
+def valid_origin_provenance(value):
+    """Validate shape only; checked_base authenticates signed identity binding."""
+    if type(value) is not dict or set(value) != ORIGIN_FIELDS:
+        return False
+    root = value["project_root"]
+    if (value["schema"] != ORIGIN_SCHEMA
+            or type(root) is not str or not root.startswith("/")
+            or root == "/" or len(root) > 1024
+            or any(p in ("", ".", "..") for p in root.split("/")[1:])
+            or str(PurePosixPath(root)) != root):
+        return False
+    for name in ("project_id", "host_id", "installation_id", "state_volume_id"):
+        entry = value[name]
+        if (type(entry) is not str or not 0 < len(entry) <= 512
+                or any(ord(char) < 33 or ord(char) == 127 for char in entry)):
+            return False
+    if (not match(value["generation_id"], H64)
+            or value["generation_kind"] not in ("toolchain", "image")
+            or not match(value["acceptance_receipt_sha256"], SHA)
+            or not match(value["generation_manifest_sha256"], SHA)
+            or not match(value["generation_inventory_sha256"], SHA)
+            or not match(value["execution_environment_sha256"], SHA)
+            or (value["generation_record_sha256"] is not None
+                and not match(value["generation_record_sha256"], SHA))
+            or (value["generation_kind"] == "toolchain"
+                and value["generation_record_sha256"] is None)):
+        return False
+    return True
+
+
 class BaseAcceptanceDenied(ValueError):
     pass
 
@@ -83,7 +127,7 @@ def valid_history(row,kind):
             and match(row["retained_evidence_sha256"],SHA))
 
 def checked_base(receipt_bytes, issuer_policy, producer_binding, *,
-                 approval, lane):
+                 approval, origin_provenance):
     """Consume exact signed receipt bytes and independently verified producer binding.
 
     The installed issuer policy and producer binding MUST originate from
@@ -102,7 +146,8 @@ def checked_base(receipt_bytes, issuer_policy, producer_binding, *,
             or producer_binding["schema"]!=BINDING_SCHEMA
             or producer_binding["status"]!=
                 "independent-compiler-capability-observed-not-job-authorization"
-            or type(approval) is not dict or type(lane) is not dict):
+            or type(approval) is not dict
+            or not valid_origin_provenance(origin_provenance)):
         deny()
     try:
         envelope=json.loads(receipt_bytes,object_pairs_hook=_unique,
@@ -159,8 +204,8 @@ def checked_base(receipt_bytes, issuer_policy, producer_binding, *,
                 deny()
         if (claim["host_id"]!=approval["host_id"]
                 or claim["installation_id"]!=approval["installation_id"]
-                or claim["project_id"]!=lane["provenance_project_id"]
-                or claim["host_id"]!=lane["provenance_host_id"]):
+                or claim["project_id"]!=origin_provenance["project_id"]
+                or claim["host_id"]!=origin_provenance["host_id"]):
             deny()
         probe=claim["native_probe"]
         if (type(probe) is not dict or type(probe.get("isolation")) is not dict
@@ -182,6 +227,21 @@ def checked_base(receipt_bytes, issuer_policy, producer_binding, *,
         }
         if any(producer_binding[k]!=claim[v] for k,v in mapping.items()):
             deny()
+        # The producer's retained generation provenance is independently
+        # observed at the installed origin Project, not synthesized from an
+        # archived lane or from the execution Project name.
+        for name in (
+                "generation_id", "generation_kind", "project_id", "host_id",
+                "installation_id", "state_volume_id",
+                "generation_manifest_sha256", "generation_inventory_sha256",
+                "generation_record_sha256", "execution_environment_sha256"):
+            if (origin_provenance[name] != claim[name]
+                    or origin_provenance[name] != producer_binding[name]):
+                deny()
+        if (origin_provenance["acceptance_receipt_sha256"] !=
+                digest(receipt_bytes)):
+            deny()
+
         if (producer_binding["compiler_files_sha256"]!=
                 digest(canonical(claim["installed_paths"]))
                 or producer_binding["native_probe_sha256"]!=
