@@ -401,3 +401,90 @@ def test_disposable_signed_receipt_bound_to_wrong_project_is_denied(evidence):
         native.install(lane=row["lane_record"]["lane"],
                        generation=row["accepted_base"]["generation_id"])
     assert list(store.iterdir()) == []
+
+
+@pytest.mark.parametrize("digest", (
+    "generation_manifest_sha256", "generation_inventory_sha256",
+    "generation_record_sha256", "execution_environment_sha256",
+))
+def test_signed_receipt_rejects_divergent_retained_generation_provenance(
+        evidence, digest):
+    """The native producer cannot substitute a different generation record."""
+    row, write, directory, store, _ = evidence
+    signed, raw = _genuine_disposable_approval(row)
+    signed["compiler_provenance"][digest] = "sha256:" + "f" * 64
+    write(signed)
+    path = directory / native.RECEIPT_NAME
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    with pytest.raises((native.NativeCatalogueHeld, ValueError)):
+        native.install(lane=signed["lane_record"]["lane"],
+                       generation=signed["accepted_base"]["generation_id"])
+    assert list(store.iterdir()) == []
+
+
+def test_untrusted_signature_rejected_even_when_selected_digests_are_adjusted(
+        evidence):
+    """Root-owned selector bytes do not supersede the original Ed25519 signature."""
+    from zog.host_deploy.gateway import graphics_base_acceptance as base
+    row, write, directory, store, _ = evidence
+    signed, raw = _genuine_disposable_approval(row)
+    envelope = json.loads(raw)
+    old = envelope["signature"]
+    envelope["signature"] = ("A" if old[0] != "A" else "B") + old[1:]
+    forged = base.canonical(envelope)
+    forged_sha = base.digest(forged)
+    signed["accepted_base"]["acceptance_receipt_sha256"] = forged_sha
+    signed["producer_binding"]["acceptance_receipt_sha256"] = forged_sha
+    signed["compiler_provenance"]["acceptance_receipt_sha256"] = forged_sha
+    write(signed)
+    path = directory / native.RECEIPT_NAME
+    path.write_bytes(forged)
+    path.chmod(0o600)
+    with pytest.raises((native.NativeCatalogueHeld, ValueError)):
+        native.install(lane=signed["lane_record"]["lane"],
+                       generation=signed["accepted_base"]["generation_id"])
+    assert list(store.iterdir()) == []
+
+
+def test_origin_lane_record_is_not_part_of_native_evidence(evidence):
+    """The obsolete origin lane must not be supplied or reconstructed."""
+    row, write, _, store, _ = evidence
+    assert "origin_lane" not in row
+    wrong = copy.deepcopy(row)
+    wrong["origin_lane"] = {"schema": 4, "lane": "fabricated"}
+    write(wrong)
+    with pytest.raises(native.NativeCatalogueHeld):
+        native.install(lane=row["lane_record"]["lane"],
+                       generation=row["accepted_base"]["generation_id"])
+    assert list(store.iterdir()) == []
+
+
+def test_unsigned_project_root_name_is_not_accepted_as_provenance(evidence):
+    row, write, _, store, _ = evidence
+    changed = copy.deepcopy(row)
+    changed["compiler_provenance"]["project_root"] = (
+        "/home/certbot-build-owner/certbot-seed/../untrusted"
+    )
+    write(changed)
+    with pytest.raises(native.NativeCatalogueHeld):
+        native.install(lane=row["lane_record"]["lane"],
+                       generation=row["accepted_base"]["generation_id"])
+    assert list(store.iterdir()) == []
+
+
+def test_same_root_conflicting_project_ids_are_not_rebound(evidence):
+    """Even a signed origin Project cannot be silently renamed into Fonts."""
+    row, write, directory, store, _ = evidence
+    signed, raw = _genuine_disposable_approval(row)
+    signed["lane_record"]["specification"]["project_root"] = (
+        signed["compiler_provenance"]["project_root"]
+    )
+    write(signed)
+    path = directory / native.RECEIPT_NAME
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    with pytest.raises((catalogue.GraphicalCatalogueBlocked, ValueError)):
+        native.install(lane=signed["lane_record"]["lane"],
+                       generation=signed["accepted_base"]["generation_id"])
+    assert list(store.iterdir()) == []
