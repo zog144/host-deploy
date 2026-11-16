@@ -25,8 +25,6 @@ from test_gateway_consumer import FakeSQS, PRIMARY_ARN, DLQ_ARN, message
 
 REQUEST_ID = github_dispatch.first_fonts_request_id(77)
 WORKSPACE = "1" * 32
-SELECTION = "a" * 64
-SNAPSHOT = "sha256:" + "b" * 64
 SOURCE = {
     "repository": "zog144/image-build",
     "revision": image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
@@ -41,7 +39,6 @@ def issue(*, parameters=None, actor="zog144"):
         "parameters": parameters or {
             "lane": "gateway-first-fonts-runtime",
             "task": github_dispatch.FIRST_FONTS_TASK,
-            "selection": SELECTION, "recipe_snapshot": SNAPSHOT,
         },
     }
     return {"action": "opened",
@@ -82,8 +79,7 @@ def direct_binding(value):
             "operation": "pipeline.submit",
             "source": SOURCE,
             "arguments": {
-                "mode": "image", "selection": SELECTION,
-                "recipe_snapshot": SNAPSHOT,
+                "mode": "image",
                 "targets": ["libpng-final", "freetype-final", "fontconfig-final"],
             },
         },
@@ -186,7 +182,7 @@ def test_duplicate_delivery_and_conflicting_request_rejected(forwarding):
     _, duplicate = accept(root, value, message_id="msg-2", receive_count=2)
     assert duplicate
     conflicting = json.loads(json.dumps(value))
-    conflicting["parameters"]["selection"] = "c" * 64
+    conflicting["parameters"]["task"] = "unsupported-task"
     from zog.host_deploy.gateway.ledger import LedgerConflict
     with pytest.raises(LedgerConflict):
         accept(root, conflicting, message_id="msg-3", receive_count=3)
@@ -207,12 +203,11 @@ def test_unauthorized_github_issue_does_not_become_ssm_request(mutation):
 
 
 @pytest.mark.parametrize("field,value", (
-    ("selection", "a" * 40),
-    ("selection", "/bin/sh"),
-    ("recipe_snapshot", "main"),
-    ("recipe_snapshot", "sha256:" + "z" * 64),
+    ("selection", "a" * 64),
+    ("recipe_snapshot", "sha256:" + "b" * 64),
+    ("shell", "rm -rf /"),
 ))
-def test_invalid_producer_arguments_rejected_before_sqs(field, value):
+def test_compiler_state_arguments_are_not_accepted_from_github(field, value):
     event = issue()
     marker = event["issue"]["body"]
     raw = json.loads(marker.split("```json\n", 1)[1].split("\n```", 1)[0])
@@ -222,13 +217,12 @@ def test_invalid_producer_arguments_rejected_before_sqs(field, value):
         github_dispatch.prepare_event(event, frozenset({"zog144"}))
 
 
-def test_unknown_or_old_incomplete_font_request_denied_by_direct_route(tmp_path):
+def test_wrong_lane_is_not_direct_forwardable(tmp_path):
     root = tmp_path / "gateway"
     value = approved()
-    value["parameters"] = {"lane": "gateway-first-fonts-runtime",
-                           "task": github_dispatch.FIRST_FONTS_TASK}
+    value["parameters"]["lane"] = "unreviewed-lane"
     admit(root, value)
-    with pytest.raises(simple_forward.ForwardingDenied):
+    with pytest.raises(RuntimeError, match="not supported"):
         simple_forward.advance(root, value["request_id"])
 
 
@@ -243,8 +237,7 @@ def test_source_owned_finite_mapping_uses_producer_request_not_catalogue():
     request, task = image_build_dispatch._remote_request(value, lane, direct_forward=True)
     assert task is None
     assert request["operation"] == "pipeline.submit"
-    assert request["arguments"]["selection"] == SELECTION
-    assert request["arguments"]["recipe_snapshot"] == SNAPSHOT
+    assert set(request["arguments"]) == {"mode", "targets"}
     assert request["arguments"]["targets"] == [
         "libpng-final", "freetype-final", "fontconfig-final"]
     for unsupported in ("shell.execute", "toolchain.submit"):
@@ -389,8 +382,9 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path
     assert simple_forward.advance(root, value["request_id"])["phase"] == "prepared"
     frozen = load_dispatch(root, value["request_id"])["binding"]
     assert frozen["direct_forward"] is True
-    assert frozen["remote_request"]["arguments"]["recipe_snapshot"] == SNAPSHOT
-    assert frozen["remote_request"]["arguments"]["selection"] == SELECTION
+    assert set(frozen["remote_request"]["arguments"]) == {"mode", "targets"}
+    assert "selection" not in value["parameters"]
+    assert "recipe_snapshot" not in value["parameters"]
     assert "task" not in frozen and "task_catalogue_identity" not in frozen
     # These are the real existing producer/SMM-wrapper validators, NOT mocks.
     image_build_execution._binding({"phase": "prepared", "binding": frozen})
