@@ -74,6 +74,11 @@ def test_staging_failure_keeps_old_service_and_configuration(target,monkeypatch)
     assert cfg.read_bytes()==before and unit.read_text()=='old-unit'
     assert not any('systemctl' in a for a in calls)
 
+def test_activation_probe_uses_host_discover_identity_admission_api():
+    from zog.host_deploy.beacon_install import PROBE
+    assert 'identity_key(c)' in PROBE
+    assert 'storage.load_key(c[\'identity_directory\'])' not in PROBE
+
 def test_failed_probe_restores_old_config_and_preserves_key(target,monkeypatch):
     req,release,cfg,unit,ident,calls,run=target;before=cfg.read_bytes()
     def fail(args,**kw):

@@ -151,10 +151,10 @@ def state_directories(value):
 # Runs as service user, outputs only public/sanitized observations.
 PROBE = '''import json,sys,time
 from pathlib import Path
-from zog.host_discover.daemon import validate_configuration,collect,announce
+from zog.host_discover.daemon import validate_configuration,collect,announce,identity_key
 from zog.host_identify import storage,signatures
 c=validate_configuration(json.loads(Path(sys.argv[1]).read_text()))
-k=storage.load_key(c['identity_directory']); fingerprint=signatures.fingerprint(k.public_key())
+k=identity_key(c); fingerprint=signatures.fingerprint(k.public_key())
 p=Path(c['identity_directory'])/'binding.json'
 before=json.loads(storage.read_owned(p,0o600)) if p.exists() else {}
 announce(c,collect(c))
