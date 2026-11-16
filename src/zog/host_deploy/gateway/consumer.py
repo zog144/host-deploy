@@ -123,8 +123,14 @@ class GatewayConsumer:
                  approved_toolchain_path=None,
                  approved_graphical_chain_policy_sha256=None,
                  approved_graphical_export_pin_path=None,
-                 graphical_export_directory=None):
+                 graphical_export_directory=None, direct_forward=False):
         self.state_directory = Path(state_directory)
+        self.direct_forward = direct_forward is True
+        if self.direct_forward and (
+                approved_generic_catalogue is not None
+                or approved_toolchain_task is not None
+                or approved_graphical_chain_policy_sha256 is not None):
+            raise ValueError("direct forwarding cannot be mixed with catalogue supervisors")
         self.client = client
         self.configuration = verify_queue_configuration(
             client, primary_target, dead_letter_target
@@ -414,11 +420,17 @@ class GatewayConsumer:
             reconcile_all(self.state_directory)
             self._advance_one_reviewed()
             self._advance_one_toolchain()
+            if self.direct_forward:
+                from .simple_forward import advance_one
+                advance_one(self.state_directory)
             return None
         result = self.handle_message(messages[0])
         reconcile_all(self.state_directory)
         self._advance_one_reviewed()
         self._advance_one_toolchain()
+        if self.direct_forward:
+            from .simple_forward import advance_one
+            advance_one(self.state_directory)
         return result
 
     def run(self):
@@ -465,6 +477,8 @@ def main(argv=None):
         default=os.environ.get("ZOG_BUILD_DEAD_LETTER_QUEUE_URL"),
     )
     run.add_argument("--once", action="store_true")
+    run.add_argument("--forward-supported", action="store_true",
+                     help="Forward only the built-in authorized Fonts SSM operation; no catalogue or compiler dossier")
     run.add_argument(
         "--advance-reviewed-generic", action="store_true",
         help="Explicit reviewed-operator opt-in to supervised generic stages",
@@ -633,7 +647,12 @@ def main(argv=None):
             )
             if protected_identity != arguments.approved_toolchain_task_sha256:
                 parser.error("typed toolchain approval digest differs")
-        # Do not allocate any AWS client until root-owned approval is verified.
+        if arguments.forward_supported and (
+                arguments.advance_reviewed_generic
+                or arguments.advance_reviewed_toolchain
+                or arguments.approved_graphical_chain_policy_sha256):
+            parser.error("direct forwarding cannot be combined with catalogue supervisors")
+        # Do not allocate any AWS client until the static operation mapping is selected.
         client = _client()
         consumer = GatewayConsumer(
             state_directory, primary, dead_letter, client=client,
@@ -648,6 +667,7 @@ def main(argv=None):
             approved_graphical_export_pin_path=(
                 arguments.approved_graphical_export_pin_path),
             graphical_export_directory=arguments.graphical_export_directory,
+            direct_forward=arguments.forward_supported,
         )
         if arguments.once:
             with dispatcher_lock(state_directory):

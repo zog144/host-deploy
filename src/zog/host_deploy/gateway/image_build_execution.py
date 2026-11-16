@@ -73,7 +73,7 @@ def _binding(record):
         "remote_request",
         "remote_request_sha256",
     }
-    optional = {"task", "task_catalogue_identity", "controller_companion"}
+    optional = {"task", "task_catalogue_identity", "controller_companion", "direct_forward"}
     if binding.get("schema") in {2, 3}:
         required.add("python_executable")
         image_build_lanes.validate_python_executable(binding.get("python_executable"))
@@ -136,6 +136,22 @@ def _binding(record):
         raise RuntimeError("image-build dispatch binding fields are invalid")
     if ("task" in binding) != ("task_catalogue_identity" in binding):
         raise RuntimeError("image-build task catalogue binding is incomplete")
+    if "direct_forward" in binding:
+        from .github_dispatch import FIRST_FONTS_TASK
+        from .task_catalogue import REVIEWED_IMAGE_TASKS
+        if (binding["direct_forward"] is not True
+                or binding["schema"] != 3
+                or "task" in binding or "task_catalogue_identity" in binding
+                or binding.get("lane") != "gateway-first-fonts-runtime"
+                or binding.get("source") != {
+                    "repository": "zog144/image-build",
+                    "revision": image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+                }
+                or binding["remote_request"].get("operation") != "pipeline.submit"
+                or binding["remote_request"].get("arguments", {}).get("mode") != "image"
+                or binding["remote_request"]["arguments"].get("targets") !=
+                    list(REVIEWED_IMAGE_TASKS[FIRST_FONTS_TASK]["targets"])):
+            raise RuntimeError("unsupported direct forwarding dispatch binding")
     request = binding["remote_request"]
     encoded = _canonical(request)
     if (

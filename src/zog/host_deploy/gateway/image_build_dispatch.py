@@ -62,6 +62,7 @@ def _remote_request(
     *,
     task_catalogue=None,
     task_catalogue_identity=None,
+    direct_forward=False,
 ):
     operation = gateway_request["operation"]
     parameters = gateway_request["parameters"]
@@ -78,6 +79,35 @@ def _remote_request(
         raise RuntimeError(
             "external observed state permits only build.status"
         )
+    if operation == "build.submit" and direct_forward:
+        # A single supported mapping. The authorized caller supplies only
+        # image-build's existing generation and recipe-snapshot references.
+        # They are validated by image-build itself at execution time.
+        from .github_dispatch import FIRST_FONTS_SOURCE, FIRST_FONTS_TASK
+        from .task_catalogue import REVIEWED_IMAGE_TASKS
+        if (parameters.get("task") != FIRST_FONTS_TASK
+                or set(parameters) !=
+                   {"lane", "task", "selection", "recipe_snapshot"}
+                or parameters["lane"] != "gateway-first-fonts-runtime"
+                or gateway_request.get("source") != FIRST_FONTS_SOURCE
+                or source["repository"] != FIRST_FONTS_SOURCE["repository"]
+                or source["revision"] != image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+                or task_catalogue is not None
+                or task_catalogue_identity is not None):
+            raise RuntimeError("operation is not supported by direct SSM forwarding")
+        return ({
+            "schema": REMOTE_SCHEMA,
+            "operation_id": gateway_request["request_id"],
+            "operation": "pipeline.submit",
+            "source": source,
+            "arguments": {
+                "mode": "image",
+                "selection": parameters["selection"],
+                "targets": list(REVIEWED_IMAGE_TASKS[FIRST_FONTS_TASK]["targets"]),
+                "recipe_snapshot": parameters["recipe_snapshot"],
+            },
+        }, None)
+
     if operation == "build.submit":
         from .task_catalogue import select
         if task_catalogue is None or task_catalogue_identity is None:
@@ -192,6 +222,7 @@ def binding_for_request(
     *,
     task_catalogue=None,
     task_catalogue_identity=None,
+    direct_forward=False,
 ):
     """Build an immutable server-owned binding without performing remote mutation."""
     state = load_request(gateway_root, request_id)
@@ -234,6 +265,7 @@ def binding_for_request(
             lane_spec,
             task_catalogue=task_catalogue,
             task_catalogue_identity=task_catalogue_identity,
+            direct_forward=direct_forward,
         )
         project_root = Path(lane_spec["project_root"])
         controller_companion = lane_record.get("controller_companion")
@@ -312,6 +344,8 @@ def binding_for_request(
         "remote_request": remote_request,
         "remote_request_sha256": hashlib.sha256(request_bytes).hexdigest(),
     }
+    if direct_forward:
+        binding["direct_forward"] = True
     if controller_companion is not None and "--controller-config" in argv:
         binding["controller_companion"] = controller_companion
     if task_binding is not None:
@@ -328,6 +362,7 @@ def prepare_image_build_dispatch(
     *,
     task_catalogue=None,
     task_catalogue_identity=None,
+    direct_forward=False,
     at=None,
 ):
     binding = binding_for_request(
@@ -335,6 +370,7 @@ def prepare_image_build_dispatch(
         request_id,
         task_catalogue=task_catalogue,
         task_catalogue_identity=task_catalogue_identity,
+        direct_forward=direct_forward,
     )
     # Both admin and supervisor pass this durable admission boundary.
     if binding.get("task") is not None:

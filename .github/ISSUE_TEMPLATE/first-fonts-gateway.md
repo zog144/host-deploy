@@ -1,6 +1,6 @@
 ---
 name: First Fonts — reviewed gateway request
-about: Original first Fonts compile through the trusted-Host FIFO gateway (after native admission)
+about: Request the supported first Fonts image-build pipeline via the trusted-Host FIFO/SSM gateway
 title: "[gateway] first Fonts"
 labels: []
 assignees: []
@@ -14,7 +14,9 @@ assignees: []
   "operation": "build.submit",
   "parameters": {
     "lane": "REPLACE_WITH_EXISTING_MANAGED_LANE",
-    "task": "graphics-fonts-image-v1"
+    "task": "graphics-fonts-image-v1",
+    "selection": "REPLACE_WITH_EXISTING_ACCEPTED_GENERATION_64_HEX",
+    "recipe_snapshot": "sha256:REPLACE_WITH_IMAGE_BUILD_RECIPE_SNAPSHOT_64_HEX"
   }
 }
 ```
