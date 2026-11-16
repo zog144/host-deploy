@@ -50,7 +50,11 @@ Those historical issuer/catalogue tools are not used by this mode.
    CommandId acknowledgement is `submission_uncertain` and never
    automatically retries. If the CommandId is known but the result is lost,
    inspect that same command and persist the observed result, without another
-   SendCommand.
+   SendCommand. A successful SSM invocation means the **transport invocation**
+   finished: the retained image-build receipt may report `status=pending`,
+   meaning the actual compilation has **not** completed. Use the original
+   producer pipeline ID and its `pipeline.inspect` operation to determine
+   subsequent build completion, not a second gateway compiler-dossier check.
 
 ## Request
 
@@ -85,8 +89,10 @@ actually supports `pipeline.submit` with an existing recipe snapshot and
 generation (a missing producer snapshot requires image-build work, **not**
 another host-deploy compiler dossier).
 
-Run source/integration tests, then independently exercise one permitted,
-non-mutating end-to-end probe before any build submission. Inspect durable
+Run source/integration tests and use the existing `queue-status` and
+SSM read-only inspection facilities for non-mutating connectivity checks;
+this direct route enables only a mutating `build.submit`, so **do not**
+exercise its live SSM path merely to test connectivity. Inspect durable
 request/CommandId/result evidence and lost-result recovery. Do not replace
 the real signed compiler receipt, generation, or active Fonts lane; do not
 invoke a compilation from these source tests.
