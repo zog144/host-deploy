@@ -34,13 +34,14 @@ single-linked, root:root mode 0600:
 - `compiler-selection.json`: canonical JSON with the exact schema
   `host-deploy-first-fonts-installed-native-evidence-v1`; fields
   `schema`, `lane_record`, `accepted_base`, `issuer_policy`,
-  `producer_binding`, `origin_lane`, `host_identity`,
+  `producer_binding`, `compiler_provenance`, `host_identity`,
   `installed_sources`. This is a root-installed **collection of the
-  original records**, not an independently invented approval.
-  `lane_record` is an actual active schema-5 lane record, including its
-  `specification`. `origin_lane` is the original schema-4 specification
-  bound to the signed compiler receipt. `accepted_base` is the exact
-  independently checked generation report from the reviewed native reader.
+  original records and attested generation facts**, not a new approval.
+  `lane_record` is the **actual active schema-5 Fonts execution lane**
+  including its `specification`; it is not the compiler origin.
+  `compiler_provenance` is a separately authenticated readback of the
+  compiler's retained **generation**, not another lane record.
+  `accepted_base` is the exact independently checked generation report.
 - `compiler-base-acceptance.json`: exact original canonical signed
   compiler acceptance bytes, with no recomposition or re-signing.
 - `october-commit-pin.py`: exact original reviewed pin bytes, SHA256
@@ -49,6 +50,23 @@ single-linked, root:root mode 0600:
 `host_identity` is
 `{"schema":"host-deploy-first-fonts-installed-host-identity-v1","host_id":"...","installation_id":"...","state_volume_id":"..."}`;
 the original issuer and producer binding must match each field.
+
+`compiler_provenance` has exact schema
+`host-deploy-verified-compiler-generation-origin-v1` and exact fields
+`schema`, `project_root`, `project_id`, `generation_id`,
+`generation_kind`, `host_id`, `installation_id`, `state_volume_id`,
+`generation_manifest_sha256`, `generation_inventory_sha256`,
+`generation_record_sha256`, `execution_environment_sha256`, and
+`acceptance_receipt_sha256`. Every identity/digest must agree with the
+**original signed claim** and independently installed producer binding.
+The signed claim carries the origin **Project ID**, not a separate
+`project_root` path: that path must be independently checked against the
+producer's retained generation store and its Project identity when the
+trusted native reader installs the record. A directory named
+`certbot-seed` alone is not sufficient evidence. Do not synthesize or
+recreate a schema-4 origin lane, nor substitute a different accepted
+compiler generation.
+
 `installed_sources` is
 `{"schema":"host-deploy-first-fonts-installed-sources-v1","roots":{...}}`
 with **exactly three** keys: original producer revision
@@ -71,11 +89,14 @@ It does not treat a root-owned copied record as evidence the original
 compiler generation was successfully inspected: Work still owns that
 independent producer/installed-wheel/STATE attestation.
 
-The same signed compiler Project root and ID may be reused for the original
-lane. Distinct lane names sharing one Project remain on HOLD pending a
-reviewed real controller-owner compatibility reader; no boolean override is
-provided. No additional memory quota, worker user or certificate requirement
-is introduced.
+The original compiler Project and the active execution Project may differ
+—for example, compiler origin `/home/certbot-build-owner/certbot-seed`
+and execution in `gateway-first-fonts-runtime`. No origin lane or
+origin/execution lane-name comparison is involved. If the two Project roots
+are equal, their independently verified Project IDs must also be equal
+(and vice versa); no fake shared-lane compatibility evidence is accepted.
+No additional memory quota, worker user or certificate requirement is
+introduced.
 
 ## Native Work checks before staging
 
@@ -85,10 +106,13 @@ is introduced.
    generation manifest/inventory/probe, accepted reader revision, original
    pin/source bytes, original producer binding and current nonrevoked issuer
    using the actual native producer and installed root evidence.
-2. Confirm active lane record belongs to this Host and selected Project,
-   actual controller and Project state, compatible source and effective
-   execution identity. Do not replace an existing controller or issue another
-   account.
+2. Confirm the active Fonts **execution** lane belongs to this Host and
+   its own independently selected Project, actual controller and Project
+   state, compatible source and effective execution identity. Confirm the
+   accepted generation is retained in the **separate origin Project**
+   through the real producer readback. A missing origin-lane record is
+   expected and does not block installation. Do not replace a controller,
+   invent a lane or issue another account.
 3. Install the exact evidence files and three verified immutable source
    copies in the protected root-owned layout; verify inode/mode/hash and
    installed host-deploy wheel including the CLI's module and entry point.
