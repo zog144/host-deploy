@@ -403,7 +403,7 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path
     sent = []
     class Host:
         def __init__(self, configuration):
-            assert configuration == TARGET
+            assert configuration == host
         def submit_command(self, script, seconds):
             sent.append((script, seconds))
             return "fixed-command-1"
