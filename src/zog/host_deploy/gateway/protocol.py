@@ -184,26 +184,13 @@ def _parameters(operation, value):
     if not isinstance(value, dict):
         raise RequestProtocolError("parameters must be an object")
     if operation == "build.submit":
-        # The short legacy request remains syntactically valid for existing
-        # supervised workflows. Direct SSM forwarding requires the producer's
-        # own selection and recipe-snapshot arguments, not a separate gateway
-        # compiler receipt, issuer policy, or installation catalogue.
-        fields = set(value)
-        if fields not in (
-                {"lane", "task"},
-                {"lane", "task", "selection", "recipe_snapshot"}):
-            raise RequestProtocolError("unsupported build submission arguments")
+        # Authorization selects the fixed supported task and its lane.
+        # Compiler generations and recipe snapshots belong to image-build's
+        # configured Project, not to a GitHub issue or this transport schema.
+        _exact(value, {"lane", "task"}, "parameters")
         _lane(value["lane"])
         if value["task"] not in BUILD_TASKS:
             raise RequestProtocolError("unknown build task")
-        if "selection" in value:
-            if (value["task"] != "graphics-fonts-image-v1"
-                    or type(value["selection"]) is not str
-                    or re.fullmatch(r"[0-9a-f]{64}", value["selection"]) is None
-                    or type(value["recipe_snapshot"]) is not str
-                    or re.fullmatch(r"sha256:[0-9a-f]{64}",
-                                    value["recipe_snapshot"]) is None):
-                raise RequestProtocolError("unsupported direct build parameters")
     elif operation == "toolchain.submit":
         _exact(value, {"lane", "task"}, "parameters")
         _lane(value["lane"])
