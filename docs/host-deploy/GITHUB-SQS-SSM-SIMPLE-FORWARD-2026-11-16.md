@@ -39,8 +39,9 @@ Those historical issuer/catalogue tools are not used by this mode.
 5. The GitHub issue and SQS request contain **only** the fixed `lane`
    and `task` fields. The forwarded image-build request contains `mode=image`
    and the fixed Fonts targets, with **no** `selection` or `recipe_snapshot`.
-   The compatible producer successor (image-build PR #26, after exact source
-   selection) obtains its existing active toolchain generation from the
+   The compatible producer successor (image-build PR #26, candidate
+   `6b344aad3d3389d3f444bd69b63214a4a5903ad5`, after review and
+   explicit lane selection) obtains its existing active toolchain generation from the
    configured execution Project's `image-build/toolchain-active` selection,
    and resolves one already-published, source-matched recipe snapshot in that
    *same Project* containing the requested targets. Ambiguous or absent
@@ -88,10 +89,16 @@ confirm the owned compiler Workspace/Host, correct active schema-5 Fonts
 execution lane and installed runtime companion, AWS role permissions, FIFO
 queue and approved SSM document. Host-deploy's retained image-build
 source pin is currently `620378bdd8075daeb5eaad45eedea4af7db36423`,
-whose producer **does not support** omitted input references. Review and
-select the compatible image-build PR #26 successor and its runtime companion
-before claiming a usable native build; do not silently reassign the installed
-lane source or rewrite its generation/recipe state. If the execution Project
+whose producer **does not support** omitted input references. The
+source-tested compatible successor is
+`6b344aad3d3389d3f444bd69b63214a4a5903ad5` (image-build PR #26);
+host-deploy now supports this revision as a **separate** checked producer
+selection, with the same source-bound build-record/controller versions and
+original retained provenance pin. Review/install the successor and its
+runtime companion and explicitly select/activate it for the existing verified
+Project through the normal lane path before claiming a usable native build.
+Do **not** silently reassign the current active lane, overwrite the older
+producer pin or rewrite its generation/recipe state. If the execution Project
 has no unique local published recipe snapshot or active toolchain, report
 image-build's ordinary missing-input error and resolve that *within
 image-build's supported Project configuration/operation path*.
