@@ -331,7 +331,12 @@ def test_direct_mode_rejects_legacy_catalogue_supervisor_configuration(tmp_path)
         )
 
 
-def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path, monkeypatch):
+@pytest.mark.parametrize("producer_revision", (
+    image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+    image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION,
+))
+def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
+        tmp_path, monkeypatch, producer_revision):
     """Compile the actual frozen SSM wrapper from a schema-5 Fonts lane.
 
     No synthetic signed compiler receipt, Project-origin lane or injected
@@ -346,7 +351,7 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path
     spec = image_build_lanes.specification(
         "gateway-first-fonts-runtime", mode="managed",
         source_repository="zog144/image-build",
-        source_revision=image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
+        source_revision=producer_revision,
         monthly_pin_repository_path=image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_PATH,
         monthly_pin_identity=image_build_lanes.FIRST_FONTS_ORIGINAL_PIN_IDENTITY,
         provenance_host_id="compiler-test-host",
@@ -407,6 +412,17 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(tmp_path
     assert result["phase"] == "submitted"
     assert sent == [(script, simple_forward.CONTROL_TIMEOUT_SECONDS)]
     assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"
+
+
+def test_source_successor_has_same_approved_runtime_companion_and_original_pin():
+    old = image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION
+    successor = image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION
+    assert successor == "6b344aad3d3389d3f444bd69b63214a4a5903ad5"
+    assert old != successor
+    assert image_build_lanes.expected_build_record_revision(old) == (
+        image_build_lanes.expected_build_record_revision(successor))
+    assert image_build_lanes.expected_controller_revision(old) == (
+        image_build_lanes.expected_controller_revision(successor))
 
 
 def test_issue_body_has_no_compiler_selection_or_snapshot():
