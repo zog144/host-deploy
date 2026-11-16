@@ -59,7 +59,7 @@ HOST_DEPLOY_CANDIDATE_SOURCE_DIRECTORY=/candidate/beacon \
 
 Installer-side source selection must pass the directory explicitly:
 `discovery.install(..., source=Path("/candidate/beacon"), ...)`,
-or the equivalent `host-deploy discover-install --source` invocation.
+or the equivalent `host-deploy install-discover --source` invocation.
 The tested `beacon_payload.payload(source=directory)` compares all pinned
 bytes before remote Host access, creates the version manifest and packages
 only selected source files; it does **not** infer this candidate from the
