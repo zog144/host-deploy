@@ -182,7 +182,7 @@ def test_duplicate_delivery_and_conflicting_request_rejected(forwarding):
     _, duplicate = accept(root, value, message_id="msg-2", receive_count=2)
     assert duplicate
     conflicting = json.loads(json.dumps(value))
-    conflicting["parameters"]["task"] = "unsupported-task"
+    conflicting["parameters"]["lane"] = "another-managed-lane"
     from zog.host_deploy.gateway.ledger import LedgerConflict
     with pytest.raises(LedgerConflict):
         accept(root, conflicting, message_id="msg-3", receive_count=3)
