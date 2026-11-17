@@ -246,6 +246,11 @@ def binding_for_request(
                 "gateway dispatch requires inherited-identity lane schema 5; "
                 "legacy prepared operations must not be silently rewritten"
             )
+        if direct_forward:
+            # The lane chooses Project + controller only. The installed
+            # checkout and package pins are used at SSM execution time.
+            from .project_current import binding as project_binding
+            return project_binding(request, lane_record, lane_spec, host)
         companion = lane_record.get("runtime_companion")
         if companion is None:
             raise RuntimeError(
@@ -392,6 +397,15 @@ def verify_current_target(gateway_root, binding):
         lane_record, lane_spec = _load_lane_locked(locked, binding["lane"])
     if _target(host) != binding["target"]:
         raise RuntimeError("workspace host differs from prepared dispatch target")
+    if binding.get("schema") == 4:
+        from .project_current import validate as validate_project_binding
+        validate_project_binding(binding)
+        if (lane_spec["schema"] != image_build_lanes.INHERITED_SCHEMA
+                or lane_spec["project_root"] != binding["project_root"]
+                or lane_record.get("controller_config") != binding["controller_config"]
+                or lane_record.get("state") != "active"):
+            raise RuntimeError("selected Project/controller differs from dispatch")
+        return host
     if {
         "repository": lane_spec["source_repository"],
         "revision": lane_spec["source_revision"],
