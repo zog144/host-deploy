@@ -301,8 +301,10 @@ def _path(root, lane):
 
 def prepare(directory, spec):
     spec = validate(spec)
-    if spec["lane"] == "gateway-first-fonts-runtime":
-        raise ValueError("reserved first Fonts lane requires source-owned fonts-lane-prepare")
+    if (spec["lane"] == "gateway-first-fonts-runtime"
+            and not (spec["schema"] == INHERITED_SCHEMA
+                     and spec.get("project_selection") == "existing")):
+        raise ValueError("historical first Fonts profile requires explicit migration")
     with locked(directory) as root:
         path = _path(root, spec["lane"])
         others = []
@@ -832,10 +834,10 @@ def activate(directory, lane, *, expected_specification_sha256=None):
         path = _path(root, lane)
         record = json.loads(path.read_text())
         spec = validate(record["specification"])
-        if lane == "gateway-first-fonts-runtime":
-            # A signed native copy and explicit archived-history migration are
-            # mandatory; generic lane activation cannot replace the old record.
-            raise RuntimeError("historical account-selecting first Fonts requires fonts-lane-migration-activate")
+        if (lane == "gateway-first-fonts-runtime"
+                and spec["schema"] != INHERITED_SCHEMA):
+            # Historical account-selecting records remain inspection-only.
+            raise RuntimeError("historical account-selecting first Fonts requires explicit migration")
         if spec["schema"] != INHERITED_SCHEMA:
             raise RuntimeError("historical account-selecting lane must be migrated before activation")
         if spec.get("project_selection") == "existing":
