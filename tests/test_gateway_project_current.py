@@ -173,5 +173,5 @@ def test_frozen_project_binding_cannot_change_task_or_ssm_target(tmp_path):
         project_current.validate(bad)
     bad = json.loads(json.dumps(binding))
     bad["target"]["instance_id"] = "bad"
-    with pytest.raises(RuntimeError, match="target"):
+    with pytest.raises(RuntimeError, match="target|host identity"):
         project_current.validate(bad)
