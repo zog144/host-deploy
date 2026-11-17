@@ -148,7 +148,7 @@ def prepare_event(event, authorized_actors):
             raise GitHubDispatchError(
                 "first Fonts issue must omit source and request_id"
             )
-        request["source"] = dict(FIRST_FONTS_SOURCE)
+        # The Project supplies its current checkout at build time.
         request["request_id"] = first_fonts_request_id(issue_number)
     request["origin"] = {
         "repository": ORIGIN_REPOSITORY,
