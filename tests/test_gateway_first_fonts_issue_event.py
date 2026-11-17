@@ -80,7 +80,6 @@ def test_original_issue_constructs_stable_gateway_identity_and_exact_source(tmp_
         "schema": 1, "request_id": expected_id, "workspace_id": WORKSPACE,
         "operation": "build.submit",
         "parameters": {"lane": "compiler-fonts", "task": TASK},
-        "source": {"repository": "zog144/image-build", "commit": SOURCE},
         "origin": {
             "repository": "zog144/host-deploy", "issue_number": 104,
             "trigger_actor": "zog144",

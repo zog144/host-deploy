@@ -147,12 +147,12 @@ def test_preparation_does_not_create_missing_or_inaccessible_project(existing):
     assert not (workspace / "image-build-lanes" / "fonts-selected.json").exists()
 
 
-def test_preparation_rejects_unreviewed_source(existing):
+def test_preparation_uses_project_even_after_checkout_contents_change(existing):
     workspace, project, spec, native = existing
     (project / "source" / "tracked.py").write_text("changed source\n")
-    with pytest.raises(RuntimeError, match="clean reviewed checkout"):
-        lanes.prepare(workspace, spec)
-    assert not (workspace / "image-build-lanes" / "fonts-selected.json").exists()
+    record = lanes.prepare(workspace, spec)
+    assert record["state"] == "prepared"
+    assert record["project_inspection"]["project_root"] == str(project)
 
 
 def test_project_remains_owned_by_one_active_lane(existing):
@@ -208,13 +208,13 @@ def test_unresolved_controller_intent_never_resubmits_write(existing):
     assert not (project / runtime.controller_file(spec)).exists()
 
 
-def test_activated_existing_project_rejects_changed_source(existing):
+def test_active_existing_project_accepts_checkout_change_and_keeps_controller(existing):
     workspace, project, spec, native = existing
     lanes.prepare(workspace, spec)
-    lanes.activate(workspace, spec["lane"])
+    first = lanes.activate(workspace, spec["lane"])
     (project / "source" / "tracked.py").write_text("changed\n")
-    with pytest.raises(RuntimeError, match="clean reviewed checkout"):
-        lanes.activate(workspace, spec["lane"])
+    assert lanes.activate(workspace, spec["lane"]) == first
+    assert native.writes == 1
 
 
 def test_retained_fonts_pin_uses_reviewed_producer_not_project_or_lane_name():
@@ -251,3 +251,25 @@ def test_retained_fonts_pin_uses_reviewed_producer_not_project_or_lane_name():
     wrong["specification"]["monthly_pin_identity"] = "sha256:" + "f" * 64
     with pytest.raises(RuntimeError, match="retained pin differs"):
         lanes.remote_operation_argv(wrong, "/run/reviewed-request.json")
+
+
+def test_existing_first_fonts_lane_uses_normal_project_controller_activation(existing):
+    workspace, project, old, native = existing
+    selected = copy.deepcopy(old)
+    selected["lane"] = "gateway-first-fonts-runtime"
+    # No source revision, monthly pin or producer approval is needed.
+    for field in (
+        "source_repository", "source_revision",
+        "monthly_pin_repository_path", "monthly_pin_identity",
+        "provenance_host_id", "provenance_project_id",
+    ):
+        selected.pop(field)
+    selected = lanes.validate(selected)
+    record = lanes.prepare(workspace, selected)
+    assert record["state"] == "prepared"
+    active = lanes.activate(workspace, selected["lane"])
+    assert active["state"] == "active"
+    assert active["controller_config"] == str(project / runtime.controller_file(selected))
+    (project / "source/tracked.py").write_text("new current Project source\\n")
+    assert lanes.activate(workspace, selected["lane"]) == active
+    assert native.writes == 1

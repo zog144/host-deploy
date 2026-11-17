@@ -51,7 +51,7 @@ def workspace(tmp_path):
     return root
 
 
-def test_prepare_is_idempotent_and_binds_exact_source(tmp_path):
+def test_prepare_preserves_existing_record_when_project_checkout_changes(tmp_path):
     root = workspace(tmp_path)
     first = lanes.prepare(root, spec())
     second = lanes.prepare(root, spec())
@@ -59,8 +59,13 @@ def test_prepare_is_idempotent_and_binds_exact_source(tmp_path):
     assert first["specification"]["source_revision"] == "a" * 40
     changed = spec()
     changed["source_revision"] = "c" * 40
-    with pytest.raises(ValueError, match="different inputs"):
-        lanes.prepare(root, changed)
+    changed["monthly_pin_identity"] = "sha256:" + "d" * 64
+    assert lanes.prepare(root, changed) == first
+    assert lanes.inspect(root, first["lane"]) == first
+    wrong = spec()
+    wrong["controller"]["socket_path"] = "/run/another-controller.sock"
+    with pytest.raises(ValueError, match="Project or controller"):
+        lanes.prepare(root, wrong)
 
 
 def test_project_basename_is_lane_identity(tmp_path):

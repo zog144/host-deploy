@@ -66,6 +66,19 @@ def _remote_request(
 ):
     operation = gateway_request["operation"]
     parameters = gateway_request["parameters"]
+    if direct_forward:
+        # The fixed task is selected by the gateway, not by a saved source pin.
+        from .github_dispatch import FIRST_FONTS_TASK
+        from .project_current import _template
+        if (operation != "build.submit"
+                or parameters != {
+                    "lane": "gateway-first-fonts-runtime",
+                    "task": FIRST_FONTS_TASK,
+                }
+                or task_catalogue is not None
+                or task_catalogue_identity is not None):
+            raise RuntimeError("operation is not supported by direct SSM forwarding")
+        return _template(gateway_request["request_id"]), None
     source = {
         "repository": lane_spec["source_repository"],
         "revision": lane_spec["source_revision"],
@@ -79,33 +92,6 @@ def _remote_request(
         raise RuntimeError(
             "external observed state permits only build.status"
         )
-    if operation == "build.submit" and direct_forward:
-        # A single supported mapping. The configured image-build Project owns
-        # its toolchain and recipe inputs; the GitHub actor supplies neither.
-        from .github_dispatch import FIRST_FONTS_SOURCE, FIRST_FONTS_TASK
-        from .task_catalogue import REVIEWED_IMAGE_TASKS
-        if (parameters.get("task") != FIRST_FONTS_TASK
-                or set(parameters) != {"lane", "task"}
-                or parameters["lane"] != "gateway-first-fonts-runtime"
-                or gateway_request.get("source") != FIRST_FONTS_SOURCE
-                or source["repository"] != FIRST_FONTS_SOURCE["repository"]
-                or source["revision"] not in (
-                    image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
-                    image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION)
-                or task_catalogue is not None
-                or task_catalogue_identity is not None):
-            raise RuntimeError("operation is not supported by direct SSM forwarding")
-        return ({
-            "schema": REMOTE_SCHEMA,
-            "operation_id": gateway_request["request_id"],
-            "operation": "pipeline.submit",
-            "source": source,
-            "arguments": {
-                "mode": "image",
-                "targets": list(REVIEWED_IMAGE_TASKS[FIRST_FONTS_TASK]["targets"]),
-            },
-        }, None)
-
     if operation == "build.submit":
         from .task_catalogue import select
         if task_catalogue is None or task_catalogue_identity is None:
@@ -246,6 +232,11 @@ def binding_for_request(
                 "gateway dispatch requires inherited-identity lane schema 5; "
                 "legacy prepared operations must not be silently rewritten"
             )
+        if direct_forward:
+            # The lane chooses Project + controller only. The installed
+            # checkout and package pins are used at SSM execution time.
+            from .project_current import binding as project_binding
+            return project_binding(request, lane_record, lane_spec, host)
         companion = lane_record.get("runtime_companion")
         if companion is None:
             raise RuntimeError(
@@ -392,6 +383,15 @@ def verify_current_target(gateway_root, binding):
         lane_record, lane_spec = _load_lane_locked(locked, binding["lane"])
     if _target(host) != binding["target"]:
         raise RuntimeError("workspace host differs from prepared dispatch target")
+    if binding.get("schema") == 4:
+        from .project_current import validate as validate_project_binding
+        validate_project_binding(binding)
+        if (lane_spec["schema"] != image_build_lanes.INHERITED_SCHEMA
+                or lane_spec["project_root"] != binding["project_root"]
+                or lane_record.get("controller_config") != binding["controller_config"]
+                or lane_record.get("state") != "active"):
+            raise RuntimeError("selected Project/controller differs from dispatch")
+        return host
     if {
         "repository": lane_spec["source_repository"],
         "revision": lane_spec["source_revision"],

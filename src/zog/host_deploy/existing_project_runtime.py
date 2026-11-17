@@ -1,8 +1,8 @@
 """Read-only verification and exclusive controller binding for an existing Project.
 
 An existing box-control Project is not created or migrated by lane preparation.
-Only its selected immutable executable checkout is required; no account
-selection, chown, state migration, catalogue write or generation guessing occurs.
+The selected Project and controller are the stable binding. Its checkout may
+change independently; no account selection, state migration or source pin gate.
 """
 import hashlib
 import json
@@ -58,14 +58,11 @@ for name in REQUIRED:
     if not os.access(path,access,effective_ids=True):
         raise RuntimeError('running process cannot access existing Project directory: '+name)
 source=root/'source'
+# A checkout revision is an observation, not an activation authorization.
+# The current files and package pins are selected by the next build itself.
 p=subprocess.run(['git','-C',str(source),'rev-parse','--verify','HEAD'],
                  stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,check=False)
-if p.returncode or p.stdout.strip()!=REVISION:
-    raise RuntimeError('existing Project executable source commit differs')
-p=subprocess.run(['git','-C',str(source),'status','--porcelain','--untracked-files=all'],
-                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,check=False)
-if p.returncode or p.stdout.strip():
-    raise RuntimeError('existing Project executable source is not a clean reviewed checkout')
+revision=p.stdout.strip() if p.returncode==0 else None
 python=Path(PYTHON)
 if python.is_symlink() or not python.is_file() or not os.access(python,os.X_OK,effective_ids=True):
     raise RuntimeError('selected Project Python is missing or inaccessible')
@@ -109,7 +106,7 @@ print(json.dumps({
     'status':state,
     'project_root':PROJECT,
     'project_identity':root.name,
-    'source_revision':REVISION,
+    'source_revision':revision,
     'controller_file':str(controller),
     'controller_sha256':hashlib.sha256(EXPECTED).hexdigest(),
     'effective_user_id':uid,'effective_group_id':gid,
@@ -117,7 +114,6 @@ print(json.dumps({
 '''
     prefix = (
         "PROJECT=" + repr(spec["project_root"]) + "\n"
-        "REVISION=" + repr(spec["source_revision"]) + "\n"
         "PYTHON=" + repr(spec["python_executable"]) + "\n"
         "SOCKET=" + repr(spec["controller"]["socket_path"]) + "\n"
         "REQUIRED=" + repr(REQUIRED_DIRS) + "\n"
@@ -135,13 +131,15 @@ def inspect(host, spec):
     expected = {
         "project_root": spec["project_root"],
         "project_identity": spec["project_root"].rstrip("/").split("/")[-1],
-        "source_revision": spec["source_revision"],
         "controller_file": spec["project_root"] + "/" + controller_file(spec),
         "controller_sha256": hashlib.sha256(expected_bytes(spec)).hexdigest(),
     }
     if (type(result) is not dict
             or set(result) != set(expected) | {
-                "status","effective_user_id","effective_group_id"}
+                "status","effective_user_id","effective_group_id","source_revision"}
+            or (result.get("source_revision") is not None
+                and (not isinstance(result["source_revision"], str)
+                     or not lanes._REVISION.fullmatch(result["source_revision"])))
             or any(result.get(k)!=v for k,v in expected.items())
             or result.get("status") not in {"prepared","complete"}
             or type(result.get("effective_user_id")) is not int
@@ -157,6 +155,10 @@ def install(host, spec):
     if result.get("status") != "complete":
         raise RuntimeError("selected existing Project controller write was incomplete")
     readback = inspect(host, spec)
+    # HEAD is reported for history only. A checkout update between the
+    # installation and readback is not a controller or Project mismatch.
+    for observation in (result, readback):
+        observation.pop("source_revision", None)
     if result != readback:
         raise RuntimeError("existing Project controller changed during readback")
     return readback
