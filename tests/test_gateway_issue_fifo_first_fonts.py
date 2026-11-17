@@ -122,7 +122,7 @@ def test_real_issue_configuration_fifo_receiver_round_trip_and_redelivery(tmp_pa
         "trigger_actor": ACTOR,
     }
     assert summary["issue_number"] == ISSUE_NUMBER
-    assert request["source"] == github_dispatch.FIRST_FONTS_SOURCE
+    assert "source" not in request  # The Project supplies its current source
     assert request["request_id"] == github_dispatch.first_fonts_request_id(ISSUE_NUMBER)
     client = CapturingFIFO()
     sent = github_dispatch.submit_request(PRIMARY_URL, request, client=client)
