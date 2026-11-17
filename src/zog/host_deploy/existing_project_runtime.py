@@ -155,6 +155,10 @@ def install(host, spec):
     if result.get("status") != "complete":
         raise RuntimeError("selected existing Project controller write was incomplete")
     readback = inspect(host, spec)
+    # HEAD is reported for history only. A checkout update between the
+    # installation and readback is not a controller or Project mismatch.
+    for observation in (result, readback):
+        observation.pop("source_revision", None)
     if result != readback:
         raise RuntimeError("existing Project controller changed during readback")
     return readback
