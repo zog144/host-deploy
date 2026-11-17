@@ -175,3 +175,97 @@ def test_frozen_project_binding_cannot_change_task_or_ssm_target(tmp_path):
     bad["target"]["instance_id"] = "bad"
     with pytest.raises(RuntimeError, match="target|host identity"):
         project_current.validate(bad)
+
+
+def test_gateway_uses_project_controller_only_across_saved_revision_pin_change(
+        tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from test_gateway_simple_forward import approved, admit
+    from zog.host_deploy.gateway import image_build_dispatch, simple_forward
+    from zog.host_deploy.gateway.ledger import load_dispatch
+
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=True)
+    gateway = tmp_path / "gateway"
+    request = approved()
+    admit(gateway, request)
+    host = target()
+    monkeypatch.setattr(image_build_dispatch, "owned_workspace",
+                        lambda directory, workspace: "owned-workspace")
+    monkeypatch.setattr(image_build_dispatch, "locked_workspace",
+                        lambda directory: nullcontext(directory))
+    monkeypatch.setattr(image_build_dispatch, "configuration",
+                        lambda directory: ({}, host))
+    monkeypatch.setattr(image_build_dispatch, "_load_lane_locked",
+                        lambda directory, lane: (record, spec))
+    result = simple_forward.advance(gateway, request["request_id"])
+    assert result["phase"] == "prepared"
+    frozen = load_dispatch(gateway, request["request_id"])["binding"]
+    assert frozen["schema"] == 4
+    assert "source" not in frozen
+    assert "monthly_pin_identity" not in frozen
+    assert frozen["project_root"] == str(root)
+
+    # The retained specification fields can change without becoming new
+    # request authorization or blocking the already selected controller.
+    spec["source_revision"] = "f" * 40
+    spec["monthly_pin_identity"] = "sha256:" + "d" * 64
+    (source / "project/package/pins.txt").write_text("current-pin")
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "new current package pin")
+    assert image_build_dispatch.verify_current_target(gateway, frozen) == host
+
+    sent = []
+    class FakeHost:
+        def __init__(self, configuration):
+            assert configuration == host
+        def submit_command(self, script, seconds):
+            sent.append(script)
+            return "command-project-current"
+        def inspect_command(self, identifier):
+            return None
+    submitted = simple_forward.advance(
+        gateway, request["request_id"], host_factory=FakeHost)
+    assert submitted["command_id"] == "command-project-current"
+    assert len(sent) == 1
+    assert "zog.image_build.remote_operations" in sent[0]
+    assert simple_forward.advance(
+        gateway, request["request_id"], host_factory=FakeHost)["phase"] == "submitted"
+    assert len(sent) == 1
+
+
+def test_new_project_dispatch_lost_ack_does_not_send_twice(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+    from test_gateway_simple_forward import approved, admit
+    from zog.host_deploy.gateway import image_build_dispatch, simple_forward
+    from zog.host_deploy.gateway.ledger import load_dispatch
+
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    gateway = tmp_path / "gateway"
+    request = approved()
+    admit(gateway, request)
+    host = target()
+    monkeypatch.setattr(image_build_dispatch, "owned_workspace",
+                        lambda directory, workspace: "owned")
+    monkeypatch.setattr(image_build_dispatch, "locked_workspace",
+                        lambda directory: nullcontext(directory))
+    monkeypatch.setattr(image_build_dispatch, "configuration",
+                        lambda directory: ({}, host))
+    monkeypatch.setattr(image_build_dispatch, "_load_lane_locked",
+                        lambda directory, lane: (record, spec))
+    simple_forward.advance(gateway, request["request_id"])
+    sent = []
+    class Lost:
+        def __init__(self, config):
+            assert config == host
+        def submit_command(self, script, seconds):
+            sent.append(script)
+            raise TimeoutError("lost SSM command acknowledgement")
+    with pytest.raises(TimeoutError, match="lost SSM"):
+        simple_forward.advance(gateway, request["request_id"], host_factory=Lost)
+    assert len(sent) == 1
+    assert load_dispatch(gateway, request["request_id"])["phase"] == "submission_uncertain"
+    assert simple_forward.advance(
+        gateway, request["request_id"], host_factory=Lost)["phase"] == "submission_uncertain"
+    assert len(sent) == 1
