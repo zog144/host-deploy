@@ -75,31 +75,30 @@ def validate_python_executable(value):
 
 def validate(spec):
     common = {
-        "schema",
-        "lane",
-        "mode",
-        "source_repository",
-        "source_revision",
-        "provenance_host_id",
-        "provenance_project_id",
-        "project_root",
-        "resource_policy",
-        "controller",
+        "schema", "lane", "mode", "project_root",
+        "resource_policy", "controller",
+    }
+    # Legacy files retain their exact on-disk shape. A schema-5 lane's
+    # operational identity is its Project and controller: source and pin
+    # metadata are optional historical observations, never authority.
+    legacy_source = {
+        "source_repository", "source_revision",
+        "provenance_host_id", "provenance_project_id",
+    }
+    source_metadata = legacy_source | {
+        "monthly_pin_repository_path", "monthly_pin_identity",
     }
     schema = spec.get("schema") if isinstance(spec, dict) else None
     if schema == LEGACY_SCHEMA:
-        required = common | {"pin_identity"}
+        required = common | legacy_source | {"pin_identity"}
     elif schema == MONTHLY_PIN_SCHEMA:
-        required = common | {
-            "monthly_pin_repository_path",
-            "monthly_pin_identity",
+        required = common | legacy_source | {
+            "monthly_pin_repository_path", "monthly_pin_identity",
         }
     elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
-        required = common | {
-            "monthly_pin_repository_path",
-            "monthly_pin_identity",
-            "observed_state_dir",
-        }
+        required = common | {"observed_state_dir"}
+        if schema != INHERITED_SCHEMA:
+            required |= source_metadata
         if schema in {SCHEMA, INHERITED_SCHEMA}:
             required.add("python_executable")
         # Schema-5 may bind a *verified pre-existing* Project. Historical
@@ -108,23 +107,27 @@ def validate(spec):
             required.add("project_selection")
     else:
         raise ValueError("unsupported image-build lane specification")
-    if set(spec) != required:
+    if (not isinstance(spec, dict)
+            or (set(spec) != required if schema != INHERITED_SCHEMA
+                else not required <= set(spec)
+                or bool(set(spec) - required - source_metadata))):
         raise ValueError("unsupported image-build lane specification")
     lane = spec["lane"]
     if not isinstance(lane, str) or not _NAME.fullmatch(lane):
         raise ValueError("invalid image-build lane name")
     if spec["mode"] not in {"managed", "reservation"}:
         raise ValueError("image-build lane mode must be managed or reservation")
-    if (
+    if "source_repository" in spec and (
         not isinstance(spec["source_repository"], str)
         or not spec["source_repository"]
         or len(spec["source_repository"]) > 512
     ):
         raise ValueError("invalid lane source repository")
-    if not isinstance(spec["source_revision"], str) or not _REVISION.fullmatch(
-        spec["source_revision"]
+    if "source_revision" in spec and (
+        not isinstance(spec["source_revision"], str)
+        or not _REVISION.fullmatch(spec["source_revision"])
     ):
-        raise ValueError("lane source revision must be an immutable commit identity")
+        raise ValueError("invalid historical source revision")
     if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         _observed_state_path(spec["observed_state_dir"], spec["project_root"])
         if spec["observed_state_dir"] is not None and spec["mode"] != "managed":
@@ -139,15 +142,15 @@ def validate(spec):
         ):
             raise ValueError("lane pin_identity must be an exact SHA-256")
     else:
-        _monthly_pin_path(spec["monthly_pin_repository_path"])
-        monthly_pin_identity = spec["monthly_pin_identity"]
-        if (
-            not isinstance(monthly_pin_identity, str)
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", monthly_pin_identity)
-        ):
-            raise ValueError("lane monthly_pin_identity must be the exact monthly pin SHA-256")
+        if "monthly_pin_repository_path" in spec:
+            _monthly_pin_path(spec["monthly_pin_repository_path"])
+        if "monthly_pin_identity" in spec:
+            monthly_pin_identity = spec["monthly_pin_identity"]
+            if (not isinstance(monthly_pin_identity, str)
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", monthly_pin_identity)):
+                raise ValueError("invalid historical monthly pin identity")
     for key in ("provenance_host_id", "provenance_project_id"):
-        if (
+        if key in spec and (
             not isinstance(spec[key], str)
             or not spec[key]
             or len(spec[key]) > 512
@@ -225,12 +228,12 @@ def specification(
     lane,
     *,
     mode="managed",
-    source_repository,
-    source_revision,
-    monthly_pin_repository_path,
-    monthly_pin_identity,
-    provenance_host_id,
-    provenance_project_id,
+    source_repository=None,
+    source_revision=None,
+    monthly_pin_repository_path=None,
+    monthly_pin_identity=None,
+    provenance_host_id=None,
+    provenance_project_id=None,
     memory_maximum_bytes,
     thread_count_maximum,
     cpu_weight,
@@ -258,17 +261,19 @@ def specification(
             **({"python_executable": python_executable} if python_executable is not None else {}),
             "lane": lane,
             "mode": mode,
-            "source_repository": source_repository,
-            "source_revision": source_revision,
-            "monthly_pin_repository_path": monthly_pin_repository_path,
-            "monthly_pin_identity": monthly_pin_identity,
+            **({"source_repository": source_repository} if source_repository is not None else {}),
+            **({"source_revision": source_revision} if source_revision is not None else {}),
+            **({"monthly_pin_repository_path": monthly_pin_repository_path}
+               if monthly_pin_repository_path is not None else {}),
+            **({"monthly_pin_identity": monthly_pin_identity}
+               if monthly_pin_identity is not None else {}),
             "observed_state_dir": (
                 str(Path(observed_state_dir))
                 if observed_state_dir is not None
                 else None
             ),
-            "provenance_host_id": provenance_host_id,
-            "provenance_project_id": provenance_project_id,
+            **({"provenance_host_id": provenance_host_id} if provenance_host_id is not None else {}),
+            **({"provenance_project_id": provenance_project_id} if provenance_project_id is not None else {}),
             "project_root": str(project_root),
             "resource_policy": {
                 "memory_maximum_bytes": memory_maximum_bytes,
@@ -330,9 +335,14 @@ def prepare(directory, spec):
         existing_record = None
         if path.exists():
             existing_record = json.loads(path.read_text())
+            original = validate(existing_record.get("specification"))
             if (existing_record.get("schema") not in _RECORD_SCHEMAS
-                    or existing_record.get("specification") != spec):
-                raise ValueError("existing image-build lane is bound to different inputs")
+                    or original["lane"] != spec["lane"]
+                    or original["project_root"] != spec["project_root"]
+                    or original["controller"] != spec["controller"]):
+                raise ValueError("existing lane selects a different Project or controller")
+            # Do not rewrite previous specifications or build history merely
+            # because the selected checkout/pin has changed.
         verified = None
         if spec.get("project_selection") == "existing":
             from . import existing_project_runtime
@@ -781,7 +791,8 @@ def _activate_existing_project(root, path, record, spec, host_config):
         "lane": spec["lane"],
         "specification_sha256": specification_sha256(spec),
         "project_root": spec["project_root"],
-        "source_revision": spec["source_revision"],
+        **({"source_revision": spec["source_revision"]}
+           if "source_revision" in spec else {}),
     }
     if intent_path.exists() or intent_path.is_symlink():
         if intent_path.is_symlink() or json.loads(intent_path.read_text()) != expected:
@@ -828,9 +839,9 @@ def activate(directory, lane, *, expected_specification_sha256=None):
         if spec["schema"] != INHERITED_SCHEMA:
             raise RuntimeError("historical account-selecting lane must be migrated before activation")
         if spec.get("project_selection") == "existing":
-            if (expected_specification_sha256 is not None and
-                    specification_sha256(spec) != expected_specification_sha256):
-                raise RuntimeError("existing Project specification digest differs")
+            # Prior specification digests included revision/pin fields, which
+            # are no longer lane authorization. Controller readback is the
+            # activation decision; never rewrite the historic specification.
             return _activate_existing_project(root, path, record, spec, host_config)
         if "fonts_lane_profile" in record:
             from . import fonts_lane_profile
