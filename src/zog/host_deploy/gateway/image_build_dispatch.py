@@ -66,6 +66,19 @@ def _remote_request(
 ):
     operation = gateway_request["operation"]
     parameters = gateway_request["parameters"]
+    if direct_forward:
+        # The fixed task is selected by the gateway, not by a saved source pin.
+        from .github_dispatch import FIRST_FONTS_TASK
+        from .project_current import _template
+        if (operation != "build.submit"
+                or parameters != {
+                    "lane": "gateway-first-fonts-runtime",
+                    "task": FIRST_FONTS_TASK,
+                }
+                or task_catalogue is not None
+                or task_catalogue_identity is not None):
+            raise RuntimeError("operation is not supported by direct SSM forwarding")
+        return _template(gateway_request["request_id"]), None
     source = {
         "repository": lane_spec["source_repository"],
         "revision": lane_spec["source_revision"],
@@ -79,33 +92,6 @@ def _remote_request(
         raise RuntimeError(
             "external observed state permits only build.status"
         )
-    if operation == "build.submit" and direct_forward:
-        # A single supported mapping. The configured image-build Project owns
-        # its toolchain and recipe inputs; the GitHub actor supplies neither.
-        from .github_dispatch import FIRST_FONTS_SOURCE, FIRST_FONTS_TASK
-        from .task_catalogue import REVIEWED_IMAGE_TASKS
-        if (parameters.get("task") != FIRST_FONTS_TASK
-                or set(parameters) != {"lane", "task"}
-                or parameters["lane"] != "gateway-first-fonts-runtime"
-                or gateway_request.get("source") != FIRST_FONTS_SOURCE
-                or source["repository"] != FIRST_FONTS_SOURCE["repository"]
-                or source["revision"] not in (
-                    image_build_lanes.FIRST_FONTS_INHERITED_PRODUCER_REVISION,
-                    image_build_lanes.FIRST_FONTS_PROJECT_DEFAULT_PRODUCER_REVISION)
-                or task_catalogue is not None
-                or task_catalogue_identity is not None):
-            raise RuntimeError("operation is not supported by direct SSM forwarding")
-        return ({
-            "schema": REMOTE_SCHEMA,
-            "operation_id": gateway_request["request_id"],
-            "operation": "pipeline.submit",
-            "source": source,
-            "arguments": {
-                "mode": "image",
-                "targets": list(REVIEWED_IMAGE_TASKS[FIRST_FONTS_TASK]["targets"]),
-            },
-        }, None)
-
     if operation == "build.submit":
         from .task_catalogue import select
         if task_catalogue is None or task_catalogue_identity is None:
