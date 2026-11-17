@@ -52,6 +52,9 @@ def _binding(record):
     }:
         raise RuntimeError("gateway dispatch is not prepared")
     binding = record.get("binding")
+    if isinstance(binding, dict) and binding.get("schema") == 4:
+        from .project_current import validate as validate_project_binding
+        return validate_project_binding(binding)
     if not isinstance(binding, dict) or binding.get("kind") != REMOTE_SCHEMA:
         raise RuntimeError("gateway dispatch is not an image-build remote operation")
     required = {
@@ -516,6 +519,9 @@ print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
 def remote_script(binding):
     """Return a server-generated shell command for one frozen binding."""
     binding = _binding({"phase": "prepared", "binding": binding})
+    if binding.get("schema") == 4:
+        from .project_current import remote_script as current_script
+        return current_script(binding)
     request_bytes = _canonical(binding["remote_request"])
     payload = base64.b64encode(request_bytes).decode("ascii")
     wrapper = _WRAPPER
