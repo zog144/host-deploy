@@ -111,6 +111,19 @@ def _prepare_state_parent(parent):
     safe_path(parent)
 
 
+def role_directory(value):
+    """Fresh /state identities store controller intent in a sibling tree.
+
+    This is an installer-selected local path, not a caller-supplied escape
+    hatch. Unmigrated identities retain their historical runtime selection.
+    """
+    identity = Path(value["identity_directory"])
+    if (identity.is_relative_to("/state")
+            and value.get("identity_mode", "legacy-bootstrap") == "legacy-bootstrap"):
+        return str(identity.parent / "roles")
+    return None
+
+
 def state_directories(value):
     try:u=pwd.getpwnam('host-discover')
     except KeyError:
@@ -118,8 +131,19 @@ def state_directories(value):
     try:g=grp.getgrnam('archive-consumers')
     except KeyError:
         run(['groupadd','--system','archive-consumers']);g=grp.getgrnam('archive-consumers')
-    for name,mode,gid in [(value['identity_directory'],0o700,u.pw_gid),
-                          (value['credential_directory'],0o750,g.gr_gid)]:
+    roles = role_directory(value)
+    if roles:
+        directory = Path(roles)
+        credentials = Path(value["credential_directory"])
+        identity = Path(value["identity_directory"])
+        if (directory == credentials or directory in credentials.parents
+                or credentials in directory.parents or directory == identity):
+            raise ValueError("Role and credential state directories must not overlap")
+    selected = [(value['identity_directory'],0o700,u.pw_gid),
+                (value['credential_directory'],0o750,g.gr_gid)]
+    if roles:
+        selected.append((roles, 0o700, u.pw_gid))
+    for name,mode,gid in selected:
         p=Path(name)
         # Only root-owned, non-writable, nonsymlink ancestors may be created.
         # Create the identity directory before the host-discover fingerprint
@@ -250,9 +274,13 @@ def _check_staged_versions(release, expected):
 def service_unit(source, venv, value):
     """Bind systemd write access to the selected state directories."""
     unit = source.replace('/opt/host-discover/venv', str(venv))
+    selected = [value['identity_directory'], value['credential_directory']]
+    roles = role_directory(value)
+    if roles:
+        selected.append(roles)
     write_paths = " ".join(
         path.replace("\\", "\\x5c").replace(" ", "\\x20")
-        for path in (value['identity_directory'], value['credential_directory']))
+        for path in selected)
     updated, count = re.subn(r'(?m)^ReadWritePaths=.*$',
                              lambda _: 'ReadWritePaths=' + write_paths, unit)
     if count > 1:
