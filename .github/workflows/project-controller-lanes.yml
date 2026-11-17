@@ -38,4 +38,5 @@ jobs:
             tests/test_gateway_simple_forward.py tests/test_gateway_first_fonts_issue_event.py \
             tests/test_gateway_issue_fifo_first_fonts.py
       - if: always()
-        run: echo 'Source-only fake producer: no real Fonts compilation or gateway activation' >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          echo 'Source-only fake producer: no real Fonts compilation or gateway activation' >> "$GITHUB_STEP_SUMMARY"
