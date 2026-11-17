@@ -39,7 +39,7 @@ jobs:
       - name: Verify independent candidate file inventory and installer source
         run: |
           set -eu
-          python scripts/beacon_candidate_selection.py --source "$RUNNER_TEMP/beacon-candidate"
+          python scripts/beacon_candidate_selection.py --source "$RUNNER_TEMP/beacon-candidate" --verify src/zog/host_deploy/beacon_sources.json
           HOST_DEPLOY_CANDIDATE_SOURCE_DIRECTORY="$RUNNER_TEMP/beacon-candidate" python -m pytest -q \
             tests/test_public_publisher_selection.py tests/test_beacon_candidate_source.py \
             tests/test_beacon_payload.py tests/test_beacon_activation.py
