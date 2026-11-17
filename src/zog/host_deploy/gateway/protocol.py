@@ -241,7 +241,11 @@ def validate_request(value):
         "origin",
         "parameters",
     }
-    if operation in {"build.submit", "toolchain.submit"}:
+    if operation == "toolchain.submit":
+        expected.add("source")
+    # An older build request may retain the original source field for audit,
+    # but new GitHub Fonts requests carry no compiler revision.
+    if operation == "build.submit" and "source" in value:
         expected.add("source")
     _exact(value, expected, "request")
     if value["schema"] != SCHEMA or type(value["schema"]) is not int:
@@ -250,7 +254,8 @@ def validate_request(value):
     _hex_identity(value["workspace_id"], "workspace_id")
     _origin(value["origin"])
     _parameters(operation, value["parameters"])
-    if operation in {"build.submit", "toolchain.submit"}:
+    if operation == "toolchain.submit" or (
+            operation == "build.submit" and "source" in value):
         _source(value["source"])
     detached = deepcopy(value)
     if len(canonical_bytes(detached)) > MAXIMUM_REQUEST_BYTES:
