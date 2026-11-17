@@ -127,7 +127,7 @@ def validate(spec):
         not isinstance(spec["source_revision"], str)
         or not _REVISION.fullmatch(spec["source_revision"])
     ):
-        raise ValueError("invalid historical source revision")
+        raise ValueError("historical source revision must be an immutable commit identity")
     if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         _observed_state_path(spec["observed_state_dir"], spec["project_root"])
         if spec["observed_state_dir"] is not None and spec["mode"] != "managed":
