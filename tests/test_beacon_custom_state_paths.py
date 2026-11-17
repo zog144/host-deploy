@@ -62,7 +62,7 @@ def test_service_write_allowlist_tracks_selected_identity_and_credentials():
               "ReadWritePaths=/var/lib/host-discover/identity "
               "/var/lib/host-discover/credentials\n")
     unit = beacon.service_unit(source, "/opt/host-discover/releases/test/venv", chosen)
-    assert "ReadWritePaths=/state/host-discover/identity /state/host-discover/credentials\n" in unit
+    assert "ReadWritePaths=/state/host-discover/identity /state/host-discover/credentials /state/host-discover/roles\n" in unit
     assert "/var/lib/host-discover/identity" not in unit
     assert "/var/lib/host-discover/credentials" not in unit
 
@@ -75,7 +75,7 @@ def test_service_write_allowlist_escapes_spaces_in_selected_paths():
               "ReadWritePaths=/var/lib/host-discover/identity "
               "/var/lib/host-discover/credentials\n")
     unit = beacon.service_unit(source, "/opt/host-discover/releases/test/venv", chosen)
-    assert "ReadWritePaths=/state/host\\x20discover/identity /state/host\\x20discover/credentials\n" in unit
+    assert "ReadWritePaths=/state/host\\x20discover/identity /state/host\\x20discover/credentials /state/host\\x20discover/roles\n" in unit
 
 
 @pytest.mark.parametrize("credential", (
@@ -140,6 +140,10 @@ def test_installer_creates_unmounted_state_and_identity_before_key_bootstrap(nat
     assert identity.is_dir()
     assert (root / "state/host-discover").is_dir()
     assert credentials.is_dir()
+    roles = root / "state/host-discover/roles"
+    assert roles.is_dir()
+    assert roles.stat().st_uid == uid and roles.stat().st_gid == gid
+    assert roles.stat().st_mode & 0o777 == 0o700
     assert identity.stat().st_uid == uid and identity.stat().st_gid == gid
     assert credentials.stat().st_uid == uid and credentials.stat().st_gid == share
     assert identity.stat().st_mode & 0o777 == 0o700
@@ -203,3 +207,55 @@ def test_existing_unbound_identity_at_custom_path_is_refused(native, monkeypatch
             credential_directory=str(credentials)), root / "release")
     assert secret.read_bytes() == b"orphan-test-key"
     assert not (beacon.BASE / "identity-owner.json").exists()
+
+
+def test_installer_reuse_keeps_pending_identity_bytes_and_existing_role_files(native):
+    root, uid, gid, share = native
+    identity = root / "state/host-discover/identity"
+    credentials = root / "state/host-discover/credentials"
+    selected = beacon.candidate({}, request(
+        identity_directory=str(identity), credential_directory=str(credentials)))
+    beacon.state_directories(selected)
+    key = identity / "identity.pem"
+    marker = identity / "fresh-state-bootstrap.json"
+    role = identity.parent / "roles"
+    for path, content in ((key,b"retained-ed25519"),(marker,b"retained-origin"),
+                          (role/"mirror-role.lock",b""),
+                          (role/"mirror-role.json",b"retained-role")):
+        path.write_bytes(content)
+        os.chown(path, uid, gid)
+        path.chmod(0o600)
+    original = {(path.parent.name, path.name):
+                (path.stat().st_ino, path.read_bytes())
+                for path in (key,marker,role/"mirror-role.lock",role/"mirror-role.json")}
+    beacon.state_directories(selected)
+    assert {(path.parent.name, path.name):
+            (path.stat().st_ino, path.read_bytes())
+            for path in (key,marker,role/"mirror-role.lock",role/"mirror-role.json")} == original
+    assert not (identity/"mirror-role.json").exists()
+
+
+def test_role_directory_unsafe_symlink_and_wrong_permissions_fail(native):
+    root, uid, gid, share = native
+    identity = root / "state/host-discover/identity"
+    selected = beacon.candidate({}, request(
+        identity_directory=str(identity),
+        credential_directory=str(root/"credentials")))
+    beacon.state_directories(selected)
+    roles = identity.parent / "roles"
+    roles.chmod(0o777)
+    with pytest.raises(ValueError,match="Unsafe existing state directory"):
+        beacon.state_directories(selected)
+    roles.chmod(0o700)
+    roles.rmdir()
+    roles.symlink_to(root/"outside")
+    with pytest.raises(ValueError,match="Symlink state directory"):
+        beacon.state_directories(selected)
+
+
+def test_identity_credentials_must_not_overlap_derived_roles(native):
+    root, uid, gid, share = native
+    with pytest.raises(ValueError,match="Role and credential state directories"):
+        beacon.state_directories(beacon.candidate({}, request(
+            identity_directory=str(root/"state/host-discover/identity"),
+            credential_directory=str(root/"state/host-discover/roles"))))

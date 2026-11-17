@@ -23,9 +23,9 @@ change the released public publisher baseline or authorize deployment by itself.
 
 | Component | Exact Git commit | Version | Selected files |
 |---|---|---:|---:|
-| host-discover | `10db0fbb2126cb868af7c5e2f79c2bab3c17ea0e` | 0.4.14 | 35 |
+| host-discover | `a6f3f402cee87eb7079d94c7eb36474930d45444` | 0.4.14 | 36 |
 | host-identify | `4a176373ff4cb47a66a8ab1b5fd3d6ff01ff2a3b` | 0.3.5 | 17 |
-| host-install | `c8ff1722f9e0c6df755e637047a5be3baa90a82b` | 0.14.9 | 76 |
+| host-install | `71643eef03739749c7c272f7c6be23d7063a51d8` | 0.14.9 | 53 |
 
 Host-discover declares `host-identify==0.3.5` and
 `host-install==0.14.9`, matching the selected candidate metadata.
@@ -83,3 +83,15 @@ systemd activation, or protected socket test was performed by the source CI.
 The Work connection chat must still check the native installer, service,
 filesystem ownership and actual enrollment with the candidate installed
 before declaring native acceptance.
+
+## Pending review and deployment owner boundary — 2026-11-17
+
+This is a **candidate-only exact-byte selection**, not production approval.
+The host-discover PR #10 and host-install PR #45 source heads must be independently reviewed; GitHub source CI is not a signed owner review. The selected source hashes are fixed above so the installer can be reviewed and tested together. The public release manifest and live Host are unchanged.
+
+The fresh identity key and pending enrollment must be retained byte-for-byte.
+The revised host-discover controller writes `mirror-role.json` and `mirror-role.lock` under the sibling `/state/host-discover/roles` directory. The installer now prepares that exact derived directory using the installed service account, `0700`, with safe root-owned parent traversal, validates any existing role state, and adds its path to systemd `ReadWritePaths`. If older role entries exist in the identity directory, the reviewed consumer relocates them under its own per-role migration lock without regenerating keys or clearing an enrollment. A missing or unsafe role directory blocks startup before role operations.
+
+The protected admission source resolves the local NSS `host-discover` UID/GID and verifies the kernel `SO_PEERCRED` of the client and the root-owned socket's group/mode. The selected package is **not** evidence of a live socket. Root-side socket unit deployment/startup, exact service account identity, and successful protected request/reply must be tested by Work after pinned installation. The separate retained-identity root migration UID policy is not altered by PR #45.
+
+Native Work must first snapshot key/binding/marker inode and public fingerprint and record existing pending enrollment; install the exact reviewed candidate **without rerunning the fresh bootstrap**, then exercise restart, same-fingerprint enrollment resume, protected socket activation and SO_PEERCRED exchange, and reconnect/restart regressions. No production repin or actual Host mutation is authorized by this branch.

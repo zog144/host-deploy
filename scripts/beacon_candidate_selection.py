@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate or verify the three explicit, already-reviewed beacon source pins.
+"""Generate or verify the three explicit, review-pending beacon candidate source pins.
 
 The public publisher/index remain a historical release selection. This tool
 only covers the candidate beacon-source tree, using exact clean Git checkouts
@@ -15,9 +15,9 @@ import subprocess
 import tomllib
 
 COMMITS = {
-    "host-discover": "10db0fbb2126cb868af7c5e2f79c2bab3c17ea0e",
+    "host-discover": "a6f3f402cee87eb7079d94c7eb36474930d45444",
     "host-identify": "4a176373ff4cb47a66a8ab1b5fd3d6ff01ff2a3b",
-    "host-install": "c8ff1722f9e0c6df755e637047a5be3baa90a82b",
+    "host-install": "71643eef03739749c7c272f7c6be23d7063a51d8",
 }
 VERSIONS = {
     "host-discover": "0.4.14",
@@ -32,6 +32,7 @@ REQUIRED = {
         "src/zog/host_discover/__init__.py",
         "src/zog/host_discover/daemon.py",
         "src/zog/host_discover/fresh_state_identity.py",
+        "src/zog/host_discover/role_state.py",
         "src/zog/host_discover/bootstrap.py",
         "deployment/host-discover.service",
         "src/zog/host_discover/systemd/host-discover.service",
@@ -44,6 +45,7 @@ REQUIRED = {
     "host-install": {
         "src/zog/host_install/__init__.py",
         "src/zog/host_install/beacon_profile.py",
+        "src/zog/host_install/state_admission.py",
         "src/zog/host_install/identity_worker.py",
         "src/zog/host_install/state_provision.py",
         "src/zog/host_install/systemd/host-install-identity.service",
