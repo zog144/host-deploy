@@ -39,8 +39,8 @@ def test_candidate_descriptor_matches_all_exact_clean_git_checkouts():
     validate_candidate(descriptor)
     assert actual == descriptor
     assert len(actual["packages"]["host-identify"]["files"]) == 17
-    assert len(actual["packages"]["host-discover"]["files"]) == 35
-    assert len(actual["packages"]["host-install"]["files"]) == 76
+    assert len(actual["packages"]["host-discover"]["files"]) == 36
+    assert len(actual["packages"]["host-install"]["files"]) == 53
 
 
 def test_installer_package_uses_only_explicit_candidate_source_directory(monkeypatch):
