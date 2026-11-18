@@ -193,11 +193,15 @@ if (not expected_init.is_file() or not expected_module.is_file()
 # allow their package initializer to choose the image-build implementation.
 installed = importlib.machinery.PathFinder.find_spec("zog", sys.path)
 fallback = list(installed.submodule_search_locations or ()) if installed else []
-locations = [
-    source / "src/zog",
-    project / "companions/build-record/src/zog",
-    project / "companions/box-control/box-control/src/zog",
+# Restore the selected Project's source-root import semantics for other
+# Project-local top-level modules too; -I otherwise ignores PYTHONPATH.
+source_roots = [
+    source / "src",
+    project / "companions/build-record/src",
+    project / "companions/box-control/box-control/src",
 ]
+sys.path[:0] = [str(path) for path in source_roots if path.is_dir()]
+locations = [path / "zog" for path in source_roots]
 namespace = types.ModuleType("zog")
 namespace.__package__ = "zog"
 namespace.__path__ = [str(p) for p in locations if p.is_dir()] + fallback
