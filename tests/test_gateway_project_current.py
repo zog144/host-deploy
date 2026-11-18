@@ -31,13 +31,15 @@ def project(tmp_path):
     (package / "pins.txt").write_text("first-pin")
     module.write_text(
         "import json,sys\nfrom pathlib import Path\n"
-        "request=json.loads(Path(sys.argv[-1]).read_text())\n"
-        "pin=(Path(__file__).resolve().parents[3]/'project/package/pins.txt').read_text()\n"
-        "print(json.dumps({'schema':'image-build-remote-result-v1',"
+        "def main():\n"
+        "    request=json.loads(Path(sys.argv[-1]).read_text())\n"
+        "    pin=(Path(__file__).resolve().parents[3]/'project/package/pins.txt').read_text()\n"
+        "    print(json.dumps({'schema':'image-build-remote-result-v1',"
         "'operation_id':request['operation_id'],"
         "'operation_type':request['operation'],"
         "'source_revision':request['source']['revision'],"
         "'status':'pending','pipeline_id':'a'*32,'recipe_identity':pin}))\n"
+        "if __name__ == '__main__': main()\n"
     )
     git(source, "init", "-q")
     git(source, "config", "user.email", "test@example.invalid")
