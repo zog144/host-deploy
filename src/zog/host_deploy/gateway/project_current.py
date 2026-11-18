@@ -166,21 +166,78 @@ try:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-    env = dict(os.environ)
-    env["PYTHONPATH"] = ":".join((
-        str(source / "src"),
-        str(project / "companions/build-record/src"),
-        str(project / "companions/box-control/box-control/src"),
-    ))
+    # A site-installed regular 'zog' can eclipse the selected Project's
+    # implicit 'src/zog' namespace even if PYTHONPATH starts with source/src.
+    # Run an isolated child with an explicit namespace and verify the module's
+    # actual file before invoking the producer. Keep other installed zog
+    # components available after the selected Project and its companions.
+    bootstrap = r"""
+import importlib
+import importlib.machinery
+import sys
+import types
+from pathlib import Path
+
+source = Path(sys.argv[1]).resolve(strict=True)
+project = Path(sys.argv[2]).resolve(strict=True)
+expected_root = (source / "src").resolve(strict=True)
+expected_package = expected_root / "zog/image_build"
+expected_init = expected_package / "__init__.py"
+expected_module = expected_package / "remote_operations.py"
+if (not expected_init.is_file() or not expected_module.is_file()
+        or not expected_init.resolve(strict=True).is_relative_to(expected_root)
+        or not expected_module.resolve(strict=True).is_relative_to(expected_root)):
+    raise SystemExit("selected Project image-build module is missing or redirected")
+
+# Preserve access to globally installed *other* zog components, but never
+# allow their package initializer to choose the image-build implementation.
+installed = importlib.machinery.PathFinder.find_spec("zog", sys.path)
+fallback = list(installed.submodule_search_locations or ()) if installed else []
+locations = [
+    source / "src/zog",
+    project / "companions/build-record/src/zog",
+    project / "companions/box-control/box-control/src/zog",
+]
+namespace = types.ModuleType("zog")
+namespace.__package__ = "zog"
+namespace.__path__ = [str(p) for p in locations if p.is_dir()] + fallback
+namespace.__spec__ = importlib.machinery.ModuleSpec(
+    "zog", loader=None, is_package=True,
+)
+sys.modules["zog"] = namespace
+
+# Check the resolution before executing any image-build code, not merely
+# after an incorrect globally installed module might have run.
+selected = importlib.machinery.PathFinder.find_spec(
+    "zog.image_build", namespace.__path__,
+)
+if (selected is None or selected.origin is None
+        or Path(selected.origin).resolve(strict=True) !=
+        expected_init.resolve(strict=True)):
+    raise SystemExit("image-build package does not resolve to selected Project")
+selected_module = importlib.machinery.PathFinder.find_spec(
+    "zog.image_build.remote_operations", [str(expected_package)],
+)
+if (selected_module is None or selected_module.origin is None
+        or Path(selected_module.origin).resolve(strict=True) !=
+        expected_module.resolve(strict=True)):
+    raise SystemExit("image-build executable does not resolve to selected Project")
+module = importlib.import_module("zog.image_build.remote_operations")
+if (Path(module.__file__).resolve(strict=True) !=
+        expected_module.resolve(strict=True)):
+    raise SystemExit("imported image-build executable differs from selected Project")
+sys.argv = [str(expected_module), *sys.argv[3:]]
+module.main()
+"""
     result = subprocess.run(
-        [python, "-m", "zog.image_build.remote_operations",
+        [python, "-I", "-c", bootstrap, str(source), str(project),
          "--repository-root", str(source),
          "--source-repository", "zog144/image-build",
          "--source-revision", revision,
          "--package-dir", str(source / "project/package"),
          "--state-dir", str(state),
          "--controller-config", str(controller), str(request_path)],
-        env=env, cwd=str(source), capture_output=True, text=True, timeout=240,
+        cwd=str(source), capture_output=True, text=True, timeout=240,
         check=False,
     )
     if result.returncode != 0:
