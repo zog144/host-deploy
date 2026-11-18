@@ -310,7 +310,18 @@ def project_with_installed_zog_shadow(tmp_path):
         text=True,
     ).strip()
     assert Path(discovered).resolve() == (installed_zog / "__init__.py").resolve()
-    assert not sentinel.exists()
+    # Negative control: the old PYTHONPATH + "-m" invocation really does
+    # import the globally installed regular package, not this Project's
+    # implicit src/zog namespace. Remove the sentinel before the new test.
+    legacy = subprocess.run(
+        [str(interpreter), "-m", "zog.image_build.remote_operations"],
+        cwd=source, env={**os.environ, "PYTHONPATH": str(source / "src")},
+        text=True, capture_output=True, timeout=15,
+    )
+    assert legacy.returncode != 0
+    assert "installed zog shadows the selected Project" in legacy.stderr
+    assert sentinel.read_text() == "wrong-installed-zog"
+    sentinel.unlink()
     return root, source, controller, interpreter, sentinel
 
 
