@@ -1,5 +1,6 @@
 """Selected-Project/controller routing; run a synthetic producer, never a build."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -269,3 +270,86 @@ def test_new_project_dispatch_lost_ack_does_not_send_twice(tmp_path, monkeypatch
     assert simple_forward.advance(
         gateway, request["request_id"], host_factory=Lost)["phase"] == "submission_uncertain"
     assert len(sent) == 1
+
+
+@pytest.fixture
+def project_with_installed_zog_shadow(tmp_path):
+    """Actual site-packages regular zog would win over a PYTHONPATH namespace."""
+    root, source, controller = project(tmp_path)
+    environment = tmp_path / "isolated-venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+        check=True, capture_output=True, text=True,
+    )
+    interpreter = environment / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    site = subprocess.check_output(
+        [str(interpreter), "-I", "-c",
+         "import site; print(site.getsitepackages()[0])"],
+        text=True,
+    ).strip()
+    installed_zog = Path(site) / "zog"
+    installed_image_build = installed_zog / "image_build"
+    installed_image_build.mkdir(parents=True)
+    sentinel = tmp_path / "installed-zog-was-imported"
+    (installed_zog / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('wrong-installed-zog')\n"
+        "raise RuntimeError('installed zog shadows the selected Project')\n"
+    )
+    (installed_image_build / "__init__.py").write_text("")
+    (installed_image_build / "remote_operations.py").write_text(
+        "raise RuntimeError('wrong installed image-build executable')\n"
+    )
+    discovered = subprocess.check_output(
+        [str(interpreter), "-I", "-c",
+         "import importlib.util; print(importlib.util.find_spec('zog').origin)"],
+        text=True,
+    ).strip()
+    assert Path(discovered).resolve() == (installed_zog / "__init__.py").resolve()
+    assert not sentinel.exists()
+    return root, source, controller, interpreter, sentinel
+
+
+def test_project_current_imports_selected_source_even_when_regular_zog_is_installed(
+        project_with_installed_zog_shadow):
+    root, source, controller, interpreter, sentinel = project_with_installed_zog_shadow
+    spec, record = selected(root, controller, historic=True)
+    spec["python_executable"] = str(interpreter)
+    for operation_id, expected_pin in (("7" * 32, "first-pin"),
+                                       ("8" * 32, "updated-pin")):
+        if expected_pin == "updated-pin":
+            (source / "project/package/pins.txt").write_text(expected_pin)
+            git(source, "add", ".")
+            git(source, "commit", "-qm", "selected Project version update")
+        prepared = project_current.binding(
+            intent(operation_id), record, spec, target(),
+        )
+        script = project_current.remote_script(prepared)
+        output = subprocess.run(
+            script, shell=True, text=True, capture_output=True, timeout=30,
+        )
+        assert output.returncode == 0, output.stderr
+        receipt = json.loads(output.stdout.strip().splitlines()[-1])
+        assert receipt["result"]["source_revision"] == git(source, "rev-parse", "HEAD")
+        assert receipt["result"]["recipe_identity"] == expected_pin
+        assert not sentinel.exists(), "the installed zog package was imported"
+
+
+def test_project_current_fails_closed_if_selected_module_missing_despite_installed_zog(
+        project_with_installed_zog_shadow):
+    root, source, controller, interpreter, sentinel = project_with_installed_zog_shadow
+    spec, record = selected(root, controller, historic=False)
+    spec["python_executable"] = str(interpreter)
+    # A global zog package must not silently replace the absent Project module.
+    (source / "src/zog/image_build/remote_operations.py").unlink()
+    script = project_current.remote_script(
+        project_current.binding(intent("9" * 32), record, spec, target()),
+    )
+    output = subprocess.run(
+        script, shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert output.returncode != 0
+    assert "selected Project image-build module is missing" in output.stderr
+    assert not sentinel.exists()
