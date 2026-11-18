@@ -27,7 +27,9 @@ def project(tmp_path):
     module = source / "src/zog/image_build/remote_operations.py"
     module.parent.mkdir(parents=True)
     (module.parent / "__init__.py").write_text("")
-    (module.parent.parent / "__init__.py").write_text("")
+    # The real image-build checkout is a PEP 420 namespace: src/zog has
+    # NO __init__.py. A regular installed zog package can otherwise win.
+    assert not (module.parent.parent / "__init__.py").exists()
     (package / "pins.txt").write_text("first-pin")
     module.write_text(
         "import json,sys\nfrom pathlib import Path\n"
