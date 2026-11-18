@@ -315,7 +315,12 @@ def project_with_installed_zog_shadow(tmp_path):
     # implicit src/zog namespace. Remove the sentinel before the new test.
     legacy = subprocess.run(
         [str(interpreter), "-m", "zog.image_build.remote_operations"],
-        cwd=source, env={**os.environ, "PYTHONPATH": str(source / "src")},
+        cwd=source,
+        # Python's -I flag and ordinary venv startup can expose different
+        # site paths on older interpreters. Include the fixture's *actual*
+        # installed site directory explicitly, after the selected checkout.
+        env={**os.environ, "PYTHONPATH":
+             os.pathsep.join((str(source / "src"), site))},
         text=True, capture_output=True, timeout=15,
     )
     assert legacy.returncode != 0
