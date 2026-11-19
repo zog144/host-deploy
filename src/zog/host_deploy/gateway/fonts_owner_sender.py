@@ -8,8 +8,6 @@ This module does not expose a generic shell relay or create new authorization.
 Do not invoke the owner until the gateway's own dispatch intent is durable.
 Never fall back to Host.submit_command if the protected journal is unavailable.
 """
-import hashlib
-
 from .image_build_execution import _binding
 from .ledger import load_dispatch, load_request
 from .project_current import validate as validate_current
@@ -19,6 +17,39 @@ from .protocol import request_digest
 class ProtectedOwnerUnavailable(RuntimeError):
     pass
 
+
+
+
+def _owner_factory(journal_factory):
+    if journal_factory is not None:
+        return journal_factory
+    try:
+        from zog.root_control.task_c_trusted_host import LocalTaskCJournal
+    except ImportError as error:
+        raise ProtectedOwnerUnavailable(
+            "protected root-control Task C owner is not installed") from error
+    return LocalTaskCJournal
+
+
+def ready(request_id, *, journal_factory=None):
+    """Read-only owner preflight before creating gateway SendCommand intent.
+
+    A missing root-owned owner must leave an already-prepared request intact,
+    rather than converting a purely local installation failure into an
+    uncertain SSM submission. Existing owner intent never permits a retry.
+    """
+    factory = _owner_factory(journal_factory)
+    try:
+        journal = factory()
+    except (OSError, ValueError, RuntimeError) as error:
+        raise ProtectedOwnerUnavailable(
+            "protected root-control Task C owner is unavailable") from error
+    try:
+        if any(item is not None for item in journal.inspect(request_id)):
+            raise ProtectedOwnerUnavailable(
+                "original Fonts operation already claimed by protected owner")
+    finally:
+        journal.close()
 
 def submit_once(gateway_root, request_id, *, binding, configuration,
                 host, script, seconds, journal_factory=None):
@@ -59,13 +90,7 @@ def submit_once(gateway_root, request_id, *, binding, configuration,
     if (script != remote_script(selected)
             or type(seconds) is not int or seconds != 300):
         raise ProtectedOwnerUnavailable("owner script or execution deadline differs from fixed Fonts task")
-    if journal_factory is None:
-        try:
-            from zog.root_control.task_c_trusted_host import LocalTaskCJournal
-        except ImportError as error:
-            raise ProtectedOwnerUnavailable(
-                "protected root-control Task C owner is not installed") from error
-        journal_factory = LocalTaskCJournal
+    journal_factory = _owner_factory(journal_factory)
 
     # The owner has an independent root-owned operation journal. If an intent
     # already exists, its submit_once will reject reuse, including after an
