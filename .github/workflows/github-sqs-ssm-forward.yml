@@ -12,6 +12,8 @@ on:
       - src/zog/host_deploy/gateway/image_build_dispatch.py
       - src/zog/host_deploy/gateway/image_build_execution.py
       - tests/test_gateway_simple_forward.py
+      - tests/test_gateway_fonts_protected_sender.py
+      - src/zog/host_deploy/gateway/fonts_owner_sender.py
       - .github/workflows/github-sqs-ssm-forward.yml
   workflow_dispatch:
 permissions:
@@ -37,7 +39,8 @@ jobs:
           python -m compileall -q src/zog/host_deploy/gateway tests/test_gateway_simple_forward.py
       - name: Original authorized issue and finite SSM send/recover contract
         run: |
-          python -m pytest -q tests/test_gateway_simple_forward.py \
+          python -m pytest -q tests/test_gateway_fonts_protected_sender.py \
+            tests/test_gateway_simple_forward.py \
             tests/test_gateway_first_fonts_issue_event.py \
             tests/test_gateway_protocol.py \
             tests/test_gateway_consumer.py \
