@@ -58,7 +58,7 @@ def _frozen_binding(root, request_id):
     return record, binding
 
 
-def advance(root, request_id, *, host_factory=Host):
+def advance(root, request_id, *, host_factory=Host, owner_factory=None):
     """Perform at most one durable phase; repeated calls never replay SSM."""
     original = _selected_request(root, request_id)
     dispatch = load_dispatch(root, request_id)
@@ -74,14 +74,24 @@ def advance(root, request_id, *, host_factory=Host):
         raise ForwardingDenied("unrecognized forwarding phase")
     configuration = verify_current_target(root, binding)
     if record["phase"] == "prepared":
-        # Render the script entirely from the saved source/lane/request binding,
-        # before writing the single durable intent. Never execute event text.
+        if binding.get("schema") != 4 or binding.get("direct_forward") is not True:
+            raise ForwardingDenied(
+                "protected Fonts owner requires Project-current schema-4 dispatch")
+        from . import fonts_owner_sender as owner
+        # The authorized root-control owner, not this SQS-facing gateway,
+        # provides the only SSM send. An absent protected owner fails while
+        # the original request is still PREPARED (no attempted send).
+        owner.ready(request_id, journal_factory=owner_factory)
         script = remote_script(binding)
         host = host_factory(configuration)
         mark_dispatch_submitting(root, request_id)
         try:
-            command_id = host.submit_command(
-                script, seconds=CONTROL_TIMEOUT_SECONDS)
+            command_id = owner.submit_once(
+                root, request_id, binding=binding,
+                configuration=configuration, host=host,
+                script=script, seconds=CONTROL_TIMEOUT_SECONDS,
+                journal_factory=owner_factory,
+            )
         except BaseException as error:
             mark_dispatch_uncertain(root, request_id, error)
             raise
