@@ -182,6 +182,23 @@ def test_frozen_project_binding_cannot_change_task_or_ssm_target(tmp_path):
         project_current.validate(bad)
 
 
+class _FakeProtectedJournal:
+    """Simulate root-control's exact owner API without root/AWS in source CI."""
+    def inspect(self, operation_id):
+        assert len(operation_id) == 32
+        return (None, None, None)
+
+    def submit_once(self, *, operation_id, request_sha256, script, target,
+                    seconds, sender):
+        assert len(operation_id) == 32
+        assert len(request_sha256) == 64
+        assert target["instance_id"] == sender.instance
+        return sender.submit_command(script, seconds=seconds)
+
+    def close(self):
+        pass
+
+
 def test_gateway_uses_project_controller_only_across_saved_revision_pin_change(
         tmp_path, monkeypatch):
     from contextlib import nullcontext
@@ -224,13 +241,15 @@ def test_gateway_uses_project_controller_only_across_saved_revision_pin_change(
     class FakeHost:
         def __init__(self, configuration):
             assert configuration == host
+            self.instance = configuration["instance_id"]
         def submit_command(self, script, seconds):
             sent.append(script)
             return "command-project-current"
         def inspect_command(self, identifier):
             return None
     submitted = simple_forward.advance(
-        gateway, request["request_id"], host_factory=FakeHost)
+        gateway, request["request_id"], host_factory=FakeHost,
+        owner_factory=_FakeProtectedJournal)
     assert submitted["command_id"] == "command-project-current"
     assert len(sent) == 1
     assert "zog.image_build.remote_operations" in sent[0]
@@ -264,11 +283,14 @@ def test_new_project_dispatch_lost_ack_does_not_send_twice(tmp_path, monkeypatch
     class Lost:
         def __init__(self, config):
             assert config == host
+            self.instance = config["instance_id"]
         def submit_command(self, script, seconds):
             sent.append(script)
             raise TimeoutError("lost SSM command acknowledgement")
     with pytest.raises(TimeoutError, match="lost SSM"):
-        simple_forward.advance(gateway, request["request_id"], host_factory=Lost)
+        simple_forward.advance(
+            gateway, request["request_id"], host_factory=Lost,
+            owner_factory=_FakeProtectedJournal)
     assert len(sent) == 1
     assert load_dispatch(gateway, request["request_id"])["phase"] == "submission_uncertain"
     assert simple_forward.advance(

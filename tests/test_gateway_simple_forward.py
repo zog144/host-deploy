@@ -10,7 +10,7 @@ import pytest
 
 from zog.host_deploy import image_build_lanes
 from zog.host_deploy.gateway import (
-    github_dispatch, simple_forward, image_build_dispatch,
+    github_dispatch, simple_forward, image_build_dispatch, fonts_owner_sender,
     image_build_execution,
 )
 from zog.host_deploy.gateway.consumer import GatewayConsumer
@@ -69,7 +69,7 @@ def admit(root, value):
 
 def direct_binding(value):
     return {
-        "schema": 3, "direct_forward": True,
+        "schema": 4, "direct_forward": True,
         "request_id": value["request_id"],
         "workspace_id": WORKSPACE, "lane": "gateway-first-fonts-runtime",
         "target": TARGET, "source": SOURCE,
@@ -105,6 +105,15 @@ def forwarding(tmp_path, monkeypatch):
                         lambda gateway, selected: TARGET)
     monkeypatch.setattr(simple_forward, "remote_script",
                         lambda selected: "fixed-reviewed-remote-script")
+    # Historical transport unit fixtures fake the protected owner itself.
+    # The dedicated root-control contract tests below exercise its real
+    # authorization checks and journal interface.
+    monkeypatch.setattr(fonts_owner_sender, "ready",
+                        lambda *args, **kwargs: None)
+    monkeypatch.setattr(fonts_owner_sender, "submit_once",
+                        lambda root, operation_id, **kwargs:
+                        kwargs["host"].submit_command(
+                            kwargs["script"], seconds=kwargs["seconds"]))
     class Host:
         def __init__(self, config):
             assert config == TARGET
@@ -408,7 +417,19 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
         def submit_command(self, script, seconds):
             sent.append((script, seconds))
             return "fixed-command-1"
-    result = simple_forward.advance(root, value["request_id"], host_factory=Host)
+    class OwnerJournal:
+        def inspect(self, operation_id):
+            assert operation_id == value["request_id"]
+            return (None, None, None)
+        def submit_once(self, **kwargs):
+            assert kwargs["operation_id"] == value["request_id"]
+            assert kwargs["target"] == TARGET
+            return kwargs["sender"].submit_command(
+                kwargs["script"], seconds=kwargs["seconds"])
+        def close(self):
+            pass
+    result = simple_forward.advance(
+        root, value["request_id"], host_factory=Host, owner_factory=OwnerJournal)
     assert result["phase"] == "submitted"
     assert sent == [(script, simple_forward.CONTROL_TIMEOUT_SECONDS)]
     assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"

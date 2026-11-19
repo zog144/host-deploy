@@ -681,6 +681,15 @@ def submit_prepared(gateway_root, request_id, *, host_factory=Host, at=None):
         raise RuntimeError(
             "dispatch is not safely submit-able; reconcile existing evidence instead"
         )
+    if binding.get("schema") == 4 and binding.get("direct_forward") is True:
+        # The CLI's retained dispatch-submit command must enter the SAME
+        # protected sender as the SQS-facing fixed Fonts forward path.
+        # No second issue, request, SSM sender or legacy graphical bypass.
+        from .simple_forward import advance
+        result = advance(gateway_root, request_id, host_factory=host_factory)
+        if result.get("phase") != "submitted":
+            raise RuntimeError("protected Fonts owner did not submit original operation")
+        return load_request(gateway_root, request_id), load_dispatch(gateway_root, request_id)
     # Legacy one-shot dispatch must never provide an alternative graphical
     # SendCommand route, including after a coherent restored gateway journal.
     # A reviewed graphical task is protected even if a local request attempts
