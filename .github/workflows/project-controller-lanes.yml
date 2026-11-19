@@ -9,6 +9,8 @@ on:
       - src/zog/host_deploy/gateway/project_current.py
       - src/zog/host_deploy/gateway/image_build_dispatch.py
       - tests/test_gateway_project_current.py
+      - tests/test_gateway_fonts_protected_sender.py
+      - src/zog/host_deploy/gateway/fonts_owner_sender.py
       - tests/test_existing_project_lane.py
       - tests/test_image_build_lanes.py
   workflow_dispatch:
@@ -33,7 +35,8 @@ jobs:
           python -m pip install --no-build-isolation --no-deps -e .
       - run: |
           python -m compileall -q src/zog/host_deploy tests/test_gateway_project_current.py
-          python -m pytest -q tests/test_gateway_project_current.py \
+          python -m pytest -q tests/test_gateway_fonts_protected_sender.py \
+            tests/test_gateway_project_current.py \
             tests/test_existing_project_lane.py tests/test_image_build_lanes.py \
             tests/test_gateway_simple_forward.py tests/test_gateway_first_fonts_issue_event.py \
             tests/test_gateway_issue_fifo_first_fonts.py
