@@ -152,7 +152,7 @@ def source_tree_sha256(source):
                 stderr=subprocess.DEVNULL, timeout=30)
         commit = git("rev-parse", "--verify", "HEAD").decode("ascii").strip()
         changed = git("status", "--porcelain=v1", "--untracked-files=all")
-        paths = git("ls-files", "-z").split(b"\\0")
+        paths = git("ls-files", "-z").split(bytes([0]))
     except (OSError, subprocess.SubprocessError, UnicodeError) as error:
         raise RuntimeHold("cannot authenticate exact Git source checkout") from error
     if _GIT.fullmatch(commit) is None or changed:
