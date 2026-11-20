@@ -41,7 +41,10 @@ read-only selection with these required fields.
 - files: named absolute paths/byte sizes/SHA-256 of the installed controller
   executable, root-control/box-control/image-build modules and all three
   installed distribution RECORDs. List any additional dependency/launcher
-  bytes required by the actual selected runtime. Source review must verify
+  bytes required by the actual selected runtime. The independently reviewed
+  installed_tree_sha256 additionally binds **every file, directory and mode**
+  in the entire selected immutable version, catching omitted dependency
+  bytes, additional mutable files or symlinks. Source review must verify
   the complete installed distribution closure, not just the minimum six.
 - rollback: a protected independent copy of the original unit and old
   runtime tree under /opt/zog/compiler-runtime/rollback/<release_id>/,
