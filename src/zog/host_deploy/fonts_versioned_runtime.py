@@ -13,6 +13,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import subprocess
 
 SCHEMA = "zog-first-fonts-versioned-controller-selection-v1"
 CONTRACT = "zog-build-inherited-peer-v2"
@@ -137,6 +138,64 @@ def validate(selection):
     if not REQUIRED_FILES.issubset(seen_names):
         raise RuntimeHold("controller/producer/module RECORD closure is incomplete")
     return selection
+
+
+def source_tree_sha256(source):
+    """Immutable SHA256 inventory of a clean, tracked, regular Git checkout."""
+    source = Path(source)
+    if source.is_symlink() or not source.is_dir():
+        raise RuntimeHold("selected source is not a real directory")
+    try:
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-C", str(source), *args],
+                stderr=subprocess.DEVNULL, timeout=30)
+        commit = git("rev-parse", "--verify", "HEAD").decode("ascii").strip()
+        changed = git("status", "--porcelain=v1", "--untracked-files=all")
+        paths = git("ls-files", "-z").split(b"\\0")
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        raise RuntimeHold("cannot authenticate exact Git source checkout") from error
+    if _GIT.fullmatch(commit) is None or changed:
+        raise RuntimeHold("source Git revision unavailable or checkout is dirty")
+    inventory = []
+    for raw in paths:
+        if not raw:
+            continue
+        try:
+            rel = raw.decode("utf-8")
+        except UnicodeError as error:
+            raise RuntimeHold("non-UTF8 tracked source path") from error
+        if (not rel or rel.startswith("/") or "\0" in rel
+                or any(part in {"", ".", ".."} for part in rel.split("/"))):
+            raise RuntimeHold("unsafe tracked source path")
+        file = source / rel
+        if any(parent.is_symlink() for parent in file.parents if parent != source.parent):
+            raise RuntimeHold("linked tracked source ancestor")
+        info = file.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 512 * 1024 * 1024:
+            raise RuntimeHold("tracked source file is linked or nonregular")
+        raw_bytes = file.read_bytes()
+        if len(raw_bytes) != info.st_size:
+            raise RuntimeHold("tracked source changed during SHA256 review")
+        inventory.append({"path": rel, "size": len(raw_bytes),
+                          "sha256": hashlib.sha256(raw_bytes).hexdigest()})
+    if not inventory:
+        raise RuntimeHold("selected Git source is empty")
+    return {"revision": commit, "source_tree_sha256": _digest(inventory)}
+
+
+def inspect_sources(selection, checkouts):
+    """Verify all three exact clean source revisions and tracked byte trees."""
+    validate(selection)
+    _exact(checkouts, COMPONENTS, "source checkout selection")
+    if len({str(Path(path).resolve()) for path in checkouts.values()}) != 3:
+        raise RuntimeHold("controller and producer sources must be distinct")
+    for role in sorted(COMPONENTS):
+        if source_tree_sha256(checkouts[role]) != selection["sources"][role]:
+            raise RuntimeHold("reviewed " + role + " source revision or SHA256 differs")
+    return {"schema": SCHEMA, "status": "exact-source-bytes-verified",
+            "selection_sha256": selection_sha256(selection),
+            "execution_authorized": False}
 
 
 def selection_sha256(selection):
