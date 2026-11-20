@@ -18,7 +18,7 @@ from .image_build_execution import (
 from .ledger import (
     load_dispatch, load_request, mark_dispatch_submitting,
     mark_dispatch_submitted, mark_dispatch_uncertain, prepare_dispatch,
-    record_dispatch_observation, record_remote_result,
+    record_dispatch_observation, record_remote_result, valid_request_ids,
 )
 
 # Explicitly finite task/operation mapping. No supplied script, user-selected
@@ -150,9 +150,8 @@ def advance_one(root, *, host_factory=Host):
     # requests in the durable ledger. Preserve their original receipt order;
     # lexicographic request IDs are not FIFO.
     ordered = []
-    for candidate in directory.iterdir():
-        if candidate.is_symlink() or not candidate.is_dir():
-            raise ForwardingDenied("unsafe gateway request directory")
+    for request_id in valid_request_ids(root):
+        candidate = directory / request_id
         transport = candidate / "transport.json"
         if transport.is_symlink() or not transport.is_file():
             raise ForwardingDenied("missing durable SQS delivery")
@@ -164,7 +163,7 @@ def advance_one(root, *, host_factory=Host):
                 raise ValueError("invalid FIFO receipt")
         except (KeyError, ValueError, TypeError):
             raise ForwardingDenied("invalid durable SQS delivery") from None
-        ordered.append((arrival, candidate.name))
+        ordered.append((arrival, request_id))
     for _, request_id in sorted(ordered):
         state = load_request(root, request_id)
         parameters = state["request"]["parameters"]
