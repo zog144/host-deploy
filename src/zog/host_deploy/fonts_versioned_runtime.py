@@ -202,6 +202,12 @@ def selection_sha256(selection):
     return _digest(validate(selection))
 
 
+def selection_bytes(selection):
+    """Deterministic reviewed selection; raw file digest remains separate."""
+    return (json.dumps(validate(selection), sort_keys=True, ensure_ascii=True,
+                       separators=(",", ":"), allow_nan=False) + "\\n").encode("ascii")
+
+
 def load_reviewed_selection(path, expected_sha256):
     """Root-owned reviewed input; exact external selection hash is required.
 
@@ -215,6 +221,10 @@ def load_reviewed_selection(path, expected_sha256):
     for parent in reversed(Path(path).parents):
         if parent.is_symlink():
             raise RuntimeHold("linked selection manifest ancestor")
+        if parent == Path(SELECTIONS):
+            info = parent.stat()
+            if info.st_uid != 0 or info.st_gid != 0 or info.st_mode & 0o022:
+                raise RuntimeHold("reviewed selection directory is not root-protected")
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
         try:
@@ -233,7 +243,12 @@ def load_reviewed_selection(path, expected_sha256):
     if hashlib.sha256(raw).hexdigest() != expected_sha256:
         raise RuntimeHold("selected manifest bytes differ from externally approved digest")
     try:
-        return validate(json.loads(raw))
+        selected = validate(json.loads(raw))
+        if raw != selection_bytes(selected):
+            raise RuntimeHold("reviewed selection file is not canonical")
+        if Path(path).name != selected["release_id"] + ".json":
+            raise RuntimeHold("reviewed selection filename differs from release")
+        return selected
     except (ValueError, UnicodeError, TypeError, KeyError) as error:
         raise RuntimeHold("invalid reviewed runtime selection JSON") from error
 
@@ -295,6 +310,9 @@ def _retained_tree_sha256(root):
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
                     or info.st_gid != 0 or info.st_mode & 0o022):
                 raise RuntimeHold("rollback directory is not protected root-owned")
+            inventory.append({"type": "directory",
+                              "path": directory.relative_to(root).as_posix(),
+                              "mode": stat.S_IMODE(info.st_mode)})
         for name in files:
             file = current / name
             info = file.lstat()
@@ -306,10 +324,11 @@ def _retained_tree_sha256(root):
             if len(data) != info.st_size:
                 raise RuntimeHold("rollback bytes changed during inventory")
             inventory.append({
-                "path": file.relative_to(root).as_posix(),
+                "type": "file", "path": file.relative_to(root).as_posix(),
+                "mode": stat.S_IMODE(info.st_mode),
                 "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
             })
-    if not inventory:
+    if not any(entry["type"] == "file" for entry in inventory):
         raise RuntimeHold("rollback runtime inventory is empty")
     return _digest(inventory)
 
@@ -402,8 +421,9 @@ def inspect_child_identity(selection, *, pid, peer_uid, peer_gid, unit_cgroup,
     if first != second or started != started_again:
         raise RuntimeHold("compiler child identity changed during observation")
     uid, gid = first["Uid"][1], first["Gid"][1]
-    if (uid == 0 or gid == 0 or uid != peer_uid or gid != peer_gid
-            or first["Uid"][0] == 0 or first["Gid"][0] == 0):
+    if (any(value != peer_uid for value in first["Uid"])
+            or any(value != peer_gid for value in first["Gid"])
+            or uid == 0 or gid == 0):
         raise RuntimeHold("actual compiler child is root or not bound to authenticated nonroot peer")
     return {"schema": "zog-fonts-inherited-child-observation-v1",
             "status": "kernel-child-identity-verified",
