@@ -56,7 +56,6 @@ def test_incomplete_directory_is_reported_and_preserved_without_dispatch(
         # storage rather than constructing a fictional valid request.
         # This intentionally avoids accept() here: existing lock-only state
         # must not be implicitly adopted on redelivery.
-        directory.rmdir() if not any(directory.iterdir()) else None
         # Create a real request under a separate clean gateway root then
         # copy its original durable bytes without altering its request ID.
         fresh = tmp_path / "fresh"
