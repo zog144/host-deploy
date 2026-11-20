@@ -330,7 +330,10 @@ def _scan_json(directory_fd, name, limit):
         raw = os.read(fd, limit + 1)
         if len(raw) != info.st_size:
             raise LedgerConflict("changing or truncated " + name)
-        return json.loads(raw)
+        try:
+            return json.loads(raw)
+        except (ValueError, UnicodeError) as error:
+            raise LedgerConflict("invalid JSON in " + name) from error
     finally:
         os.close(fd)
 
