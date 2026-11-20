@@ -72,7 +72,8 @@ def fixture_selection(tmp_path, monkeypatch):
         "rollback": {
             "saved_unit": str(saved), "unit_sha256": _sha(old_bytes),
             "saved_runtime_root": str(original),
-            "runtime_tree_sha256": runtime._retained_tree_sha256(original),
+            "runtime_tree_sha256": (runtime._retained_tree_sha256(original)
+                                    if os.geteuid() == 0 else "f" * 64),
         },
         "files": files,
         "lane": {"name": "gateway-first-fonts-runtime",
