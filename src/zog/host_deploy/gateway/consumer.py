@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from .ledger import (
     load_dispatch,
     load_request,
     reconcile_all,
+    valid_request_ids,
     reconcile_dispatch,
     reconcile_request,
     record_acknowledgement,
@@ -50,6 +52,8 @@ from .queues import (
     verify_queue_configuration,
 )
 
+
+_LOG = logging.getLogger(__name__)
 
 DEFAULT_STATE_DIRECTORY = "/var/lib/host-deploy-gateway"
 VISIBILITY_TIMEOUT_SECONDS = 60
@@ -125,6 +129,7 @@ class GatewayConsumer:
                  approved_graphical_export_pin_path=None,
                  graphical_export_directory=None, direct_forward=False):
         self.state_directory = Path(state_directory)
+        self._reported_invalid_requests = {}
         self.direct_forward = direct_forward is True
         if self.direct_forward and (
                 approved_generic_catalogue is not None
@@ -165,6 +170,18 @@ class GatewayConsumer:
         self.approved_toolchain_identity = approved_toolchain_identity
         self.approved_toolchain_path = approved_toolchain_path
 
+    def _reconcile(self):
+        """Keep malformed request evidence visible without stopping queue health."""
+        results = reconcile_all(self.state_directory)
+        invalid = {record["request_id"]: record["error"]
+                   for record in results if record.get("status") == "invalid"}
+        for request_id, reason in invalid.items():
+            if self._reported_invalid_requests.get(request_id) != reason:
+                _LOG.error("gateway retained request %s is invalid; held without "
+                           "automatic dispatch: %s", request_id, reason)
+        self._reported_invalid_requests = invalid
+        return results
+
     def _advance_one_reviewed(self):
         """At most one stage across durable admitted requests per iteration.
 
@@ -185,10 +202,7 @@ class GatewayConsumer:
         root = self.state_directory / "requests"
         if not root.exists():
             return None
-        for candidate in sorted(root.iterdir()):
-            if not candidate.is_dir() or candidate.is_symlink():
-                raise RuntimeError("unsafe gateway request directory")
-            request_id = candidate.name
+        for request_id in valid_request_ids(self.state_directory):
             state = load_request(self.state_directory, request_id)
             if (state["request"]["operation"] != "build.submit"
                     or state["states"]["admission"] != "admitted"):
@@ -212,10 +226,10 @@ class GatewayConsumer:
                 if policy_sha is not None and task_name in TASKS:
                     # One admitted request per stage, including terminal/
                     # uncertain history: never manufacture a replacement.
-                    for older in sorted(root.iterdir()):
-                        if older.name == request_id:
+                    for older_id in valid_request_ids(self.state_directory):
+                        if older_id == request_id:
                             continue
-                        prior = load_request(self.state_directory, older.name)
+                        prior = load_request(self.state_directory, older_id)
                         if (prior["request"]["operation"] == "build.submit"
                                 and prior["request"]["parameters"]["task"] == task_name
                                 and prior["request"]["parameters"]["lane"] ==
@@ -270,10 +284,7 @@ class GatewayConsumer:
         request_root = self.state_directory / "requests"
         if not request_root.exists():
             return None
-        for entry in sorted(request_root.iterdir()):
-            if entry.is_symlink() or not entry.is_dir():
-                raise RuntimeError("unsafe gateway request directory")
-            request_id = entry.name
+        for request_id in valid_request_ids(self.state_directory):
             state = load_request(self.state_directory, request_id)
             if (state["request"]["operation"] != "toolchain.submit"
                     or state["states"]["admission"] != "admitted"):
@@ -417,7 +428,7 @@ class GatewayConsumer:
         )
         messages = response.get("Messages", [])
         if not messages:
-            reconcile_all(self.state_directory)
+            self._reconcile()
             self._advance_one_reviewed()
             self._advance_one_toolchain()
             if self.direct_forward:
@@ -425,7 +436,7 @@ class GatewayConsumer:
                 advance_one(self.state_directory)
             return None
         result = self.handle_message(messages[0])
-        reconcile_all(self.state_directory)
+        self._reconcile()
         self._advance_one_reviewed()
         self._advance_one_toolchain()
         if self.direct_forward:
@@ -435,7 +446,7 @@ class GatewayConsumer:
 
     def run(self):
         with dispatcher_lock(self.state_directory):
-            reconcile_all(self.state_directory)
+            self._reconcile()
             while True:
                 self.poll_once()
 
