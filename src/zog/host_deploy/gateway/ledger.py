@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import uuid
 import zipfile
 
@@ -104,11 +105,30 @@ def _delivery_value(message_id, receive_count, at):
 def accept(root, request, *, message_id, receive_count, at=None):
     at = at or utc_now()
     digest = request_digest(request)
-    request_id = request["request_id"]
+    request_id = _identity(request["request_id"], "request_id")
     delivery = _delivery_value(message_id, receive_count, at)
+    # A crash may have left only request.lock or a partial state/transport.
+    # Such a retained directory is evidence, not permission to start a fresh
+    # request with the same operation identity on SQS redelivery.
+    parent = ensure_root(root) / "requests"
+    parent.mkdir(parents=True, exist_ok=True)
+    request_dir = parent / request_id
+    try:
+        request_dir.mkdir()
+        new_directory = True
+    except FileExistsError:
+        new_directory = False
+    if request_dir.is_symlink() or not request_dir.is_dir():
+        raise LedgerConflict("unsafe retained request directory")
     with request_lock(root, request_id) as directory:
         state_path = directory / "state.json"
+        if state_path.is_symlink():
+            raise LedgerConflict("unsafe retained request state.json")
         duplicate = state_path.exists()
+        if not duplicate and not new_directory:
+            raise LedgerConflict(
+                "retained request directory lacks state.json; manual reconciliation required"
+            )
         if duplicate:
             state = _load_state(directory)
             if state["request_sha256"] != digest or state["request"] != request:
@@ -122,6 +142,12 @@ def accept(root, request, *, message_id, receive_count, at=None):
             save(state_path, state)
 
         transport_path = directory / "transport.json"
+        if transport_path.is_symlink():
+            raise LedgerConflict("unsafe retained request transport.json")
+        if duplicate and not transport_path.exists():
+            raise LedgerConflict(
+                "retained request lacks transport.json; manual reconciliation required"
+            )
         if transport_path.exists():
             transport = json.loads(transport_path.read_text())
             if (
@@ -283,17 +309,124 @@ def reconcile_request(root, request_id, *, at=None):
             return state
 
 
+# A request directory is durable evidence, including a directory left with
+# only request.lock by an interrupted writer. Scanning must not create files,
+# repair a partial request, or silently promote it into an SSM operation.
+_SCAN_STATE_LIMIT = 1024 * 1024
+_SCAN_TRANSPORT_LIMIT = 256 * 1024
+
+
+def _scan_json(directory_fd, name, limit):
+    """Read bounded, regular, no-follow ledger bytes without changing them."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC |
+                     os.O_NONBLOCK, dir_fd=directory_fd)
+    except FileNotFoundError:
+        raise LedgerConflict("missing " + name) from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= limit:
+            raise LedgerConflict("empty, oversized or nonregular " + name)
+        raw = os.read(fd, limit + 1)
+        if len(raw) != info.st_size:
+            raise LedgerConflict("changing or truncated " + name)
+        try:
+            return json.loads(raw)
+        except (ValueError, UnicodeError) as error:
+            raise LedgerConflict("invalid JSON in " + name) from error
+    finally:
+        os.close(fd)
+
+
+def request_record_error(root, request_id):
+    """Return a bounded reason for one incomplete/invalid retained request.
+
+    No request lock is opened or created. This check never authorizes work:
+    normal reconciler/dispatch routines revalidate durable state themselves.
+    """
+    directory = Path(root) / "requests" / request_id
+    try:
+        if not _HEX_32.fullmatch(request_id) or uuid.UUID(request_id).hex != request_id:
+            raise LedgerConflict("invalid request directory identity")
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY |
+                     os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            lock_fd = os.open("request.lock", os.O_RDONLY | os.O_NOFOLLOW |
+                              os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=fd)
+            try:
+                if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                    raise LedgerConflict("nonregular request.lock")
+            finally:
+                os.close(lock_fd)
+            state = validate_state(_scan_json(fd, "state.json", _SCAN_STATE_LIMIT))
+            if state["request_id"] != request_id:
+                raise LedgerConflict("state.json does not match directory identity")
+            transport = _scan_json(fd, "transport.json", _SCAN_TRANSPORT_LIMIT)
+            if (type(transport) is not dict
+                    or transport.get("schema") != 1
+                    or transport.get("request_id") != request_id
+                    or transport.get("request_sha256") != state["request_sha256"]
+                    or type(transport.get("deliveries")) is not list
+                    or type(transport.get("first_seen_at")) is not str
+                    or not transport["first_seen_at"].endswith("Z")):
+                raise LedgerConflict("transport.json does not match admitted request")
+            try:
+                os.stat("dispatch.json", dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                record = _scan_json(fd, "dispatch.json", _SCAN_STATE_LIMIT)
+                _validate_dispatch_record(record, state)
+        finally:
+            os.close(fd)
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError,
+            RequestProtocolError, LedgerConflict) as error:
+        reason = str(error).replace("\\n", " ").replace("\\r", " ")
+        return (type(error).__name__ + ": " + reason)[:240]
+    return None
+
+
+def valid_request_ids(root):
+    """Eligible for *assessment*, not execution; skip unsafe partial records."""
+    directory = Path(root) / "requests"
+    if not directory.exists():
+        return []
+    return [path.name for path in sorted(directory.iterdir())
+            if _HEX_32.fullmatch(path.name)
+            and request_record_error(root, path.name) is None]
+
+
+def _invalid_request_result(request_id, reason):
+    return {"schema": "host-deploy-invalid-request-v1",
+            "request_id": request_id, "status": "invalid",
+            "error": str(reason)[:240]}
+
+
 def reconcile_all(root, *, at=None):
+    """Reconcile independently; never discard or replay a partial directory.
+
+    Invalid entries are returned for CLI/status and consumer error reporting.
+    Other intact requests still receive their normal reconciliation.
+    """
     root = ensure_root(root)
     directory = root / "requests"
     if not directory.exists():
         return []
     results = []
     for path in sorted(directory.iterdir()):
-        if not path.is_dir() or not _HEX_32.fullmatch(path.name):
+        if not _HEX_32.fullmatch(path.name):
             continue
-        reconcile_request(root, path.name, at=at)
-        results.append(reconcile_dispatch(root, path.name, at=at))
+        problem = request_record_error(root, path.name)
+        if problem is not None:
+            results.append(_invalid_request_result(path.name, problem))
+            continue
+        try:
+            reconcile_request(root, path.name, at=at)
+            results.append(reconcile_dispatch(root, path.name, at=at))
+        except (OSError, ValueError, TypeError, KeyError,
+                RequestProtocolError, LedgerConflict) as error:
+            results.append(_invalid_request_result(
+                path.name, type(error).__name__ + ": " + str(error)))
     return results
 
 
@@ -858,11 +991,10 @@ def summary(root):
         for path in requests.iterdir():
             if not path.is_dir() or not _HEX_32.fullmatch(path.name):
                 continue
-            try:
-                state = validate_state(json.loads((path / "state.json").read_text()))
-            except (OSError, ValueError, RequestProtocolError):
+            if request_record_error(root, path.name) is not None:
                 states["invalid"] = states.get("invalid", 0) + 1
                 continue
+            state = validate_state(json.loads((path / "state.json").read_text()))
             count += 1
             key = (
                 state["states"]["acceptance"]
