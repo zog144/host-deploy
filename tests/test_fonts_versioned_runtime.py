@@ -248,7 +248,7 @@ def test_external_manifest_pin_is_required_for_local_root_inspection(
     custody.mkdir()
     monkeypatch.setattr(runtime, "SELECTIONS", str(custody))
     path = custody / (selected["release_id"] + ".json")
-    data = json.dumps(selected, sort_keys=True).encode()
+    data = runtime.selection_bytes(selected)
     path.write_bytes(data)
     assert runtime.load_reviewed_selection(str(path), _sha(data)) == selected
     with pytest.raises(runtime.RuntimeHold, match="externally approved"):
