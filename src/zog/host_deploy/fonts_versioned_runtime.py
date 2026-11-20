@@ -19,6 +19,7 @@ CONTRACT = "zog-build-inherited-peer-v2"
 RELEASES = "/opt/zog/compiler-runtime/versions"
 ROLLBACK = "/opt/zog/compiler-runtime/rollback"
 UNIT_DIR = "/etc/systemd/system"
+SELECTIONS = "/var/lib/zog/compiler-runtime/selections"
 COMPONENTS = frozenset({"root-control", "box-control", "image-build"})
 REQUIRED_FILES = frozenset({
     "root-control-module", "box-control-module", "image-build-module",
@@ -140,6 +141,42 @@ def validate(selection):
 
 def selection_sha256(selection):
     return _digest(validate(selection))
+
+
+def load_reviewed_selection(path, expected_sha256):
+    """Root-owned reviewed input; exact external selection hash is required.
+
+    This only establishes the integrity of a locally selected manifest, not
+    permission to change a unit, send a build or assert an authenticated peer.
+    """
+    _hash(expected_sha256, "externally approved selection SHA256")
+    path = _path(path, "selection manifest")
+    if not _under(path, SELECTIONS) or not path.endswith(".json"):
+        raise RuntimeHold("selection must reside in protected local custody")
+    for parent in reversed(Path(path).parents):
+        if parent.is_symlink():
+            raise RuntimeHold("linked selection manifest ancestor")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or info.st_gid != 0 or info.st_nlink != 1
+                    or info.st_mode & 0o022 or not 0 < info.st_size <= 1024 * 1024):
+                raise RuntimeHold("selected manifest has unsafe ownership or size")
+            raw = os.read(fd, info.st_size + 1)
+            if len(raw) != info.st_size:
+                raise RuntimeHold("selected manifest changed during inspection")
+        finally:
+            os.close(fd)
+    except OSError as error:
+        raise RuntimeHold("cannot read reviewed local selection") from error
+    if hashlib.sha256(raw).hexdigest() != expected_sha256:
+        raise RuntimeHold("selected manifest bytes differ from externally approved digest")
+    try:
+        return validate(json.loads(raw))
+    except (ValueError, UnicodeError, TypeError, KeyError) as error:
+        raise RuntimeHold("invalid reviewed runtime selection JSON") from error
 
 
 def _read_fixed(path, expected_hash, expected_size=None):
