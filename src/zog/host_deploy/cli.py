@@ -1,6 +1,7 @@
 """Starter-package CLI. Each independently initialized workspace owns one host."""
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -104,6 +105,11 @@ def main():
             command.add_argument('--expected-specification-sha256', required=True)
         if name in {'fonts-lane-migration-preview','fonts-lane-migration-stage'}:
             command.add_argument('--project-root', required=True)
+    runtime_inspect = commands.add_parser('fonts-runtime-inspect',
+        help='Root-only readback of exact versioned controller bytes; does not activate')
+    runtime_inspect.add_argument('--selection', required=True)
+    runtime_inspect.add_argument('--expected-selection-sha256', required=True)
+    runtime_inspect.add_argument('--phase', choices=('staged', 'selected'), default='staged')
     for name in ['artifact-init','artifact-publish','artifact-fetch','artifact-prune']:
         command=commands.add_parser(name)
         command.add_argument('--store',required=True)
@@ -113,7 +119,14 @@ def main():
             command.add_argument('--retention-seconds',type=int,default=604800)
         if name=='artifact-fetch': command.add_argument('--output',required=True)
     arguments=parser.parse_args()
-    if arguments.command.startswith('fonts-lane-'):
+    if arguments.command == 'fonts-runtime-inspect':
+        from . import fonts_versioned_runtime as versioned
+        if os.geteuid() != 0:
+            raise PermissionError('versioned runtime inspection requires trusted Host root owner')
+        selection = versioned.load_reviewed_selection(
+            arguments.selection, arguments.expected_selection_sha256)
+        result = versioned.inspect_installed(selection, phase=arguments.phase)
+    elif arguments.command.startswith('fonts-lane-'):
         from . import fonts_lane_profile
         if arguments.command == 'fonts-lane-profile':
             result = fonts_lane_profile.profile()
