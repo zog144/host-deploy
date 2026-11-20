@@ -176,6 +176,48 @@ def _read_fixed(path, expected_hash, expected_size=None):
         raise RuntimeHold("cannot verify installed bytes: " + str(path)) from error
 
 
+def _retained_tree_sha256(root):
+    """Hash every retained regular byte; reject aliases or writable/linked roots.
+
+    The rollback image is an independent byte-preserved directory snapshot,
+    not just a recorded digest or a link to the selected live runtime.
+    """
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeHold("rollback runtime directory is absent or linked")
+    for parent in reversed(root.parents):
+        if parent.is_symlink():
+            raise RuntimeHold("linked rollback runtime ancestor")
+    inventory = []
+    for current, directories, files in os.walk(root, followlinks=False):
+        directories.sort()
+        files.sort()
+        current = Path(current)
+        dirs = [current] + [current / name for name in directories]
+        for directory in dirs:
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+                    or info.st_gid != 0 or info.st_mode & 0o022):
+                raise RuntimeHold("rollback directory is not protected root-owned")
+        for name in files:
+            file = current / name
+            info = file.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or info.st_uid != 0 or info.st_gid != 0
+                    or info.st_mode & 0o022 or info.st_size > 512 * 1024 * 1024):
+                raise RuntimeHold("rollback has unsafe or linked file")
+            data = file.read_bytes()
+            if len(data) != info.st_size:
+                raise RuntimeHold("rollback bytes changed during inventory")
+            inventory.append({
+                "path": file.relative_to(root).as_posix(),
+                "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+            })
+    if not inventory:
+        raise RuntimeHold("rollback runtime inventory is empty")
+    return _digest(inventory)
+
+
 def inspect_installed(selection, *, phase="staged"):
     """Read only. Require old unit live before switch, selected unit after switch.
 
@@ -192,17 +234,18 @@ def inspect_installed(selection, *, phase="staged"):
                           if phase == "staged" else service["staged_sha256"])
     if (old.st_dev, old.st_ino) == (current.st_dev, current.st_ino):
         raise RuntimeHold("rollback unit hardlinked to active service")
+    if _retained_tree_sha256(rollback["saved_runtime_root"]) != rollback["runtime_tree_sha256"]:
+        raise RuntimeHold("retained previous runtime bytes differ")
     unit = Path(service["staged_unit"]).read_bytes()
     commands = [line for line in unit.splitlines()
                 if line.strip().startswith(b"ExecStart=")]
     if len(commands) != 1 or commands[0] != (
             b"ExecStart=" + service["exec_start"].encode("utf-8")):
         raise RuntimeHold("installed controller ExecStart differs from selected release")
-    _read_fixed(service["exec_start"], next(
-        item["sha256"] for item in selection["files"]
-        if item["path"] == service["exec_start"]
-    )) if service["exec_start"] in {f["path"] for f in selection["files"]} else (
-        _raise_missing_executable())
+    executable = [f for f in selection["files"]
+                  if f["path"] == service["exec_start"]]
+    if len(executable) != 1:
+        raise RuntimeHold("selected ExecStart executable absent from installed-byte inventory")
     for item in selection["files"]:
         _read_fixed(item["path"], item["sha256"], item["size"])
     # The actual entire saved runtime inventory must be attested by the
@@ -213,10 +256,6 @@ def inspect_installed(selection, *, phase="staged"):
             "source_revisions": {k: v["revision"] for k, v in selection["sources"].items()},
             "rollback_preserved": True, "fonts_lane_enabled": False,
             "child_identity_verified": False, "execution_authorized": False}
-
-
-def _raise_missing_executable():
-    raise RuntimeHold("selected ExecStart executable absent from installed-byte inventory")
 
 
 def inspect_child_identity(selection, *, pid, peer_uid, peer_gid, unit_cgroup,
