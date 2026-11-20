@@ -304,15 +304,14 @@ def _retained_tree_sha256(root):
         directories.sort()
         files.sort()
         current = Path(current)
-        dirs = [current] + [current / name for name in directories]
-        for directory in dirs:
+        for directory in [current] + [current / name for name in directories]:
             info = directory.lstat()
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
                     or info.st_gid != 0 or info.st_mode & 0o022):
                 raise RuntimeHold("rollback directory is not protected root-owned")
-            inventory.append({"type": "directory",
-                              "path": directory.relative_to(root).as_posix(),
-                              "mode": stat.S_IMODE(info.st_mode)})
+        inventory.append({"type": "directory",
+                          "path": current.relative_to(root).as_posix(),
+                          "mode": stat.S_IMODE(current.lstat().st_mode)})
         for name in files:
             file = current / name
             info = file.lstat()
