@@ -205,7 +205,7 @@ def selection_sha256(selection):
 def selection_bytes(selection):
     """Deterministic reviewed selection; raw file digest remains separate."""
     return (json.dumps(validate(selection), sort_keys=True, ensure_ascii=True,
-                       separators=(",", ":"), allow_nan=False) + "\\n").encode("ascii")
+                       separators=(",", ":"), allow_nan=False) + chr(10)).encode("ascii")
 
 
 def load_reviewed_selection(path, expected_sha256):
