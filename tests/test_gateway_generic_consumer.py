@@ -24,6 +24,10 @@ def test_reviewed_queue_advances_only_one_frozen_stage(tmp_path,monkeypatch):
     obj=setup(tmp_path)
     obj.approved_generic_catalogue={"schema":2,"tasks":{"xcb-support-image-v1":{}}}
     obj.approved_catalogue_identity="sha256:"+"f"*64
+    # These supervisor unit fixtures intentionally mock authorization and
+    # admission. Stub the *already validated* candidate scan as well; the
+    # separate incomplete-startup regressions prove raw lock-only dirs are held.
+    monkeypatch.setattr(consumer, "valid_request_ids", lambda root: [RID])
     monkeypatch.setattr(consumer,"load_request",
         lambda root,rid:{"request":{"operation":"build.submit"},
                          "states":{"admission":"admitted"}})
@@ -41,6 +45,10 @@ def test_existing_blocked_or_uncertain_stage_is_not_reissued(tmp_path,monkeypatc
     obj=setup(tmp_path)
     obj.approved_generic_catalogue={"schema":2,"tasks":{}}
     obj.approved_catalogue_identity="sha256:"+"f"*64
+    # These supervisor unit fixtures intentionally mock authorization and
+    # admission. Stub the *already validated* candidate scan as well; the
+    # separate incomplete-startup regressions prove raw lock-only dirs are held.
+    monkeypatch.setattr(consumer, "valid_request_ids", lambda root: [RID])
     monkeypatch.setattr(consumer,"load_request",
         lambda root,rid:{"request":{"operation":"build.submit"},
                          "states":{"admission":"admitted"}})
@@ -58,6 +66,10 @@ def test_automatic_generic_progress_refuses_replaced_task_policy(tmp_path,monkey
     obj=setup(tmp_path)
     obj.approved_generic_catalogue={"schema":2,"tasks":{"xcb-support-image-v1":{}}}
     obj.approved_catalogue_identity="sha256:"+"f"*64
+    # These supervisor unit fixtures intentionally mock authorization and
+    # admission. Stub the *already validated* candidate scan as well; the
+    # separate incomplete-startup regressions prove raw lock-only dirs are held.
+    monkeypatch.setattr(consumer, "valid_request_ids", lambda root: [RID])
     monkeypatch.setattr(consumer,"load_request",
         lambda root,rid:{"request":{"operation":"build.submit"},
                          "states":{"admission":"admitted"}})
