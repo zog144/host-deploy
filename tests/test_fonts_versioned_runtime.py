@@ -5,7 +5,9 @@ root-owned installed-file test runs only on disposable CI paths as root.
 """
 import copy
 import hashlib
+import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -205,3 +207,52 @@ def test_installed_byte_tampering_and_rollback_loss_hold(tmp_path, monkeypatch):
     saved.unlink()
     with pytest.raises(runtime.RuntimeHold, match="cannot verify"):
         runtime.inspect_installed(selection)
+
+
+def _make_checkout(folder):
+    folder.mkdir()
+    subprocess.run(["git", "init", "-q", str(folder)], check=True)
+    (folder / "module.py").write_bytes(b"INHERITED_PEER = True\\n")
+    subprocess.run(["git", "-C", str(folder), "add", "module.py"], check=True)
+    subprocess.run(["git", "-C", str(folder), "-c", "user.email=review@invalid.example",
+                    "-c", "user.name=Source Review", "commit", "-qm",
+                    "select inherited source"], check=True)
+
+
+def test_exact_clean_git_revision_and_sha256_tree_are_both_required(
+        tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    checkouts = {}
+    for role in runtime.COMPONENTS:
+        path = tmp_path / ("source-" + role)
+        _make_checkout(path)
+        selected["sources"][role] = runtime.source_tree_sha256(path)
+        checkouts[role] = path
+    assert runtime.inspect_sources(selected, checkouts)["execution_authorized"] is False
+    dirty = checkouts["root-control"]
+    (dirty / "module.py").write_text("changed\\n")
+    with pytest.raises(runtime.RuntimeHold, match="dirty"):
+        runtime.inspect_sources(selected, checkouts)
+    subprocess.run(["git", "-C", str(dirty), "restore", "module.py"], check=True)
+    foreign = copy.deepcopy(selected)
+    foreign["sources"]["box-control"]["source_tree_sha256"] = "f" * 64
+    with pytest.raises(runtime.RuntimeHold, match="source revision or SHA256"):
+        runtime.inspect_sources(foreign, checkouts)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned source selection fixture")
+def test_external_manifest_pin_is_required_for_local_root_inspection(
+        tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    custody = tmp_path / "selections"
+    custody.mkdir()
+    monkeypatch.setattr(runtime, "SELECTIONS", str(custody))
+    path = custody / (selected["release_id"] + ".json")
+    data = json.dumps(selected, sort_keys=True).encode()
+    path.write_bytes(data)
+    assert runtime.load_reviewed_selection(str(path), _sha(data)) == selected
+    with pytest.raises(runtime.RuntimeHold, match="externally approved"):
+        runtime.load_reviewed_selection(str(path), "0" * 64)
+    path.write_text("{}")
+    with pytest.raises(runtime.RuntimeHold, match="differ"):
+        runtime.load_reviewed_selection(str(path), _sha(data))
