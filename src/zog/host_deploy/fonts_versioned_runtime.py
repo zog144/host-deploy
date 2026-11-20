@@ -71,7 +71,8 @@ def _under(path, directory):
 def validate(selection):
     """Validate reviewed source pins and immutable install/rollback selection."""
     _exact(selection, {"schema", "contract", "release_id", "sources",
-                       "service", "rollback", "files", "lane"}, "selection")
+                       "service", "rollback", "files", "installed_tree_sha256",
+                       "lane"}, "selection")
     if selection["schema"] != SCHEMA or selection["contract"] != CONTRACT:
         raise RuntimeHold("unsupported versioned inherited-identity contract")
     release = selection["release_id"]
@@ -117,6 +118,7 @@ def validate(selection):
     if lane["name"] != "gateway-first-fonts-runtime" or lane["enabled"] is not False:
         raise RuntimeHold("Fonts lane must remain explicitly disabled")
     _hash(lane["specification_sha256"], "lane candidate specification")
+    _hash(selection["installed_tree_sha256"], "selected version complete installed tree")
     files = selection["files"]
     if type(files) is not list or len(files) < len(REQUIRED_FILES) or len(files) > 4096:
         raise RuntimeHold("incomplete installed-byte inventory")
@@ -362,8 +364,11 @@ def inspect_installed(selection, *, phase="staged"):
         raise RuntimeHold("selected ExecStart executable absent from installed-byte inventory")
     for item in selection["files"]:
         _read_fixed(item["path"], item["sha256"], item["size"])
-    # The actual entire saved runtime inventory must be attested by the
-    # privileged installer; a digest field alone is not a native readback.
+    selected_root = RELEASES + "/" + selection["release_id"]
+    if _retained_tree_sha256(selected_root) != selection["installed_tree_sha256"]:
+        raise RuntimeHold("selected full installed tree differs from reviewed bytes")
+    # Full selected and retained runtime tree bytes are independently read
+    # back, in addition to each named module/RECORD and service unit.
     return {"schema": SCHEMA, "status": "installed-byte-selection-verified",
             "phase": phase, "release_id": selection["release_id"],
             "selection_sha256": selection_sha256(selection),
