@@ -78,6 +78,8 @@ def fixture_selection(tmp_path, monkeypatch):
                                     if os.geteuid() == 0 else "f" * 64),
         },
         "files": files,
+        "installed_tree_sha256": (runtime._retained_tree_sha256(folder)
+                                  if os.geteuid() == 0 else "e" * 64),
         "lane": {"name": "gateway-first-fonts-runtime",
                  "specification_sha256": "e" * 64, "enabled": False},
     }
