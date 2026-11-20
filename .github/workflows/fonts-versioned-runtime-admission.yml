@@ -1,0 +1,40 @@
+name: Versioned inherited-controller deployment and nonroot child source contract
+on:
+  push:
+    branches: [regular/first-fonts-inherited-effective-identity-20261113]
+  pull_request:
+    paths:
+      - src/zog/host_deploy/fonts_versioned_runtime.py
+      - src/zog/host_deploy/cli.py
+      - tests/test_fonts_versioned_runtime.py
+      - .github/workflows/fonts-versioned-runtime-admission.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Source-only regression and compile
+        run: |
+          python -m pip install 'pytest>=8,<10'
+          python -m compileall -q src/zog/host_deploy/fonts_versioned_runtime.py src/zog/host_deploy/cli.py tests/test_fonts_versioned_runtime.py
+          PYTHONPATH=src python -m pytest -q tests/test_fonts_versioned_runtime.py
+      - name: Root-owned checks on disposable local runner files only
+        run: |
+          sudo env PYTHONPATH="$PWD/src:$PWD/tests" "$(command -v python)" -m pytest -q tests/test_fonts_versioned_runtime.py
+      - name: Native Host and service activation remain prohibited
+        if: always()
+        run: |
+          echo 'SOURCE ONLY: no root-control service selection, Fonts lane activation, SSM or compiler execution' >> "$GITHUB_STEP_SUMMARY"
