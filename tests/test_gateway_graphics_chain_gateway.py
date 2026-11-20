@@ -26,6 +26,11 @@ def runner(tmp_path, monkeypatch, *, task=chain.TASKS[1], duplicate=False,
     (root / REQ).mkdir(parents=True)
     if duplicate:
         (root / OTHER).mkdir()
+    # The original synthetic scenarios test catalogue/export policy after
+    # request admission. The new startup scanner must NOT treat their empty
+    # fixture directories as authenticated durable records in production.
+    monkeypatch.setattr(consumer, "valid_request_ids",
+                        lambda _root: [REQ, OTHER] if duplicate else [REQ])
     def record(key):
         return {
             "request": {"operation": "build.submit",
