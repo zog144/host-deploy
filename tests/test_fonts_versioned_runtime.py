@@ -93,6 +93,12 @@ def fixture_selection(tmp_path, monkeypatch):
                                     if os.geteuid() == 0 else "f" * 64),
         },
         "composition": {
+            "original_fragment": {
+                "path": str(current), "sha256": _sha(old_bytes),
+                "size": len(old_bytes), "mode": 0o644, "uid": 0, "gid": 0},
+            "selected_fragment": {
+                "path": str(staged), "sha256": _sha(new_bytes),
+                "size": len(new_bytes), "mode": 0o644, "uid": 0, "gid": 0},
             "original_dropins": [], "selected_dropins": [],
             "original_effective": {key: "" for key in runtime.composition.KEYS},
             "selected_effective": {
@@ -506,7 +512,11 @@ def test_ordered_execstart_resets_require_final_compiler_runtime():
 def test_dropin_set_must_be_complete_and_duplicate_free():
     c = runtime.composition
     fields = {key: "" for key in c.KEYS}
-    base = {"original_dropins": [], "selected_dropins": [],
+    fragment = {"path": "/etc/systemd/system/zog-root-control.service",
+                "sha256": "a" * 64, "size": 18,
+                "mode": 0o644, "uid": 0, "gid": 0}
+    base = {"original_fragment": fragment, "selected_fragment": fragment,
+            "original_dropins": [], "selected_dropins": [],
             "original_effective": fields, "selected_effective": fields}
     c.validate(base)
     bad = copy.deepcopy(base)
