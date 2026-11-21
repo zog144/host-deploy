@@ -15,7 +15,7 @@ PROCESS_KEYS = frozenset({
     "start_timestamp", "stop_timestamp",
 })
 COMMAND_KEYS = frozenset({"path", "argv[]", "ignore_errors", "flags"})
-_RECORD = re.compile(r"\\{\\s*([^{}]*?)\\s*\\}")
+_RECORD = re.compile(r"\{\s*([^{}]*?)\s*\}")
 
 
 class CommandIdentityHold(ValueError):
@@ -36,7 +36,7 @@ def parse_property(name, raw):
     separately, never used as immutable selection keys.
     """
     require(name in EXEC_KEYS and type(raw) is str
-            and len(raw) <= 65536 and "\\n" not in raw and "\\r" not in raw,
+            and len(raw) <= 65536 and "\n" not in raw and "\r" not in raw,
             "invalid systemd command property")
     if not raw.strip():
         require(name == "ExecStartPre", "missing effective ExecStart")
@@ -61,7 +61,7 @@ def parse_property(name, raw):
                 "incomplete " + name + " executable/argv/flags")
         path, argv = fields["path"], fields["argv[]"]
         require(path.startswith("/") and path.strip() == path
-                and not any(ch in path for ch in " \\t\\n\\r")
+                and not any(ch in path for ch in " \t\n\r")
                 and 0 < len(path) <= 1024 and 0 < len(argv) <= 8192
                 and fields["ignore_errors"] in ("yes", "no"),
                 "invalid " + name + " executable/argv/flags")
@@ -110,7 +110,7 @@ def normalize_effective(raw, keys):
         else:
             value = raw[name]
             require(type(value) is str and len(value) < 8192
-                    and "\\n" not in value and "\\r" not in value,
+                    and "\n" not in value and "\r" not in value,
                     "invalid manager-effective " + name)
             stable[name] = value
     return stable, evidence
