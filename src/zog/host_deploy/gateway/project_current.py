@@ -170,6 +170,29 @@ if (selected_module is None or selected_module.origin is None
         or Path(selected_module.origin).resolve(strict=True) !=
         expected_module.resolve(strict=True)):
     raise SystemExit("image-build executable does not resolve to selected Project")
+# Validate any Project-local companion before module import. A regular
+# installed zog package may supply missing components, but it must never
+# replace one explicitly selected from the Project's companions directory.
+def companion(name, root):
+    package = root / "zog" / name
+    if not package.is_dir():
+        return {"present": False}
+    expected = package / "__init__.py"
+    if not expected.is_file() or expected.is_symlink():
+        raise SystemExit("selected Project " + name + " companion is incomplete")
+    found = importlib.machinery.PathFinder.find_spec(
+        "zog." + name, namespace.__path__,
+    )
+    if (found is None or found.origin is None
+            or Path(found.origin).resolve(strict=True) !=
+               expected.resolve(strict=True)):
+        raise SystemExit("selected Project " + name + " companion was shadowed")
+    return {"present": True, "origin": str(expected)}
+
+companions = {
+    "build-record": companion("build_record", source_roots[1]),
+    "box-control": companion("box_control", source_roots[2]),
+}
 module = importlib.import_module("zog.image_build.remote_operations")
 if (Path(module.__file__).resolve(strict=True) !=
         expected_module.resolve(strict=True)):
@@ -179,21 +202,6 @@ if (Path(module.__file__).resolve(strict=True) !=
 # nonmutating: no request creation, producer main(), pipeline or controller job.
 if sys.argv[3:] == ["--inspect-only"]:
     import json
-    def companion(name, root):
-        package = root / "zog" / name
-        if not package.is_dir():
-            return {"present": False}
-        expected = package / "__init__.py"
-        if not expected.is_file() or expected.is_symlink():
-            raise SystemExit("selected Project " + name + " companion is incomplete")
-        found = importlib.machinery.PathFinder.find_spec(
-            "zog." + name, namespace.__path__,
-        )
-        if (found is None or found.origin is None
-                or Path(found.origin).resolve(strict=True) !=
-                   expected.resolve(strict=True)):
-            raise SystemExit("selected Project " + name + " companion was shadowed")
-        return {"present": True, "origin": str(expected)}
     report = {
         "schema": "host-deploy-project-current-import-readiness-v1",
         "source_root": str(source),
@@ -201,10 +209,7 @@ if sys.argv[3:] == ["--inspect-only"]:
         "python_executable": sys.executable,
         "image_build_package": str(expected_init),
         "remote_operations": str(expected_module),
-        "companions": {
-            "build-record": companion("build_record", source_roots[1]),
-            "box-control": companion("box_control", source_roots[2]),
-        },
+        "companions": companions,
         "mutation": False,
         "execution_authorized": False,
     }
