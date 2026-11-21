@@ -32,7 +32,8 @@ def digest(value):
 
 
 def _owner(info, root):
-    need(not info.st_mode & 0o022, "writable legacy runtime object")
+    if not stat.S_ISLNK(info.st_mode):
+        need(not info.st_mode & 0o022, "writable legacy runtime object")
     if root == Path("/"):
         need(info.st_uid == info.st_gid == 0, "foreign legacy runtime object")
 
@@ -51,10 +52,18 @@ def _sha_file(path, info):
     return {"size": count, "sha256": sha.hexdigest()}
 
 
-def _absolute_target(path, target):
-    need(target and "\0" not in target and
-         not any(piece == ".." for piece in Path(target).parts),
-         "escaping or invalid symlink target")
+def _absolute_target(path, target, *, external=False):
+    need(target and "\0" not in target, "invalid symlink target")
+    if external:
+        import posixpath
+        resolved = posixpath.normpath(
+            target if target.startswith("/") else str(path.parent / target))
+        need(resolved.startswith("/") and
+             (resolved.startswith("/usr/") or resolved.startswith("/opt/")),
+             "external interpreter target escapes approved system roots")
+        return Path(resolved)
+    need(not any(piece == ".." for piece in Path(target).parts),
+         "escaping relative symlink target")
     return Path(target) if target.startswith("/") else path.parent / target
 
 
@@ -75,7 +84,7 @@ def interpreter_chain(root=Path("/")):
         _owner(info, root)
         if stat.S_ISLNK(info.st_mode):
             target = os.readlink(observed)
-            nxt = _absolute_target(current, target)
+            nxt = _absolute_target(current, target, external=True)
             need(nxt.is_absolute() and nxt != current,
                  "external interpreter target is unsafe")
             result.append({"path": str(current), "type": "symlink",
