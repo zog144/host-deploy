@@ -156,9 +156,17 @@ def verify_composed(fragment, ordered_dropins, stable):
                 manager_argv = shlex.split(recorded["argv"])
             except ValueError as error:
                 raise CommandIdentityHold("ambiguous " + name + " argv quoting") from error
-            require(bool(file_argv) and file_argv == manager_argv
+            require(bool(file_argv) and bool(manager_argv),
+                    "composed " + name + " argv is empty")
+            # Supported systemd '-' prefix changes *execution* semantics, not
+            # argv[0]. Check it against the manager's ignore_errors flag.
+            ignore_errors = "yes" if file_argv[0].startswith("-") else "no"
+            if ignore_errors == "yes":
+                file_argv[0] = file_argv[0][1:]
+            require(file_argv == manager_argv
                     and file_argv[0] == recorded["path"],
                     "composed " + name + " argv differs")
-            require(recorded["flags"] == {"ignore_errors": "no", "flags": ""},
-                    "unsupported " + name + " execution flags")
+            require(recorded["flags"]["ignore_errors"] == ignore_errors
+                    and recorded["flags"]["flags"] == "",
+                    "composed " + name + " execution flags differ")
     return True
