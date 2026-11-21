@@ -512,3 +512,21 @@ def test_import_readiness_rejects_unspecified_project_or_python():
         project_current.read_only_import_script("../other-project", "/usr/bin/python3.12")
     with pytest.raises((RuntimeError, ValueError)):
         project_current.read_only_import_script("/srv/zog/certbot-seed", "python3")
+
+
+def test_unexpected_import_arguments_never_invoke_project_producer(
+        project_with_installed_zog_shadow):
+    root, source, _, interpreter, sentinel = project_with_installed_zog_shadow
+    # Even if someone appends an accidental argument to a readiness check,
+    # it must not fall through into remote_operations.main().
+    for args in (["--inspect-only", "--unexpected"], ["--wrong-operation"]):
+        result = subprocess.run(
+            [str(interpreter), "-I", "-B", "-c",
+             project_current._PROJECT_IMPORT_BOOTSTRAP, str(source),
+             str(root), *args],
+            text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "unsupported Project-current import invocation" in result.stderr
+        assert not (root / "gateway-requests").exists()
+        assert not sentinel.exists()
