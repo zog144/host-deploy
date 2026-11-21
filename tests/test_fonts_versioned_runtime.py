@@ -569,3 +569,80 @@ def test_manager_loaded_effective_properties_and_foreign_dropins():
     with pytest.raises(c.CompositionHold, match="ReadOnlyPaths"):
         c.verify_loaded(service, fragment=fragment, names=["70-fonts.conf"],
                         expected=dict(original, ReadOnlyPaths="/old"), runner=runner)
+
+
+
+def test_legacy_rollback_four_literal_venv_links_and_copy(tmp_path):
+    import shutil
+    legacy = runtime.legacy_rollback
+    old = tmp_path / "original"
+    (old / "venv/bin").mkdir(parents=True)
+    (old / "venv/lib").mkdir()
+    (old / "venv/lib/module.py").write_bytes(b"old source stays byte-identical")
+    external = tmp_path / "usr/bin/python3.12"
+    external.parent.mkdir(parents=True)
+    external.write_bytes(b"old external Python")
+    for rel, target in legacy.LINKS.items():
+        (old / rel).symlink_to(target)
+    selected = legacy.inventory(tmp_path, old)
+    copied = tmp_path / "copy"
+    shutil.copytree(old, copied, symlinks=True)
+    assert legacy.assert_copy(tmp_path, old, copied, expected=selected) == selected
+    assert [r["target"] for r in selected["python_interpreter_chain"]
+            if r["type"] == "symlink"] == []
+    for rel, target in legacy.LINKS.items():
+        assert (copied / rel).is_symlink()
+        assert (copied / rel).readlink().as_posix() == target
+    changed = copied / "venv/bin/python"
+    changed.unlink()
+    changed.symlink_to("python3")
+    with pytest.raises(legacy.LegacyHold, match="target differs"):
+        legacy.inventory(tmp_path, copied)
+
+
+def test_legacy_rejects_unknown_links_hardlinks_and_escape(tmp_path):
+    legacy = runtime.legacy_rollback
+    tree = tmp_path / "original"
+    (tree / "venv/bin").mkdir(parents=True)
+    (tree / "base").write_bytes(b"stored object")
+    ext = tmp_path / "usr/bin/python3.12"
+    ext.parent.mkdir(parents=True)
+    ext.write_bytes(b"external python")
+    (tree / "unapproved").symlink_to("base")
+    with pytest.raises(legacy.LegacyHold, match="unexpected"):
+        legacy.inventory(tmp_path, tree)
+    (tree / "unapproved").unlink()
+    (tree / "venv/bin/python").symlink_to("../../../../outside")
+    with pytest.raises(legacy.LegacyHold):
+        legacy.inventory(tmp_path, tree)
+    (tree / "venv/bin/python").unlink()
+    os.link(tree / "base", tree / "hardlink")
+    with pytest.raises(legacy.LegacyHold, match="hard-linked"):
+        legacy.inventory(tmp_path, tree)
+
+
+def test_legacy_external_python_chain_and_change(tmp_path):
+    legacy = runtime.legacy_rollback
+    external = tmp_path / "usr/bin/python3.12"
+    external.parent.mkdir(parents=True)
+    external.symlink_to("python3.12-real")
+    actual = external.parent / "python3.12-real"
+    actual.write_bytes(b"reviewed original executable")
+    chain = legacy.interpreter_chain(tmp_path)
+    assert [e["type"] for e in chain] == ["symlink", "file"]
+    assert chain[0]["target"] == "python3.12-real"
+    actual.write_bytes(b"unreviewed changed executable")
+    assert legacy.interpreter_chain(tmp_path) != chain
+    actual.unlink()
+    actual.symlink_to("python3.12")
+    with pytest.raises(legacy.LegacyHold, match="cycle"):
+        legacy.interpreter_chain(tmp_path)
+
+
+def test_selected_immutable_runtime_link_still_holds(tmp_path):
+    runtime_dir = tmp_path / "selected"
+    runtime_dir.mkdir()
+    (runtime_dir / "module.py").write_bytes(b"old")
+    (runtime_dir / "python").symlink_to("module.py")
+    with pytest.raises(runtime.RuntimeHold, match="linked"):
+        runtime._retained_tree_sha256(runtime_dir)
