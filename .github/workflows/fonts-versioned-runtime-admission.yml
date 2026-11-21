@@ -48,7 +48,7 @@ jobs:
         run: |
           PYTHONPATH=src python - <<'PY'
           from pathlib import Path
-          from zog.host_deploy.fonts_versioned_runtime import source_tree_sha256
+          from zog.host_deploy.fonts_versioned_runtime import source_tree_sha256, SELECTED_SOURCES
           import json
           revisions = {
               "root-control": "58b5a94311d771bb1c5f4c3e9c6191b44d6565c9",
@@ -57,9 +57,10 @@ jobs:
           }
           for component, expected in sorted(revisions.items()):
               observed = source_tree_sha256(Path("companions") / component)
-              if observed["revision"] != expected:
-                  raise SystemExit("selected source commit changed: " + component)
-              print("ZOG_SELECTED_TREE_SHA256 " + component + " " + observed["source_tree_sha256"])
+              if observed != SELECTED_SOURCES[component] or observed["revision"] != expected:
+                  raise SystemExit("selected source commit/tree hash differs: " + component)
+              print("ZOG_PINNED_SOURCE " + component + " " + observed["revision"]
+                    + " sha256:" + observed["source_tree_sha256"])
           PY
       - name: Source-only regression and compile
         run: |
