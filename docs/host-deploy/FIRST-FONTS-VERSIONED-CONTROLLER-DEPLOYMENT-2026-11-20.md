@@ -71,8 +71,12 @@ read-only selection with these required fields.
   required by the actual selected runtime. The reviewed
   `installed_tree_sha256` binds **every file, directory and mode** in the
   entire selected immutable version, catching omitted dependencies, extra
-  mutable bytes and symlinks. Merely providing Git source hashes cannot
-  satisfy installed-module or RECORD attestation.
+  mutable bytes and symlinks. The read-only inspector additionally parses
+  the actual installed distribution RECORD CSV and requires each of the
+  three critical modules to be named exactly once with its real SHA-256
+  (URL-safe base64) and byte length; even a manifest that hashes a stale
+  RECORD and the full runtime tree consistently is rejected. Merely providing
+  Git source hashes cannot satisfy installed-module or RECORD attestation.
 - rollback: a protected independent copy of the original unit and old
   runtime tree under /opt/zog/compiler-runtime/rollback/<release_id>/,
   with full original runtime tree SHA-256. Any unsafe, symlinked, aliased,
