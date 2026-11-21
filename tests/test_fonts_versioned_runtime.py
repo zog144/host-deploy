@@ -238,7 +238,7 @@ def test_exact_clean_git_revision_and_sha256_tree_are_both_required(
     subprocess.run(["git", "-C", str(dirty), "restore", "module.py"], check=True)
     foreign = copy.deepcopy(selected)
     foreign["sources"]["box-control"]["source_tree_sha256"] = "f" * 64
-    with pytest.raises(runtime.RuntimeHold, match="source revision or SHA256"):
+    with pytest.raises(runtime.RuntimeHold, match="pinned tuple"):
         runtime.inspect_sources(foreign, checkouts)
 
 
