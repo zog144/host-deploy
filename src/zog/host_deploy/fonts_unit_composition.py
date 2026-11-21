@@ -49,11 +49,43 @@ def _files(spec, role):
     return names
 
 
+def _fragment_spec(spec):
+    need(type(spec) is dict and set(spec) ==
+         {"path", "sha256", "size", "mode", "uid", "gid"},
+         "incomplete compiler fragment metadata")
+    need(type(spec["path"]) is str and spec["path"].startswith("/")
+         and ".." not in Path(spec["path"]).parts
+         and type(spec["sha256"]) is str and _HEX.fullmatch(spec["sha256"]) is not None
+         and type(spec["size"]) is int and 0 < spec["size"] <= 1024 * 1024
+         and type(spec["mode"]) is int and spec["mode"] in (0o600, 0o640, 0o644)
+         and spec["uid"] == spec["gid"] == 0,
+         "invalid compiler fragment metadata")
+
+
+def verify_fragment(path, spec):
+    _fragment_spec(spec)
+    need(str(path) == spec["path"], "compiler fragment path differs")
+    path = Path(path)
+    need(not path.is_symlink(), "linked compiler fragment")
+    info = path.lstat()
+    need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+         and info.st_uid == spec["uid"] and info.st_gid == spec["gid"]
+         and stat.S_IMODE(info.st_mode) == spec["mode"],
+         "compiler fragment ownership or mode differs")
+    raw = path.read_bytes()
+    need(len(raw) == spec["size"] and
+         hashlib.sha256(raw).hexdigest() == spec["sha256"],
+         "compiler fragment bytes differ")
+
+
 def validate(composition):
     need(type(composition) is dict and set(composition) ==
-         {"original_dropins", "selected_dropins", "original_effective",
+         {"original_fragment", "selected_fragment",
+          "original_dropins", "selected_dropins", "original_effective",
           "selected_effective"},
          "incomplete compiler unit composition")
+    _fragment_spec(composition["original_fragment"])
+    _fragment_spec(composition["selected_fragment"])
     _files(composition["original_dropins"], "original")
     _files(composition["selected_dropins"], "selected")
     for phase in ("original", "selected"):
