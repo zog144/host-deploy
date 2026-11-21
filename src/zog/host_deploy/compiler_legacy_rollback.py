@@ -157,8 +157,11 @@ def inventory(root, runtime, *, external=None):
                 if nxt.startswith("/"):
                     break
                 current = (Path(current).parent / nxt).as_posix()
-            need((runtime / current).exists() or current in observed_links,
-                 "legacy relative symlink target missing")
+            if current not in observed_links:
+                try:
+                    (runtime / current).lstat()  # inspect link object, never follow
+                except OSError as error:
+                    raise LegacyHold("legacy relative symlink target missing") from error
     chain = interpreter_chain(root) if external is None else external
     need(type(chain) is list and len(chain) > 0, "missing external interpreter attestation")
     payload = {"schema": SCHEMA, "entries": entries,
