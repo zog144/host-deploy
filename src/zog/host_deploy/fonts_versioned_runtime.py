@@ -132,6 +132,14 @@ def validate(selection):
         raise RuntimeHold("service executable is not version-owned")
     try:
         comp = composition.validate(selection["composition"])
+        if (comp["original_fragment"]["path"] != service["active_unit"]
+                or comp["original_fragment"]["sha256"] !=
+                   selection["rollback"]["unit_sha256"]):
+            raise composition.CompositionHold("original fragment review binding differs")
+        if (comp["selected_fragment"]["path"] != service["staged_unit"]
+                or comp["selected_fragment"]["sha256"] !=
+                   service["staged_sha256"]):
+            raise composition.CompositionHold("selected fragment review binding differs")
         selected_start = comp["selected_effective"]["ExecStart"]
         match = re.search(r"(?:^|[ ;])path=([^ ;]+)", selected_start)
         if match is None or match.group(1) != exe:
@@ -510,6 +518,12 @@ def inspect_installed(selection, *, phase="staged"):
     staged_dir = Path(service["staged_unit"] + ".d")
     saved_dir = Path(rollback["saved_unit"] + ".d")
     try:
+        composition.verify_fragment(service["staged_unit"], comp["selected_fragment"])
+        composition.verify_fragment(rollback["saved_unit"], {
+            **comp["original_fragment"], "path": rollback["saved_unit"]})
+        composition.verify_fragment(service["active_unit"], (
+            comp["original_fragment"] if phase == "staged" else
+            {**comp["selected_fragment"], "path": service["active_unit"]}))
         composition.verify(staged_dir, comp["selected_dropins"])
         composition.verify(saved_dir, comp["original_dropins"])
         composition.verify(original_dir, comp[
