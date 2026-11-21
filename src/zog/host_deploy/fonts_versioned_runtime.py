@@ -19,6 +19,7 @@ import stat
 import subprocess
 
 from . import fonts_unit_composition as composition
+from . import compiler_legacy_rollback as legacy_rollback
 
 SCHEMA = "zog-first-fonts-versioned-controller-selection-v1"
 CONTRACT = "zog-build-inherited-peer-v2"
@@ -155,7 +156,9 @@ def validate(selection):
         raise RuntimeHold(str(error)) from error
     rollback = _exact(selection["rollback"],
                       {"saved_unit", "unit_sha256", "saved_runtime_root",
-                       "runtime_tree_sha256"}, "rollback selection")
+                       "runtime_tree_sha256", "original_runtime",
+                       "legacy_inventory_schema", "legacy_inventory_sha256",
+                       "python_interpreter_chain"}, "rollback selection")
     if (_path(rollback["saved_unit"], "rollback unit") !=
             ROLLBACK + "/" + release + "/" + service["name"]):
         raise RuntimeHold("rollback unit location differs")
@@ -164,6 +167,16 @@ def validate(selection):
     if not _under(saved_root, ROLLBACK + "/" + release):
         raise RuntimeHold("old runtime must be retained in separate rollback custody")
     _hash(rollback["runtime_tree_sha256"], "rollback runtime inventory")
+    if rollback["legacy_inventory_schema"] != legacy_rollback.SCHEMA:
+        raise RuntimeHold("unknown legacy rollback inventory format")
+    _hash(rollback["legacy_inventory_sha256"], "legacy rollback inventory")
+    original_runtime = _path(rollback["original_runtime"], "original runtime")
+    if original_runtime == saved_root or original_runtime.startswith(ROLLBACK + "/"):
+        raise RuntimeHold("original runtime path aliases rollback custody")
+    chain = rollback["python_interpreter_chain"]
+    if (type(chain) is not list or not chain or len(chain) > 16 or
+            chain[0].get("path") != legacy_rollback.EXTERNAL_PYTHON):
+        raise RuntimeHold("invalid external Python interpreter attestation")
     if saved_root == folder or saved_root.startswith(folder + "/"):
         raise RuntimeHold("rollback runtime aliases selected version")
     lane = _exact(selection["lane"],
@@ -511,8 +524,16 @@ def inspect_installed(selection, *, phase="staged"):
                           if phase == "staged" else service["staged_sha256"])
     if (old.st_dev, old.st_ino) == (current.st_dev, current.st_ino):
         raise RuntimeHold("rollback unit hardlinked to active service")
-    if _retained_tree_sha256(rollback["saved_runtime_root"]) != rollback["runtime_tree_sha256"]:
-        raise RuntimeHold("retained previous runtime bytes differ")
+    try:
+        original = legacy_rollback.inventory(Path("/"), rollback["original_runtime"])
+        saved = legacy_rollback.inventory(Path("/"), rollback["saved_runtime_root"])
+        if original != saved or (
+            original["tree_sha256"] != rollback["runtime_tree_sha256"] or
+            original["inventory_sha256"] != rollback["legacy_inventory_sha256"] or
+            original["python_interpreter_chain"] != rollback["python_interpreter_chain"]):
+            raise RuntimeHold("retained previous runtime or Python chain differs")
+    except legacy_rollback.LegacyHold as error:
+        raise RuntimeHold(str(error)) from error
     comp = selection["composition"]
     original_dir = Path(service["active_unit"] + ".d")
     staged_dir = Path(service["staged_unit"] + ".d")
