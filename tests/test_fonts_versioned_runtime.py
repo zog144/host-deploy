@@ -31,6 +31,11 @@ def fixture_selection(tmp_path, monkeypatch):
     folder = versions / release
     original = rollbacks / release / "original"
     original.mkdir(parents=True)
+    # Deterministic test-only chain; production always inspects real /usr/bin.
+    monkeypatch.setattr(runtime.legacy_rollback, "interpreter_chain",
+        lambda root=Path("/"): [{"path": "/usr/bin/python3.12", "type": "file",
+          "mode": 0o755, "uid": 0, "gid": 0, "size": 7,
+          "sha256": _sha(b"mock-py")}])
     (original / "retained-controller.py").write_bytes(b"old unchanged controller")
     (original / "retained-producer.py").write_bytes(b"old unchanged producer")
     old_bytes = b"[Service]\nExecStart=/old/accepted/controller\n"
@@ -89,8 +94,14 @@ def fixture_selection(tmp_path, monkeypatch):
         "rollback": {
             "saved_unit": str(saved), "unit_sha256": _sha(old_bytes),
             "saved_runtime_root": str(original),
-            "runtime_tree_sha256": (runtime._retained_tree_sha256(original)
-                                    if os.geteuid() == 0 else "f" * 64),
+            "original_runtime": str(original),
+            "legacy_inventory_schema": runtime.legacy_rollback.SCHEMA,
+            "runtime_tree_sha256": runtime.legacy_rollback.inventory(
+                tmp_path, original)["tree_sha256"],
+            "legacy_inventory_sha256": runtime.legacy_rollback.inventory(
+                tmp_path, original)["inventory_sha256"],
+            "python_interpreter_chain": runtime.legacy_rollback.inventory(
+                tmp_path, original)["python_interpreter_chain"],
         },
         "composition": {
             "original_fragment": {
