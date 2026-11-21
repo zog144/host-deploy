@@ -12,6 +12,8 @@ import re
 import stat
 import subprocess
 
+from . import fonts_systemd_command_identity as command_identity
+
 KEYS = ("ExecStart", "ExecStartPre", "ReadOnlyPaths", "Requires", "After")
 _NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\.conf\Z")
 _HEX = re.compile(r"[a-f0-9]{64}\Z")
@@ -90,11 +92,18 @@ def validate(composition):
     _files(composition["selected_dropins"], "selected")
     for phase in ("original", "selected"):
         effective = composition[phase + "_effective"]
-        need(type(effective) is dict and set(effective) == set(KEYS)
-             and all(type(v) is str and len(v) < 8192
-                     and "\n" not in v and "\r" not in v
-                     for v in effective.values()),
+        need(type(effective) is dict and set(effective) == set(KEYS),
              "incomplete effective systemd property selection")
+        for name in command_identity.EXEC_KEYS:
+            try:
+                command_identity.validate_commands(name, effective[name])
+            except command_identity.CommandIdentityHold as error:
+                raise CompositionHold(str(error)) from error
+        for name in set(KEYS) - set(command_identity.EXEC_KEYS):
+            value = effective[name]
+            need(type(value) is str and len(value) < 8192
+                 and chr(10) not in value and chr(13) not in value,
+                 "incomplete effective systemd property selection")
     return composition
 
 
@@ -154,6 +163,23 @@ def composed_exec(fragment, ordered_dropins):
     return commands[0]
 
 
+def normalize_loaded_commands(raw):
+    """Read-only split for host-install: stable identity plus process evidence."""
+    try:
+        return command_identity.normalize_effective(raw, KEYS)
+    except command_identity.CommandIdentityHold as error:
+        raise CompositionHold(str(error)) from error
+
+
+def verify_composed(fragment, ordered_dropins, expected):
+    """Require ordered ExecStart AND ExecStartPre source to match stable argv."""
+    try:
+        return command_identity.verify_composed(
+            fragment, ordered_dropins, expected)
+    except command_identity.CommandIdentityHold as error:
+        raise CompositionHold(str(error)) from error
+
+
 def read_loaded(service, *, runner=subprocess.run):
     """Read systemd's manager-effective properties, not just fragment text."""
     need(type(service) is str and re.fullmatch(r"zog-[a-z0-9-]+\.service", service),
@@ -180,8 +206,13 @@ def verify_loaded(service, *, fragment, names, expected, runner=subprocess.run):
     expected_paths = {str(Path(str(fragment) + ".d") / name) for name in names}
     need(set(loaded["DropInPaths"].split()) == expected_paths,
          "loaded systemd drop-ins differ from reviewed selection")
+    try:
+        stable, process_metadata = command_identity.normalize_effective(
+            {key: loaded[key] for key in KEYS}, KEYS)
+    except command_identity.CommandIdentityHold as error:
+        raise CompositionHold(str(error)) from error
     for prop in KEYS:
-        actual, wanted = loaded[prop], expected[prop]
+        actual, wanted = stable[prop], expected[prop]
         if prop in ("Requires", "After"):
             need(sorted(actual.split()) == sorted(wanted.split()),
                  "effective " + prop + " differs from approved selection")
@@ -189,4 +220,6 @@ def verify_loaded(service, *, fragment, names, expected, runner=subprocess.run):
             need(actual == wanted,
                  "effective " + prop + " differs from approved selection")
     return {"fragment": loaded["FragmentPath"],
-            "dropins": sorted(expected_paths), "effective": {k: loaded[k] for k in KEYS}}
+            "dropins": sorted(expected_paths),
+            "effective": stable,
+            "process_metadata": process_metadata}
