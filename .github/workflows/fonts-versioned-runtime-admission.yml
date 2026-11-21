@@ -23,9 +23,44 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/root-control
+          ref: 58b5a94311d771bb1c5f4c3e9c6191b44d6565c9
+          path: companions/root-control
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/box-control
+          ref: ad61fa6a4e9c3176149720868cb008e0512dbec9
+          path: companions/box-control
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/image-build
+          ref: ff968a431dd2067e7d0e1f17d6e547f2779f647a
+          path: companions/image-build
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
+      - name: Measure exact selected source trees (no runtime activation)
+        run: |
+          PYTHONPATH=src python - <<'PY'
+          from pathlib import Path
+          from zog.host_deploy.fonts_versioned_runtime import source_tree_sha256
+          import json
+          revisions = {
+              "root-control": "58b5a94311d771bb1c5f4c3e9c6191b44d6565c9",
+              "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
+              "image-build": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
+          }
+          for component, expected in sorted(revisions.items()):
+              observed = source_tree_sha256(Path("companions") / component)
+              if observed["revision"] != expected:
+                  raise SystemExit("selected source commit changed: " + component)
+              print("ZOG_SELECTED_TREE_SHA256 " + component + " " + observed["source_tree_sha256"])
+          PY
       - name: Source-only regression and compile
         run: |
           python -m pip install 'pytest>=8,<10'
