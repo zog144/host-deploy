@@ -39,10 +39,16 @@ SELECTED_SOURCES = {
         "source_tree_sha256": "e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310",
     },
 }
-REQUIRED_FILES = frozenset({
-    "root-control-module", "box-control-module", "image-build-module",
+MODULE_PATH_SUFFIXES = {
+    "root-control-module": "/zog/root_control/build.py",
+    "box-control-module": "/zog/box_control/build_jobs.py",
+    "image-build-module": "/zog/image_build/box_control_adapter.py",
+}
+REQUIRED_FILES = frozenset(MODULE_PATH_SUFFIXES)
+SEPARATE_RECORD_ROLES = frozenset({
     "root-control-record", "box-control-record", "image-build-record",
 })
+AGGREGATE_RECORD_ROLES = frozenset({"zog-record"})
 _HEX = re.compile(r"[0-9a-f]{64}\Z")
 _GIT = re.compile(r"[0-9a-f]{40}\Z")
 _ID = re.compile(r"[0-9a-f]{32,64}\Z")
@@ -139,7 +145,7 @@ def validate(selection):
     _hash(lane["specification_sha256"], "lane candidate specification")
     _hash(selection["installed_tree_sha256"], "selected version complete installed tree")
     files = selection["files"]
-    if type(files) is not list or len(files) < len(REQUIRED_FILES) or len(files) > 4096:
+    if type(files) is not list or len(files) < len(REQUIRED_FILES) + 1 or len(files) > 4096:
         raise RuntimeHold("incomplete installed-byte inventory")
     seen_names, seen_paths = set(), set()
     for item in files:
@@ -153,11 +159,19 @@ def validate(selection):
         if not _under(path, folder) or path in seen_paths:
             raise RuntimeHold("installed bytes are not independently versioned")
         seen_paths.add(path)
+        if role in MODULE_PATH_SUFFIXES and not path.endswith(MODULE_PATH_SUFFIXES[role]):
+            raise RuntimeHold("installed critical module path differs from selected component")
+        if (role in SEPARATE_RECORD_ROLES | AGGREGATE_RECORD_ROLES
+                and not path.endswith(".dist-info/RECORD")):
+            raise RuntimeHold("installed RECORD role must name an actual distribution RECORD")
         _hash(item["sha256"], "installed file SHA256")
         if type(item["size"]) is not int or not 0 < item["size"] <= 512 * 1024 * 1024:
             raise RuntimeHold("invalid installed file length")
     if not REQUIRED_FILES.issubset(seen_names):
-        raise RuntimeHold("controller/producer/module RECORD closure is incomplete")
+        raise RuntimeHold("controller/producer critical module closure is incomplete")
+    record_roles = seen_names & (SEPARATE_RECORD_ROLES | AGGREGATE_RECORD_ROLES)
+    if record_roles not in (SEPARATE_RECORD_ROLES, AGGREGATE_RECORD_ROLES):
+        raise RuntimeHold("installed distribution RECORD closure is incomplete")
     return selection
 
 
