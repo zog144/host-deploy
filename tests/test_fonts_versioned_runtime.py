@@ -50,8 +50,13 @@ def fixture_selection(tmp_path, monkeypatch):
         "role": "controller-executable", "path": str(selected_exec),
         "sha256": _sha(selected_exec.read_bytes()), "size": selected_exec.stat().st_size
     }]
-    for role in sorted(runtime.REQUIRED_FILES):
-        path = folder / "lib" / (role + ".py")
+    site = folder / "lib/python3.12/site-packages"
+    for role in sorted(runtime.REQUIRED_FILES | runtime.SEPARATE_RECORD_ROLES):
+        if role in runtime.MODULE_PATH_SUFFIXES:
+            path = site / runtime.MODULE_PATH_SUFFIXES[role].lstrip("/")
+        else:
+            path = site / (role.replace("-record", "").replace("-", "_")
+                           + "-0.1.0.dist-info/RECORD")
         path.parent.mkdir(parents=True, exist_ok=True)
         body = (role + "-installed-immutable").encode()
         path.write_bytes(body)
@@ -299,6 +304,11 @@ def test_capture_actual_module_record_and_complete_version_tree(tmp_path, monkey
     selected, *_ = fixture_selection(tmp_path, monkeypatch)
     release = selected["release_id"]
     folder = Path(runtime.RELEASES) / release
+    # The version selected for this capture test is a combined 'zog' wheel,
+    # not the three separate component distributions from the selection fixture.
+    for item in selected["files"]:
+        if item["role"] in runtime.SEPARATE_RECORD_ROLES:
+            Path(item["path"]).unlink()
     modules = {
         "root-control-module": "zog/root_control/build.py",
         "box-control-module": "zog/box_control/build_jobs.py",
@@ -318,7 +328,7 @@ def test_capture_actual_module_record_and_complete_version_tree(tmp_path, monkey
     assert evidence["execution_authorized"] is False
     assert evidence["fonts_lane_enabled"] is False
     assert evidence["installed_tree_sha256"] == runtime._retained_tree_sha256(folder)
-    assert evidence["file_count"] >= 11
+    assert evidence["file_count"] >= 8
     for role, rel in modules.items():
         selected_file = evidence["modules"][role]
         assert selected_file["path"] == str(site / rel)
@@ -338,8 +348,11 @@ def test_capture_actual_module_record_and_complete_version_tree(tmp_path, monkey
 def test_capture_refuses_ambiguous_or_missing_critical_module(tmp_path, monkeypatch):
     selected, *_ = fixture_selection(tmp_path, monkeypatch)
     folder = Path(runtime.RELEASES) / selected["release_id"]
+    for item in selected["files"]:
+        if item["role"] in runtime.SEPARATE_RECORD_ROLES:
+            Path(item["path"]).unlink()
     site = folder / "lib/python3.12/site-packages"
-    site.mkdir(parents=True)
+    site.mkdir(parents=True, exist_ok=True)
     record = site / "zog-0.1.0.dist-info/RECORD"
     record.parent.mkdir()
     record.write_bytes(b"zog/box_control/build_jobs.py,sha256=digest,5\n")
