@@ -328,7 +328,7 @@ def test_capture_actual_module_record_and_complete_version_tree(tmp_path, monkey
     assert evidence["execution_authorized"] is False
     assert evidence["fonts_lane_enabled"] is False
     assert evidence["installed_tree_sha256"] == runtime._retained_tree_sha256(folder)
-    assert evidence["file_count"] >= 8
+    assert evidence["file_count"] >= 6
     for role, rel in modules.items():
         selected_file = evidence["modules"][role]
         assert selected_file["path"] == str(site / rel)
@@ -381,3 +381,37 @@ def test_capture_requires_root_and_immutable_release_id(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime.os, "geteuid", lambda: 0)
     with pytest.raises(runtime.RuntimeHold, match="version ID"):
         runtime.capture_installed_inventory("../selected")
+
+
+
+def test_combined_zog_record_selection_is_accepted_but_partial_records_hold(
+        tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    for role in ("root-control-record", "box-control-record", "image-build-record"):
+        selected["files"] = [f for f in selected["files"] if f["role"] != role]
+    aggregate = {
+        "role": "zog-record",
+        "path": str(Path(runtime.RELEASES) / selected["release_id"]
+                    / "lib/python3.12/site-packages/zog-0.1.0.dist-info/RECORD"),
+        "size": 11, "sha256": _sha(b"record-here"),
+    }
+    selected["files"].append(aggregate)
+    assert runtime.validate(selected) is selected
+    partial = copy.deepcopy(selected)
+    partial["files"].pop()
+    partial["files"].append({
+        "role": "root-control-record", "path": aggregate["path"],
+        "size": 11, "sha256": aggregate["sha256"],
+    })
+    with pytest.raises(runtime.RuntimeHold, match="RECORD closure"):
+        runtime.validate(partial)
+
+
+def test_installed_module_paths_cannot_be_forged_by_role_label(tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    item = next(x for x in selected["files"]
+                if x["role"] == "box-control-module")
+    item["path"] = str(Path(runtime.RELEASES) / selected["release_id"]
+                       / "lib/foreign-code.py")
+    with pytest.raises(runtime.RuntimeHold, match="critical module path"):
+        runtime.validate(selected)
