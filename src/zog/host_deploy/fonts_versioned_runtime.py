@@ -173,10 +173,10 @@ def validate(selection):
     original_runtime = _path(rollback["original_runtime"], "original runtime")
     if original_runtime == saved_root or original_runtime.startswith(ROLLBACK + "/"):
         raise RuntimeHold("original runtime path aliases rollback custody")
-    chain = rollback["python_interpreter_chain"]
-    if (type(chain) is not list or not chain or len(chain) > 16 or
-            chain[0].get("path") != legacy_rollback.EXTERNAL_PYTHON):
-        raise RuntimeHold("invalid external Python interpreter attestation")
+    try:
+        legacy_rollback.validate_chain(rollback["python_interpreter_chain"])
+    except legacy_rollback.LegacyHold as error:
+        raise RuntimeHold(str(error)) from error
     if saved_root == folder or saved_root.startswith(folder + "/"):
         raise RuntimeHold("rollback runtime aliases selected version")
     lane = _exact(selection["lane"],
