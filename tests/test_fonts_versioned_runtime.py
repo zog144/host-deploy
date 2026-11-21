@@ -60,11 +60,7 @@ def fixture_selection(tmp_path, monkeypatch):
     selected = {
         "schema": runtime.SCHEMA, "contract": runtime.CONTRACT,
         "release_id": release,
-        "sources": {
-            role: {"revision": hexchar * 40, "source_tree_sha256": hexchar * 64}
-            for role, hexchar in (("root-control", "b"), ("box-control", "c"),
-                                  ("image-build", "d"))
-        },
+        "sources": copy.deepcopy(runtime.SELECTED_SOURCES),
         "service": {
             "name": service_name,
             "staged_unit": str(staged),
@@ -230,6 +226,10 @@ def test_exact_clean_git_revision_and_sha256_tree_are_both_required(
         _make_checkout(path)
         selected["sources"][role] = runtime.source_tree_sha256(path)
         checkouts[role] = path
+    # This isolated Git-tree unit test uses synthetic repositories. Only its
+    # explicit source tuple is changed, not the production pins.
+    monkeypatch.setattr(runtime, "SELECTED_SOURCES",
+                        copy.deepcopy(selected["sources"]))
     assert runtime.inspect_sources(selected, checkouts)["execution_authorized"] is False
     dirty = checkouts["root-control"]
     (dirty / "module.py").write_text("changed\\n")
@@ -258,3 +258,36 @@ def test_external_manifest_pin_is_required_for_local_root_inspection(
     path.write_text("{}")
     with pytest.raises(runtime.RuntimeHold, match="differ"):
         runtime.load_reviewed_selection(str(path), _sha(data))
+
+
+def test_exact_reviewed_source_tuple_is_required_by_selection(tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    assert selected["sources"] == runtime.SELECTED_SOURCES
+    expected = {
+        "root-control": "58b5a94311d771bb1c5f4c3e9c6191b44d6565c9",
+        "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
+        "image-build": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
+    }
+    assert {k: v["revision"] for k, v in runtime.SELECTED_SOURCES.items()} == expected
+    for role in sorted(expected):
+        swapped = copy.deepcopy(selected)
+        swapped["sources"][role]["revision"] = "f" * 40
+        with pytest.raises(runtime.RuntimeHold, match="pinned tuple"):
+            runtime.validate(swapped)
+        corrupted_tree = copy.deepcopy(selected)
+        corrupted_tree["sources"][role]["source_tree_sha256"] = "f" * 64
+        with pytest.raises(runtime.RuntimeHold, match="pinned tuple"):
+            runtime.validate(corrupted_tree)
+
+
+def test_installed_inventory_requires_bound_complete_tree_and_record(tmp_path, monkeypatch):
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    changed = copy.deepcopy(selection)
+    changed["installed_tree_sha256"] = "not-a-digest"
+    with pytest.raises(runtime.RuntimeHold, match="selected version complete installed tree"):
+        runtime.validate(changed)
+    changed = copy.deepcopy(selection)
+    changed["files"] = [f for f in changed["files"]
+                        if f["role"] != "image-build-record"]
+    with pytest.raises(runtime.RuntimeHold, match="incomplete"):
+        runtime.validate(changed)
