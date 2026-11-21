@@ -12,15 +12,37 @@ No certbot-build-owner, certbot-build-worker, synthetic UID/GID,
 User/Group selector from RPC, new account, direct SSM compilation or root
 build is allowed.
 
-**Root-control #48 remains a blocker:** the inspected combined root-control
-PR #51 source at d9dfd6c02a5a96750f1213bf663cdceab72f1efd still
-permits root for finite-build execution and uses the daemon process
-identity in some paths. That cannot be first-Fonts execution authority.
-Box-control PR #21's proposed build_contract: zog-build-inherited-peer-v2
-and the image-build successor are candidates until the authenticated peer
-to nonroot child contract is accepted and verified. The historical
-schema-4 lane, UID-required image-build revision and associated hashes
-remain evidence only. No production release ID or digest is invented.
+**The reviewed source candidate is now root-control PR #55**, box-control's
+inherited-peer-v2 successor and image-build's matching producer. Root-control
+PR #55 adds kernel SO_PEERCRED-bound, nonroot build ownership and a native
+child-observation contract in source. These revisions are not yet proof of
+a selected, installed systemd service or an actually running nonroot
+compiler child. The historical schema-4 lane, UID-required producer and
+associated hashes remain evidence only.
+
+## Exact pinned candidate — 2026-11-21
+
+The supported source tuple is **exactly**:
+
+| Component | Git commit | Complete clean tracked source-tree SHA-256 |
+| --- | --- | --- |
+| root-control | `58b5a94311d771bb1c5f4c3e9c6191b44d6565c9` | `0ffddcfb39a9cc5295cc67196362e2dcb57301ed70199c502af1203e20c2d097` |
+| box-control | `ad61fa6a4e9c3176149720868cb008e0512dbec9` | `9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00` |
+| image-build | `ff968a431dd2067e7d0e1f17d6e547f2779f647a` | `e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310` |
+
+The hashes were measured by the exact-revision clean-checkout
+`source_tree_sha256()` algorithm on GitHub Actions on November 21, 2026.
+PR #35's `SELECTED_SOURCES`, manifest validator and CI now reject any other
+commit or clean-tree digest. Changing a tuple requires another reviewed code
+revision; it cannot be selected through an untrusted runtime manifest.
+
+**Installed hashes are not yet available.** No versioned combined runtime,
+actual installed module and distribution RECORD hashes, complete installed
+tree digest, selected service unit or independent rollback inventory has
+been attested on the target Host. Never fill those manifest fields with
+source Git hashes, CI mock-install hashes or zeros. Native staging and
+readback must supply the exact installed values. Thus the Fonts lane
+remains disabled even though the source pins above are fixed.
 
 ## Supported exact version selection
 
@@ -39,13 +61,18 @@ read-only selection with these required fields.
   /opt/zog/compiler-runtime/versions/<release_id>/bin/. The executable
   must be included in the immutable installed-file inventory.
 - files: named absolute paths/byte sizes/SHA-256 of the installed controller
-  executable, root-control/box-control/image-build modules and all three
-  installed distribution RECORDs. List any additional dependency/launcher
-  bytes required by the actual selected runtime. The independently reviewed
-  installed_tree_sha256 additionally binds **every file, directory and mode**
-  in the entire selected immutable version, catching omitted dependency
-  bytes, additional mutable files or symlinks. Source review must verify
-  the complete installed distribution closure, not just the minimum six.
+  executable, three critical **real module paths**
+  (`zog/root_control/build.py`, `zog/box_control/build_jobs.py`,
+  `zog/image_build/box_control_adapter.py`) and distribution RECORDs.
+  The selection accepts either one `zog-record` for the real combined Zog
+  wheel, or **all three** component-specific RECORD roles. Mixed/partial
+  RECORD closures, bogus module paths, duplicate role names or ambiguous
+  installed locations fail. Include all additional dependency/launcher bytes
+  required by the actual selected runtime. The reviewed
+  `installed_tree_sha256` binds **every file, directory and mode** in the
+  entire selected immutable version, catching omitted dependencies, extra
+  mutable bytes and symlinks. Merely providing Git source hashes cannot
+  satisfy installed-module or RECORD attestation.
 - rollback: a protected independent copy of the original unit and old
   runtime tree under /opt/zog/compiler-runtime/rollback/<release_id>/,
   with full original runtime tree SHA-256. Any unsafe, symlinked, aliased,
@@ -73,9 +100,26 @@ separately installed component or mutable branch may substitute.
    /opt/zog/compiler-runtime/versions/<release_id>/, not in the currently
    selected venv. Stage a static unit with an ExecStart naming only that
    release's immutable executable. Do not start or enable the unit.
-3. Construct the versioned selection JSON from reviewed source and actual
-   installed byte readback, including backup inventory. Save it as a
-   root-owned, non-group-writable file under
+3. Under the protected root owner, *read* the staged release's real
+   byte inventory with:
+
+   ~~~sh
+   host-deploy fonts-runtime-inventory --release-id <release_id>
+   ~~~
+
+   This captures each critical module path, SHA-256 and size, all actual
+   installed distribution RECORD hashes, and the complete immutable
+   runtime inventory/tree SHA-256. It rejects missing or ambiguous modules,
+   missing RECORDs, linked/mutable/foreign-owned files and unsafe directories.
+   The response deliberately declares `independently_reviewed: false`,
+   `execution_authorized: false` and `fonts_lane_enabled: false`. It is
+   evidence only, not an approved installed tuple.
+
+   Construct the versioned selection JSON from this actual evidence,
+   reviewed clean source pins and independently verified **existing** service
+   and backup unit bytes. Do not guess the installed byte hashes or copy a
+   hypothetical source package inventory into the installed selection.
+   Save the canonical JSON as a root-owned, non-group-writable file under
    /var/lib/zog/compiler-runtime/selections/<release_id>.json.
    Independently review the SHA-256 of the entire JSON *file*; calculating
    a hash of whatever happens to be installed is not independent approval.
@@ -134,7 +178,8 @@ installed-byte/RECORD hashes, unit/rollback selection, accepted nonroot
 peer-derived root-control contract (root explicitly rejected), real child
 EUID/EGID and cgroup, retained Project/lane/pin provenance and separately
 authorized lane activation all pass. No root compilation can be admitted.
-The current draft root-control PR #51 does not pass this gate.
+The selected root-control PR #55 source is only a candidate until installed
+native SO_PEERCRED, actual child EUID/EGID and cgroup checks pass.
 
 ## CI and native handoff boundary
 
