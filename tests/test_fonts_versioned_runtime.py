@@ -92,6 +92,11 @@ def fixture_selection(tmp_path, monkeypatch):
             "runtime_tree_sha256": (runtime._retained_tree_sha256(original)
                                     if os.geteuid() == 0 else "f" * 64),
         },
+        "composition": {
+            "original_dropins": [], "selected_dropins": [],
+            "original_effective": {key: "" for key in runtime.composition.KEYS},
+            "selected_effective": {key: "" for key in runtime.composition.KEYS},
+        },
         "files": files,
         "installed_tree_sha256": (runtime._retained_tree_sha256(folder)
                                   if os.geteuid() == 0 else "e" * 64),
