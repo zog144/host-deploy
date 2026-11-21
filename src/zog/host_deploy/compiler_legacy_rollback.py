@@ -40,7 +40,7 @@ def _owner(info, root):
 
 def _sha_file(path, info):
     need(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
-         0 < info.st_size <= MAX_SIZE, "hard-linked, empty or oversized runtime file")
+         0 <= info.st_size <= MAX_SIZE, "hard-linked or oversized runtime file")
     sha = hashlib.sha256()
     count = 0
     with path.open("rb") as handle:
@@ -93,6 +93,7 @@ def interpreter_chain(root=Path("/")):
             current = nxt
         else:
             record = _sha_file(observed, info)
+            need(record["size"] > 0, "external Python executable is empty")
             result.append({"path": str(current), "type": "file",
                            "mode": stat.S_IMODE(info.st_mode),
                            "uid": info.st_uid if root == Path("/") else 0,
