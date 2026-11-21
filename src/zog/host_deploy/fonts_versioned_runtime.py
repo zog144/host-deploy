@@ -142,14 +142,13 @@ def validate(selection):
                    service["staged_sha256"]):
             raise composition.CompositionHold("selected fragment review binding differs")
         selected_start = comp["selected_effective"]["ExecStart"]
-        match = re.search(r"(?:^|[ ;])path=([^ ;]+)", selected_start)
-        if match is None or match.group(1) != exe:
+        if len(selected_start) != 1 or selected_start[0]["path"] != exe:
             raise composition.CompositionHold(
-                "reviewed manager-effective ExecStart is not the versioned executable")
+                "reviewed stable ExecStart executable is not the versioned executable")
         # Prior compiler /opt runtime may be preserved for rollback, but may
         # not silently remain in the new unit's selected command/restrictions.
         for property_value in comp["selected_effective"].values():
-            if "/opt/zog/fonts-controller-d9dfd6c0-20261114" in property_value:
+            if "/opt/zog/fonts-controller-d9dfd6c0-20261114" in str(property_value):
                 raise composition.CompositionHold(
                     "old compiler runtime remains in selected effective unit")
     except composition.CompositionHold as error:
@@ -549,16 +548,24 @@ def inspect_installed(selection, *, phase="staged"):
         composition.verify(saved_dir, comp["original_dropins"])
         composition.verify(original_dir, comp[
             "original_dropins" if phase == "staged" else "selected_dropins"])
-        # The complete composition is checked before interpreting ExecStart.
-        dropins = [ (staged_dir / entry["name"]).read_bytes()
-                    for entry in comp["selected_dropins"]]
-        selected_command = composition.composed_exec(
-            Path(service["staged_unit"]).read_bytes(), dropins)
-        if selected_command.split()[0] != service["exec_start"]:
-            raise composition.CompositionHold(
-                "effective selected ExecStart is not the reviewed executable")
+        # Compare the configured executable, complete argv, *and* stable
+        # execution flags for both ExecStart and ExecStartPre. The source
+        # composition has already been hash/ownership checked above.
+        selected_dropin_bytes = [
+            (staged_dir / entry["name"]).read_bytes()
+            for entry in comp["selected_dropins"]]
+        composition.verify_composed(
+            Path(service["staged_unit"]).read_bytes(),
+            selected_dropin_bytes, comp["selected_effective"])
+        original_dropin_bytes = [
+            (saved_dir / entry["name"]).read_bytes()
+            for entry in comp["original_dropins"]]
+        composition.verify_composed(
+            Path(rollback["saved_unit"]).read_bytes(),
+            original_dropin_bytes, comp["original_effective"])
+        loaded_evidence = None
         if service["active_unit"].startswith("/etc/systemd/system/"):
-            composition.verify_loaded(
+            loaded_evidence = composition.verify_loaded(
                 service["name"], fragment=service["active_unit"],
                 names=[entry["name"] for entry in
                        comp["original_dropins" if phase == "staged"
@@ -590,6 +597,10 @@ def inspect_installed(selection, *, phase="staged"):
             "selection_sha256": selection_sha256(selection),
             "source_revisions": {k: v["revision"] for k, v in selection["sources"].items()},
             "rollback_preserved": True, "fonts_lane_enabled": False,
+            # systemd PID, timing and exit status are dynamic readback,
+            # explicitly outside the approved selection SHA256.
+            "manager_process_metadata": (
+                loaded_evidence["process_metadata"] if loaded_evidence else None),
             "child_identity_verified": False, "execution_authorized": False}
 
 
