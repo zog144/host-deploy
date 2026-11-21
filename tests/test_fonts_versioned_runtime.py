@@ -115,12 +115,21 @@ def fixture_selection(tmp_path, monkeypatch):
                 "path": str(staged), "sha256": _sha(new_bytes),
                 "size": len(new_bytes), "mode": 0o644, "uid": 0, "gid": 0},
             "original_dropins": [], "selected_dropins": [],
-            "original_effective": {key: "" for key in runtime.composition.KEYS},
+            "original_effective": {
+                **{key: "" for key in runtime.composition.KEYS
+                   if key not in ("ExecStart", "ExecStartPre")},
+                "ExecStart": [{"path": "/old/accepted/controller",
+                               "argv": "/old/accepted/controller",
+                               "flags": {"ignore_errors": "no", "flags": ""}}],
+                "ExecStartPre": [],
+            },
             "selected_effective": {
-                key: ("{ path=" + str(selected_exec) +
-                      " ; argv[]=" + str(selected_exec) + " ; }"
-                      if key == "ExecStart" else "")
-                for key in runtime.composition.KEYS
+                **{key: "" for key in runtime.composition.KEYS
+                   if key not in ("ExecStart", "ExecStartPre")},
+                "ExecStart": [{"path": str(selected_exec),
+                               "argv": str(selected_exec),
+                               "flags": {"ignore_errors": "no", "flags": ""}}],
+                "ExecStartPre": [],
             },
         },
         "files": files,
@@ -526,7 +535,14 @@ def test_ordered_execstart_resets_require_final_compiler_runtime():
 
 def test_dropin_set_must_be_complete_and_duplicate_free():
     c = runtime.composition
-    fields = {key: "" for key in c.KEYS}
+    fields = {key: "" for key in c.KEYS
+              if key not in ("ExecStart", "ExecStartPre")}
+    fields["ExecStart"] = [{
+        "path": "/opt/reviewed/bin/controller",
+        "argv": "/opt/reviewed/bin/controller",
+        "flags": {"ignore_errors": "no", "flags": ""},
+    }]
+    fields["ExecStartPre"] = []
     fragment = {"path": "/etc/systemd/system/zog-root-control.service",
                 "sha256": "a" * 64, "size": 18,
                 "mode": 0o644, "uid": 0, "gid": 0}
@@ -545,31 +561,168 @@ def test_dropin_set_must_be_complete_and_duplicate_free():
         c.validate(bad)
 
 
+def _systemd_command(path, argv=None, *, pid=0, start="not set",
+                     stop="not set", ignore_errors="no", flags=""):
+    argv = argv if argv is not None else path
+    extra = (" ; flags=" + flags) if flags else ""
+    return ("{ path=" + path + " ; argv[]=" + argv
+            + " ; ignore_errors=" + ignore_errors + extra
+            + " ; start_time=[" + start + "]"
+            + " ; stop_time=[" + stop + "]"
+            + " ; pid=" + str(pid) + " ; code=(null) ; status=0 }")
+
+
 def test_manager_loaded_effective_properties_and_foreign_dropins():
     c = runtime.composition
     service = "zog-certbot-seed-root.service"
     fragment = Path("/etc/systemd/system") / service
     original = {
-        "ExecStart": "{ path=/opt/selected/bin/root-control ; argv[]=/opt/selected/bin/root-control ; }",
-        "ExecStartPre": "one-guard", "ReadOnlyPaths": "/state /projects",
+        "ExecStart": _systemd_command("/opt/selected/bin/root-control", pid=113),
+        "ExecStartPre": _systemd_command(
+            "/usr/bin/test", "/usr/bin/test -d /state", pid=112),
+        "ReadOnlyPaths": "/state /projects",
         "Requires": "b.mount a.mount", "After": "b.mount a.mount",
     }
+    stable, observed = c.normalize_loaded_commands(original)
+    assert observed["ExecStart"][0]["pid"] == "113"
+    assert observed["ExecStartPre"][0]["pid"] == "112"
+
     def runner(args, **kwargs):
         fields = dict(original, FragmentPath=str(fragment),
                       DropInPaths=str(Path(str(fragment) + ".d") / "70-fonts.conf"),
                       LoadState="loaded")
         return type("Result", (), {"returncode": 0,
             "stdout": "".join(k + "=" + v + "\n" for k,v in fields.items())})()
-    assert c.verify_loaded(service, fragment=fragment, names=["70-fonts.conf"],
-                           expected=dict(original, Requires="a.mount b.mount",
-                                         After="a.mount b.mount"), runner=runner)
+
+    expected = {**stable, "Requires": "a.mount b.mount",
+                "After": "a.mount b.mount"}
+    checked = c.verify_loaded(service, fragment=fragment,
+                              names=["70-fonts.conf"], expected=expected,
+                              runner=runner)
+    assert checked["process_metadata"] == observed
     with pytest.raises(c.CompositionHold, match="drop-ins"):
         c.verify_loaded(service, fragment=fragment, names=[],
-                        expected=original, runner=runner)
+                        expected=expected, runner=runner)
     with pytest.raises(c.CompositionHold, match="ReadOnlyPaths"):
-        c.verify_loaded(service, fragment=fragment, names=["70-fonts.conf"],
-                        expected=dict(original, ReadOnlyPaths="/old"), runner=runner)
+        c.verify_loaded(service, fragment=fragment,
+                        names=["70-fonts.conf"],
+                        expected={**expected, "ReadOnlyPaths": "/old"},
+                        runner=runner)
 
+
+def test_changed_pid_or_timestamps_pass_changed_argv_and_flags_fail():
+    """Both manager commands pin executable/argv/flags, not process execution."""
+    c = runtime.composition
+    service = "zog-certbot-seed-root.service"
+    fragment = Path("/etc/systemd/system") / service
+    path = str(fragment)
+    baseline = {
+        "ExecStart": _systemd_command(
+            "/opt/staged/bin/root-control",
+            "/opt/staged/bin/root-control --serve",
+            pid=501, start="Sat 2026-11-21 09:00:00 AST",
+            stop="Sat 2026-11-21 09:02:00 AST"),
+        "ExecStartPre": _systemd_command(
+            "/usr/bin/test", "/usr/bin/test -d /state",
+            pid=500, start="Sat 2026-11-21 08:59:59 AST",
+            stop="Sat 2026-11-21 09:00:00 AST"),
+        "ReadOnlyPaths": "/state", "Requires": "state.mount",
+        "After": "state.mount",
+    }
+    stable, original_metadata = c.normalize_loaded_commands(baseline)
+    manager = dict(baseline)
+
+    def runner(args, **kwargs):
+        result = dict(manager, FragmentPath=path, DropInPaths="", LoadState="loaded")
+        return type("Result", (), {
+            "returncode": 0,
+            "stdout": "".join(k + "=" + v + "\n" for k, v in result.items()),
+        })()
+
+    first = c.verify_loaded(service, fragment=fragment, names=[],
+                            expected=stable, runner=runner)
+    manager["ExecStart"] = _systemd_command(
+        "/opt/staged/bin/root-control",
+        "/opt/staged/bin/root-control --serve", pid=701,
+        start="Sat 2026-11-21 12:00:00 AST",
+        stop="Sat 2026-11-21 12:02:00 AST")
+    manager["ExecStartPre"] = _systemd_command(
+        "/usr/bin/test", "/usr/bin/test -d /state", pid=700,
+        start="Sat 2026-11-21 11:59:59 AST",
+        stop="Sat 2026-11-21 12:00:00 AST")
+    second = c.verify_loaded(service, fragment=fragment, names=[],
+                             expected=stable, runner=runner)
+    assert second["effective"] == first["effective"] == stable
+    assert second["process_metadata"] != original_metadata
+    assert second["process_metadata"] != first["process_metadata"]
+
+    manager["ExecStart"] = _systemd_command(
+        "/opt/staged/bin/root-control",
+        "/opt/staged/bin/root-control --different", pid=701)
+    with pytest.raises(c.CompositionHold, match="ExecStart"):
+        c.verify_loaded(service, fragment=fragment, names=[],
+                        expected=stable, runner=runner)
+    manager["ExecStart"] = baseline["ExecStart"]
+    manager["ExecStartPre"] = _systemd_command(
+        "/usr/bin/test", "/usr/bin/test -f /state", pid=700)
+    with pytest.raises(c.CompositionHold, match="ExecStartPre"):
+        c.verify_loaded(service, fragment=fragment, names=[],
+                        expected=stable, runner=runner)
+    manager["ExecStartPre"] = baseline["ExecStartPre"]
+    manager["ExecStart"] = _systemd_command(
+        "/opt/staged/bin/root-control",
+        "/opt/staged/bin/root-control --serve",
+        ignore_errors="yes", pid=900)
+    with pytest.raises(c.CompositionHold, match="ExecStart"):
+        c.verify_loaded(service, fragment=fragment, names=[],
+                        expected=stable, runner=runner)
+    manager["ExecStart"] = baseline["ExecStart"]
+    manager["ExecStartPre"] = _systemd_command(
+        "/usr/bin/test", "/usr/bin/test -d /state",
+        flags="privileged", pid=900)
+    with pytest.raises(c.CompositionHold, match="ExecStartPre"):
+        c.verify_loaded(service, fragment=fragment, names=[],
+                        expected=stable, runner=runner)
+
+
+def test_source_composition_pins_prestart_argv_not_just_main_executable():
+    c = runtime.composition
+    fragment = b"[Service]\nExecStart=/old/controller\nExecStartPre=/usr/bin/test -d /state\n"
+    dropins = [
+        b"[Service]\nExecStart=\nExecStart=/opt/new/root-control --serve\n",
+        b"[Service]\nExecStartPre=\nExecStartPre=/usr/bin/test -d /approved\n",
+    ]
+    expected = {
+        "ExecStart": [{
+            "path": "/opt/new/root-control",
+            "argv": "/opt/new/root-control --serve",
+            "flags": {"ignore_errors": "no", "flags": ""},
+        }],
+        "ExecStartPre": [{
+            "path": "/usr/bin/test",
+            "argv": "/usr/bin/test -d /approved",
+            "flags": {"ignore_errors": "no", "flags": ""},
+        }],
+    }
+    assert c.verify_composed(fragment, dropins, expected)
+    altered = copy.deepcopy(expected)
+    altered["ExecStartPre"][0]["argv"] = "/usr/bin/test -e /approved"
+    with pytest.raises(c.CompositionHold, match="ExecStartPre"):
+        c.verify_composed(fragment, dropins, altered)
+
+
+def test_systemd_command_parser_fails_closed_on_unknown_or_missing_flags():
+    c = runtime.composition
+    for bad in (
+        "{ path=/bin/test ; argv[]=/bin/test ; ignore_errors=no ; weird=1 ; }",
+        "{ path=/bin/test ; argv[]=/bin/test ; pid=5 ; }",
+        "{ path=/bin/test ; argv[]=/bin/test ; ignore_errors=no ; } { }",
+    ):
+        with pytest.raises(c.CompositionHold):
+            c.normalize_loaded_commands({
+                **{"Requires": "", "After": "", "ReadOnlyPaths": ""},
+                "ExecStart": bad, "ExecStartPre": "",
+            })
 
 
 def test_legacy_rollback_four_literal_venv_links_and_copy(tmp_path):
