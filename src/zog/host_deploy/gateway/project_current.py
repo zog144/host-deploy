@@ -115,63 +115,7 @@ def validate(value):
 
 # Deliberately no source SHA or pin value here. They are read on the Project
 # Host when the one durable SSM attempt executes. No cross-Project search.
-_RUN = r'''
-import hashlib, json, os, re, subprocess, sys, tempfile
-from pathlib import Path
-
-project = Path(sys.argv[1])
-controller = Path(sys.argv[2])
-python = sys.argv[3]
-operation_id = sys.argv[4]
-template_digest = sys.argv[5]
-source = project / "source"
-state = project / "state"
-request_path = project / "gateway-requests" / operation_id / "request.json"
-try:
-    command = subprocess.run(
-        ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
-        capture_output=True, text=True, timeout=30, check=True,
-    )
-    revision = command.stdout.strip()
-    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-        raise ValueError("Project has no usable current checkout")
-    request = {
-        "schema": "image-build-remote-operation-v1",
-        "operation_id": operation_id,
-        "operation": "pipeline.submit",
-        "source": {"repository": "zog144/image-build", "revision": revision},
-        "arguments": {"mode": "image",
-                      "targets": ["libpng-final", "freetype-final", "fontconfig-final"]},
-    }
-    encoded = (json.dumps(request, sort_keys=True, separators=(",", ":"))
-               + "\n").encode("ascii")
-    request_path.parent.mkdir(parents=True, exist_ok=True)
-    if request_path.exists() or request_path.is_symlink():
-        if request_path.is_symlink() or request_path.read_bytes() != encoded:
-            raise ValueError("existing producer operation belongs to another checkout")
-    else:
-        descriptor, temporary = tempfile.mkstemp(dir=request_path.parent)
-        try:
-            os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(encoded)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, request_path)
-            directory = os.open(request_path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-    # A site-installed regular 'zog' can eclipse the selected Project's
-    # implicit 'src/zog' namespace even if PYTHONPATH starts with source/src.
-    # Run an isolated child with an explicit namespace and verify the module's
-    # actual file before invoking the producer. Keep other installed zog
-    # components available after the selected Project and its companions.
-    bootstrap = r"""
+_PROJECT_IMPORT_BOOTSTRAP = r'''
 import importlib
 import importlib.machinery
 import sys
@@ -230,11 +174,105 @@ module = importlib.import_module("zog.image_build.remote_operations")
 if (Path(module.__file__).resolve(strict=True) !=
         expected_module.resolve(strict=True)):
     raise SystemExit("imported image-build executable differs from selected Project")
-sys.argv = [str(expected_module), *sys.argv[3:]]
-module.main()
-"""
+# Import-only readiness takes the *identical* namespace and module-origin
+# path used for a real Project-current submission. It is deliberately
+# nonmutating: no request creation, producer main(), pipeline or controller job.
+if sys.argv[3:] == ["--inspect-only"]:
+    import json
+    def companion(name, root):
+        package = root / "zog" / name
+        if not package.is_dir():
+            return {"present": False}
+        expected = package / "__init__.py"
+        if not expected.is_file() or expected.is_symlink():
+            raise SystemExit("selected Project " + name + " companion is incomplete")
+        found = importlib.machinery.PathFinder.find_spec(
+            "zog." + name, namespace.__path__,
+        )
+        if (found is None or found.origin is None
+                or Path(found.origin).resolve(strict=True) !=
+                   expected.resolve(strict=True)):
+            raise SystemExit("selected Project " + name + " companion was shadowed")
+        return {"present": True, "origin": str(expected)}
+    report = {
+        "schema": "host-deploy-project-current-import-readiness-v1",
+        "source_root": str(source),
+        "project_root": str(project),
+        "python_executable": sys.executable,
+        "image_build_package": str(expected_init),
+        "remote_operations": str(expected_module),
+        "companions": {
+            "build-record": companion("build_record", source_roots[1]),
+            "box-control": companion("box_control", source_roots[2]),
+        },
+        "mutation": False,
+        "execution_authorized": False,
+    }
+    print(json.dumps(report, sort_keys=True))
+else:
+    sys.argv = [str(expected_module), *sys.argv[3:]]
+    module.main()'''
+
+
+_RUN = r'''
+import hashlib, json, os, re, subprocess, sys, tempfile
+from pathlib import Path
+
+project = Path(sys.argv[1])
+controller = Path(sys.argv[2])
+python = sys.argv[3]
+operation_id = sys.argv[4]
+template_digest = sys.argv[5]
+source = project / "source"
+state = project / "state"
+request_path = project / "gateway-requests" / operation_id / "request.json"
+try:
+    command = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    revision = command.stdout.strip()
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError("Project has no usable current checkout")
+    request = {
+        "schema": "image-build-remote-operation-v1",
+        "operation_id": operation_id,
+        "operation": "pipeline.submit",
+        "source": {"repository": "zog144/image-build", "revision": revision},
+        "arguments": {"mode": "image",
+                      "targets": ["libpng-final", "freetype-final", "fontconfig-final"]},
+    }
+    encoded = (json.dumps(request, sort_keys=True, separators=(",", ":"))
+               + "\n").encode("ascii")
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    if request_path.exists() or request_path.is_symlink():
+        if request_path.is_symlink() or request_path.read_bytes() != encoded:
+            raise ValueError("existing producer operation belongs to another checkout")
+    else:
+        descriptor, temporary = tempfile.mkstemp(dir=request_path.parent)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, request_path)
+            directory = os.open(request_path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    # A site-installed regular 'zog' can eclipse the selected Project's
+    # implicit 'src/zog' namespace even if PYTHONPATH starts with source/src.
+    # Run an isolated child with an explicit namespace and verify the module's
+    # actual file before invoking the producer. Keep other installed zog
+    # components available after the selected Project and its companions.
+    bootstrap = __ZOG_PROJECT_IMPORT_BOOTSTRAP__
     result = subprocess.run(
-        [python, "-I", "-c", bootstrap, str(source), str(project),
+        [python, "-I", "-B", "-c", bootstrap, str(source), str(project),
          "--repository-root", str(source),
          "--source-repository", "zog144/image-build",
          "--source-revision", revision,
@@ -273,6 +311,24 @@ module.main()
 except Exception as error:
     raise SystemExit("configured Project build operation failed: " + str(error)) from error
 '''
+_RUN = _RUN.replace("__ZOG_PROJECT_IMPORT_BOOTSTRAP__", repr(_PROJECT_IMPORT_BOOTSTRAP))
+
+
+
+def read_only_import_script(project_root, python_executable):
+    """Use the actual Project-current import bootstrap without writing a request.
+
+    The selected Project source comes before local companions, which come
+    before installed third-party packages and remaining Zog components.
+    This command is safe for Work's normal readiness inspection; it does not
+    call remote_operations.main() or submit anything to box/root-control.
+    """
+    project = _path(project_root)
+    python = image_build_lanes.validate_python_executable(python_executable)
+    return " ".join(shlex.quote(item) for item in (
+        python, "-I", "-B", "-c", _PROJECT_IMPORT_BOOTSTRAP,
+        str(project / "source"), str(project), "--inspect-only",
+    ))
 
 
 def remote_script(value):
