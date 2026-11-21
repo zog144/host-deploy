@@ -95,7 +95,12 @@ def fixture_selection(tmp_path, monkeypatch):
         "composition": {
             "original_dropins": [], "selected_dropins": [],
             "original_effective": {key: "" for key in runtime.composition.KEYS},
-            "selected_effective": {key: "" for key in runtime.composition.KEYS},
+            "selected_effective": {
+                key: ("{ path=" + str(selected_exec) +
+                      " ; argv[]=" + str(selected_exec) + " ; }"
+                      if key == "ExecStart" else "")
+                for key in runtime.composition.KEYS
+            },
         },
         "files": files,
         "installed_tree_sha256": (runtime._retained_tree_sha256(folder)
