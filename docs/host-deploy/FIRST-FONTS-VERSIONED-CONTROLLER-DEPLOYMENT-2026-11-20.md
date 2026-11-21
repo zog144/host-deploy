@@ -218,3 +218,64 @@ The previously selected strict `_retained_tree_sha256` continues to reject all l
 The canonical reviewed rollback selection now includes `original_runtime` (the existing untouched path), `legacy_inventory_schema`, `legacy_inventory_sha256`, the independently calculated `runtime_tree_sha256`, and the `python_interpreter_chain`. The external interpreter chain begins at `/usr/bin/python3.12` and records each literal symlink target, ending with complete final regular interpreter SHA-256, size, ownership and mode. It is inspected again at readback/restore; it must not be invented from a Git hash or an CI fixture. No original link is dereferenced, flattened or rewritten to fabricate a clean venv.
 
 The read-only inspector compares the true original runtime and protected rollback copy with the approved tree/inventory hashes and external Python chain, while still checking newly selected software with its independent no-symlink inventory. Native Work must approve the actual interpreter-chain evidence, installed RECORD and full unit/drop-in composition during an inactive maintenance window before performing selection/restore or reboot recovery. The Fonts lane remains disabled; no Host command, SSM, service start or compile was authorized by this source correction.
+
+## November 21 — stable systemd argv/flags, volatile process evidence
+
+**Owners:** host-deploy Regular PR #35 and host-install Regular PR #49.
+
+Raw systemctl show values for ExecStart and ExecStartPre contain two types of
+information. The executable path, complete manager-serialized argv[], and
+execution flags are stable unit configuration; pid, start_time, stop_time,
+code, and status are process observations and may legitimately change between
+starts or across a reboot. The raw manager string must NOT be an approval key.
+
+The reviewed composition.original_effective and composition.selected_effective
+now contain **stable typed command identities**, rather than raw manager
+strings. ExecStart is a list with exactly one command object; ExecStartPre is
+an ordered list of zero or more. Each command object has these exact keys:
+
+- path: absolute manager-reported executable path
+- argv: complete manager-serialized argv[] string
+- flags: a map with ignore_errors ("yes" or "no") and flags (the manager
+  execution flags string; empty when absent)
+
+ReadOnlyPaths, Requires and After remain reviewed string properties. The
+verifier compares complete ordered ExecStart and ExecStartPre commands after
+on-disk drop-in resets and against systemd's loaded effective identity. It
+rejects changed path, argv, flags, added/removed/reordered prestart commands,
+foreign drop-ins and unknown manager fields. A leading '-' unit command prefix
+requires matching manager ignore_errors=yes; unsupported flags fail closed.
+
+### Exact producer contract for host-install PR #49
+
+Host-deploy provides fonts_unit_composition.normalize_loaded_commands(raw).
+The input is the five raw systemd properties. It returns
+(stable_effective, process_metadata), where each ExecStart/ExecStartPre entry
+in stable_effective is the command object above; process_metadata is a
+separate per-command list of observed PID/time/exit fields.
+
+Host-install should persist stable_effective as original_loaded_properties
+in the preserved receipt, and as composition.original_effective in the
+independently reviewed selection. The selected_effective must be measured
+from the actual selected manager and pinned independently. Save
+process_metadata as a **separate** observational field such as
+original_loaded_process_metadata; an optional raw readback may also be
+retained as audit evidence, but neither should be compared or hashed into
+immutable selection approval.
+
+Update host-install compiler_controller_versioned_install.py functions
+_current_manager_composition(), preserve(), select() and restore() to use
+this normalized contract. The old raw ExecStart/ExecStartPre equality and
+single-argv regex cannot remain the admission check. The updated
+fonts_unit_composition.verify_loaded() reports both stable effective command
+selection and separate process_metadata; fonts_versioned_runtime.inspect_installed()
+returns manager_process_metadata outside the selection SHA-256.
+
+Regressions cover changed PIDs/timestamps on both commands passing, and
+changed main/prestart argv, execution flags or command count failing.
+The host-deploy source intentionally rejects the prior raw-string manifest
+format until host-install's matching producer is updated. Do not bypass the
+gate or activate the controller/Fonts lane during the source correction.
+
+No maintenance window, live unit switch, interrupted recovery, request
+replay, SSM submission or compiler work was performed.
