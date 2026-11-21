@@ -214,9 +214,15 @@ if sys.argv[3:] == ["--inspect-only"]:
         "execution_authorized": False,
     }
     print(json.dumps(report, sort_keys=True))
-else:
+elif (len(sys.argv[3:]) == 13
+      and [sys.argv[i] for i in (3, 5, 7, 9, 11, 13)] == [
+          "--repository-root", "--source-repository", "--source-revision",
+          "--package-dir", "--state-dir", "--controller-config",
+      ]):
     sys.argv = [str(expected_module), *sys.argv[3:]]
-    module.main()'''
+    module.main()
+else:
+    raise SystemExit("unsupported Project-current import invocation")'''
 
 
 _RUN = r'''
