@@ -135,7 +135,9 @@ def inventory(root, runtime, *, external=None):
                 else:
                     need(target_path.is_relative_to(runtime), "escaping relative symlink")
                 observed_links[rel] = target
-                entries.append({"type": "symlink", "path": rel, "target": target})
+                entries.append({"type": "symlink", "path": rel, "target": target,
+                                "uid": st.st_uid if root == Path("/") else 0,
+                                "gid": st.st_gid if root == Path("/") else 0})
                 if name in dirs:
                     dirs.remove(name)
             elif stat.S_ISDIR(st.st_mode):
