@@ -711,6 +711,25 @@ def test_source_composition_pins_prestart_argv_not_just_main_executable():
         c.verify_composed(fragment, dropins, altered)
 
 
+def test_unit_ignore_errors_prefix_must_match_manager_flags():
+    c = runtime.composition
+    fragment = (b"[Service]\nExecStart=/opt/new/root-control\n"
+                b"ExecStartPre=-/usr/bin/test -e /state\n")
+    raw = {
+        "ExecStart": _systemd_command("/opt/new/root-control"),
+        "ExecStartPre": _systemd_command(
+            "/usr/bin/test", "/usr/bin/test -e /state",
+            ignore_errors="yes"),
+        "ReadOnlyPaths": "", "Requires": "", "After": "",
+    }
+    stable, evidence = c.normalize_loaded_commands(raw)
+    assert c.verify_composed(fragment, [], stable)
+    changed = copy.deepcopy(stable)
+    changed["ExecStartPre"][0]["flags"]["ignore_errors"] = "no"
+    with pytest.raises(c.CompositionHold, match="execution flags"):
+        c.verify_composed(fragment, [], changed)
+
+
 def test_systemd_command_parser_fails_closed_on_unknown_or_missing_flags():
     c = runtime.composition
     for bad in (
