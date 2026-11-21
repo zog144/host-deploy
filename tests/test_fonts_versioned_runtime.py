@@ -639,6 +639,8 @@ def test_legacy_external_python_chain_and_change(tmp_path):
         legacy.interpreter_chain(tmp_path)
 
 
+@pytest.mark.skipif(os.geteuid() != 0,
+                    reason="selected-runtime invariant needs root-owned fixture")
 def test_selected_immutable_runtime_link_still_holds(tmp_path):
     runtime_dir = tmp_path / "selected"
     runtime_dir.mkdir()
