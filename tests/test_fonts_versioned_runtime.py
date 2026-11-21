@@ -379,6 +379,7 @@ def test_capture_requires_root_and_immutable_release_id(tmp_path, monkeypatch):
     with pytest.raises(runtime.RuntimeHold, match="trusted root"):
         runtime.capture_installed_inventory("a" * 32)
     monkeypatch.setattr(runtime.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(runtime.os, "getegid", lambda: 0)
     with pytest.raises(runtime.RuntimeHold, match="version ID"):
         runtime.capture_installed_inventory("../selected")
 
