@@ -197,3 +197,12 @@ choose the exact accepted implementation; a source CI pass is not admission.
 
 This PR does not change an actual Host, add accounts, enable the Fonts lane,
 install a controller, delete a retained operation or authorize compilation.
+
+
+## November 21: mandatory complete effective service composition
+
+Host-install PR #49 and host-deploy PR #35 now bind the entire compiler unit composition, not merely the main fragment. The actual service is zog-certbot-seed-root.service. Two active drop-ins, 60-boot-a-restrictive-import.conf and 70-fonts-combined-runtime.conf, reset ExecStart in lexical order. gateway-mounts.conf adds Requires/After, while issuer-persistence.conf adds ExecStartPre and ReadOnlyPaths. The original fragment hash is ee3284eb9c317092312bc632ac2eebb68c4c5d36684ad4b5e86c6dd129a2d72d. Full original per-drop-in hash evidence is in the host-install PR #49 handoff.
+
+The versioned selection now requires a composition object containing sorted exact original_dropins and selected_dropins (name, SHA-256, size, mode, root UID/GID), plus original_effective and selected_effective dictionaries covering ExecStart, ExecStartPre, ReadOnlyPaths, Requires, and After. The inspector requires the exact on-disk staged, rollback and active drop-in sets, parses ordered ExecStart= resets, and checks systemd's actually loaded FragmentPath, DropInPaths and effective properties. Foreign/changed drop-ins HOLD. Selected manager-effective path= must equal the version-owned executable and cannot retain the old /opt/zog/fonts-controller-d9dfd6c0-20261114 runtime.
+
+This deliberately tightens the uninstalled draft selection schema. Native installed hashes and the approved canonical selection-file hash must be established from new genuine staging evidence, not guessed. The original compiler service was active during observation. The four symlinks inside the old runtime remain a separate unwaived preservation HOLD; no rewrites or flattening are authorized. The source correction performs no Host command, service start, compilation or SSM operation.
