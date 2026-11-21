@@ -395,3 +395,138 @@ def test_project_current_fails_closed_if_selected_module_missing_despite_install
     assert output.returncode != 0
     assert "selected Project image-build module is missing" in output.stderr
     assert not sentinel.exists()
+
+
+def test_read_only_normal_import_uses_selected_project_companions_and_installed_deps(
+        project_with_installed_zog_shadow):
+    root, source, controller, interpreter, sentinel = project_with_installed_zog_shadow
+    site = Path(subprocess.check_output(
+        [str(interpreter), "-I", "-c",
+         "import site; print(site.getsitepackages()[0])"],
+        text=True,
+    ).strip())
+    # An unrelated third-party distribution remains installed and importable
+    # even while the globally installed regular 'zog' cannot shadow the
+    # Project's namespace.
+    (site / "ordinary_dependency.py").write_text("READY = True\n")
+    for role, prefix, marker in (
+        ("build_record", root / "companions/build-record/src", "project-build-record"),
+        ("box_control", root / "companions/box-control/box-control/src", "project-box-control"),
+    ):
+        package = prefix / "zog" / role
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("ORIGIN = " + repr(marker) + "\n")
+        installed = site / "zog" / role
+        installed.mkdir()
+        (installed / "__init__.py").write_text(
+            "raise RuntimeError('installed companion incorrectly selected')\n"
+        )
+    executable = source / "src/zog/image_build/remote_operations.py"
+    original = executable.read_text()
+    executable.write_text(
+        "import ordinary_dependency\n"
+        "from zog import build_record, box_control\n"
+        "assert ordinary_dependency.READY is True\n"
+        "assert build_record.ORIGIN == 'project-build-record'\n"
+        "assert box_control.ORIGIN == 'project-box-control'\n"
+        + original
+    )
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "Project-current source with local companions")
+
+    readiness = project_current.read_only_import_script(str(root), str(interpreter))
+    assert "-I" in readiness and "-B" in readiness
+    before = controller.read_bytes()
+    response = subprocess.run(
+        readiness, shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert response.returncode == 0, response.stderr
+    evidence = json.loads(response.stdout.strip().splitlines()[-1])
+    assert evidence["schema"] == "host-deploy-project-current-import-readiness-v1"
+    assert evidence["source_root"] == str(source)
+    assert evidence["python_executable"] == str(interpreter)
+    assert evidence["remote_operations"] == str(executable)
+    assert evidence["image_build_package"] == str(executable.parent / "__init__.py")
+    assert evidence["companions"]["build-record"]["origin"] == str(
+        root / "companions/build-record/src/zog/build_record/__init__.py"
+    )
+    assert evidence["companions"]["box-control"]["origin"] == str(
+        root / "companions/box-control/box-control/src/zog/box_control/__init__.py"
+    )
+    assert evidence["mutation"] is False
+    assert evidence["execution_authorized"] is False
+    assert not (root / "gateway-requests").exists()
+    assert controller.read_bytes() == before
+    assert not sentinel.exists()
+    assert not list(source.rglob("__pycache__"))
+
+    # The true Project-current dispatch uses this exact same bootstrap; this
+    # synthetic execution is local-only, not a live Host request or SSM send.
+    spec, record = selected(root, controller)
+    spec["python_executable"] = str(interpreter)
+    prepared = project_current.binding(
+        intent("a" * 32), record, spec, target(),
+    )
+    actual = subprocess.run(
+        project_current.remote_script(prepared), shell=True,
+        text=True, capture_output=True, timeout=30,
+    )
+    assert actual.returncode == 0, actual.stderr
+    receipt = json.loads(actual.stdout.strip().splitlines()[-1])
+    assert receipt["result"]["source_revision"] == git(source, "rev-parse", "HEAD")
+    assert receipt["result"]["recipe_identity"] == "first-pin"
+    assert not sentinel.exists()
+
+
+def test_import_readiness_holds_without_selected_project_module_before_request(
+        project_with_installed_zog_shadow):
+    root, source, _, interpreter, sentinel = project_with_installed_zog_shadow
+    (source / "src/zog/image_build/remote_operations.py").unlink()
+    result = subprocess.run(
+        project_current.read_only_import_script(str(root), str(interpreter)),
+        shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "selected Project image-build module is missing or redirected" in result.stderr
+    assert not (root / "gateway-requests").exists()
+    assert not sentinel.exists()
+
+
+def test_import_readiness_rejects_broken_selected_companion_not_installed_fallback(
+        project_with_installed_zog_shadow):
+    root, source, _, interpreter, sentinel = project_with_installed_zog_shadow
+    broken = root / "companions/box-control/box-control/src/zog/box_control"
+    broken.mkdir(parents=True)
+    response = subprocess.run(
+        project_current.read_only_import_script(str(root), str(interpreter)),
+        shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert response.returncode != 0
+    assert "selected Project box_control companion is incomplete" in response.stderr
+    assert not (root / "gateway-requests").exists()
+    assert not sentinel.exists()
+
+
+def test_import_readiness_rejects_unspecified_project_or_python():
+    with pytest.raises((RuntimeError, ValueError)):
+        project_current.read_only_import_script("../other-project", "/usr/bin/python3.12")
+    with pytest.raises((RuntimeError, ValueError)):
+        project_current.read_only_import_script("/srv/zog/certbot-seed", "python3")
+
+
+def test_unexpected_import_arguments_never_invoke_project_producer(
+        project_with_installed_zog_shadow):
+    root, source, _, interpreter, sentinel = project_with_installed_zog_shadow
+    # Even if someone appends an accidental argument to a readiness check,
+    # it must not fall through into remote_operations.main().
+    for args in (["--inspect-only", "--unexpected"], ["--wrong-operation"]):
+        result = subprocess.run(
+            [str(interpreter), "-I", "-B", "-c",
+             project_current._PROJECT_IMPORT_BOOTSTRAP, str(source),
+             str(root), *args],
+            text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "unsupported Project-current import invocation" in result.stderr
+        assert not (root / "gateway-requests").exists()
+        assert not sentinel.exists()
