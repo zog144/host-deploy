@@ -18,6 +18,8 @@ import re
 import stat
 import subprocess
 
+from . import fonts_unit_composition as composition
+
 SCHEMA = "zog-first-fonts-versioned-controller-selection-v1"
 CONTRACT = "zog-build-inherited-peer-v2"
 RELEASES = "/opt/zog/compiler-runtime/versions"
@@ -97,7 +99,7 @@ def _under(path, directory):
 def validate(selection):
     """Validate reviewed source pins and immutable install/rollback selection."""
     _exact(selection, {"schema", "contract", "release_id", "sources",
-                       "service", "rollback", "files", "installed_tree_sha256",
+                       "service", "rollback", "composition", "files", "installed_tree_sha256",
                        "lane"}, "selection")
     if selection["schema"] != SCHEMA or selection["contract"] != CONTRACT:
         raise RuntimeHold("unsupported versioned inherited-identity contract")
@@ -128,6 +130,10 @@ def validate(selection):
     exe = _path(service["exec_start"], "selected executable")
     if not _under(exe, folder + "/bin"):
         raise RuntimeHold("service executable is not version-owned")
+    try:
+        composition.validate(selection["composition"])
+    except composition.CompositionHold as error:
+        raise RuntimeHold(str(error)) from error
     rollback = _exact(selection["rollback"],
                       {"saved_unit", "unit_sha256", "saved_runtime_root",
                        "runtime_tree_sha256"}, "rollback selection")
@@ -488,6 +494,33 @@ def inspect_installed(selection, *, phase="staged"):
         raise RuntimeHold("rollback unit hardlinked to active service")
     if _retained_tree_sha256(rollback["saved_runtime_root"]) != rollback["runtime_tree_sha256"]:
         raise RuntimeHold("retained previous runtime bytes differ")
+    comp = selection["composition"]
+    original_dir = Path(service["active_unit"] + ".d")
+    staged_dir = Path(service["staged_unit"] + ".d")
+    saved_dir = Path(rollback["saved_unit"] + ".d")
+    try:
+        composition.verify(staged_dir, comp["selected_dropins"])
+        composition.verify(saved_dir, comp["original_dropins"])
+        composition.verify(original_dir, comp[
+            "original_dropins" if phase == "staged" else "selected_dropins"])
+        # The complete composition is checked before interpreting ExecStart.
+        dropins = [ (staged_dir / entry["name"]).read_bytes()
+                    for entry in comp["selected_dropins"]]
+        selected_command = composition.composed_exec(
+            Path(service["staged_unit"]).read_bytes(), dropins)
+        if selected_command.split()[0] != service["exec_start"]:
+            raise composition.CompositionHold(
+                "effective selected ExecStart is not the reviewed executable")
+        if service["active_unit"].startswith("/etc/systemd/system/"):
+            composition.verify_loaded(
+                service["name"], fragment=service["active_unit"],
+                names=[entry["name"] for entry in
+                       comp["original_dropins" if phase == "staged"
+                            else "selected_dropins"]],
+                expected=comp["original_effective" if phase == "staged"
+                              else "selected_effective"])
+    except composition.CompositionHold as error:
+        raise RuntimeHold(str(error)) from error
     unit = Path(service["staged_unit"]).read_bytes()
     commands = [line for line in unit.splitlines()
                 if line.strip().startswith(b"ExecStart=")]
