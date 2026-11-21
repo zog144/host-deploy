@@ -1,5 +1,6 @@
 """Selected-Project/controller routing; run a synthetic producer, never a build."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -26,17 +27,21 @@ def project(tmp_path):
     module = source / "src/zog/image_build/remote_operations.py"
     module.parent.mkdir(parents=True)
     (module.parent / "__init__.py").write_text("")
-    (module.parent.parent / "__init__.py").write_text("")
+    # The real image-build checkout is a PEP 420 namespace: src/zog has
+    # NO __init__.py. A regular installed zog package can otherwise win.
+    assert not (module.parent.parent / "__init__.py").exists()
     (package / "pins.txt").write_text("first-pin")
     module.write_text(
         "import json,sys\nfrom pathlib import Path\n"
-        "request=json.loads(Path(sys.argv[-1]).read_text())\n"
-        "pin=(Path(__file__).resolve().parents[3]/'project/package/pins.txt').read_text()\n"
-        "print(json.dumps({'schema':'image-build-remote-result-v1',"
+        "def main():\n"
+        "    request=json.loads(Path(sys.argv[-1]).read_text())\n"
+        "    pin=(Path(__file__).resolve().parents[3]/'project/package/pins.txt').read_text()\n"
+        "    print(json.dumps({'schema':'image-build-remote-result-v1',"
         "'operation_id':request['operation_id'],"
         "'operation_type':request['operation'],"
         "'source_revision':request['source']['revision'],"
         "'status':'pending','pipeline_id':'a'*32,'recipe_identity':pin}))\n"
+        "if __name__ == '__main__': main()\n"
     )
     git(source, "init", "-q")
     git(source, "config", "user.email", "test@example.invalid")
@@ -269,3 +274,220 @@ def test_new_project_dispatch_lost_ack_does_not_send_twice(tmp_path, monkeypatch
     assert simple_forward.advance(
         gateway, request["request_id"], host_factory=Lost)["phase"] == "submission_uncertain"
     assert len(sent) == 1
+
+
+@pytest.fixture
+def project_with_installed_zog_shadow(tmp_path):
+    """Actual site-packages regular zog would win over a PYTHONPATH namespace."""
+    root, source, controller = project(tmp_path)
+    environment = tmp_path / "isolated-venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+        check=True, capture_output=True, text=True,
+    )
+    interpreter = environment / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    site = subprocess.check_output(
+        [str(interpreter), "-I", "-c",
+         "import site; print(site.getsitepackages()[0])"],
+        text=True,
+    ).strip()
+    installed_zog = Path(site) / "zog"
+    installed_image_build = installed_zog / "image_build"
+    installed_image_build.mkdir(parents=True)
+    sentinel = tmp_path / "installed-zog-was-imported"
+    (installed_zog / "__init__.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('wrong-installed-zog')\n"
+        "raise RuntimeError('installed zog shadows the selected Project')\n"
+    )
+    (installed_image_build / "__init__.py").write_text("")
+    (installed_image_build / "remote_operations.py").write_text(
+        "raise RuntimeError('wrong installed image-build executable')\n"
+    )
+    discovered = subprocess.check_output(
+        [str(interpreter), "-I", "-c",
+         "import importlib.util; print(importlib.util.find_spec('zog').origin)"],
+        text=True,
+    ).strip()
+    assert Path(discovered).resolve() == (installed_zog / "__init__.py").resolve()
+    # Negative control: the old PYTHONPATH + "-m" invocation really does
+    # import the globally installed regular package, not this Project's
+    # implicit src/zog namespace. Remove the sentinel before the new test.
+    legacy = subprocess.run(
+        [str(interpreter), "-m", "zog.image_build.remote_operations"],
+        cwd=source,
+        # Python's -I flag and ordinary venv startup can expose different
+        # site paths on older interpreters. Include the fixture's *actual*
+        # installed site directory explicitly, after the selected checkout.
+        env={**os.environ, "PYTHONPATH":
+             os.pathsep.join((str(source / "src"), site))},
+        text=True, capture_output=True, timeout=15,
+    )
+    assert legacy.returncode != 0
+    assert "installed zog shadows the selected Project" in legacy.stderr
+    assert sentinel.read_text() == "wrong-installed-zog"
+    sentinel.unlink()
+    return root, source, controller, interpreter, sentinel
+
+
+def test_project_current_imports_selected_source_even_when_regular_zog_is_installed(
+        project_with_installed_zog_shadow):
+    root, source, controller, interpreter, sentinel = project_with_installed_zog_shadow
+    spec, record = selected(root, controller, historic=True)
+    spec["python_executable"] = str(interpreter)
+    for operation_id, expected_pin in (("7" * 32, "first-pin"),
+                                       ("8" * 32, "updated-pin")):
+        if expected_pin == "updated-pin":
+            (source / "project/package/pins.txt").write_text(expected_pin)
+            git(source, "add", ".")
+            git(source, "commit", "-qm", "selected Project version update")
+        prepared = project_current.binding(
+            intent(operation_id), record, spec, target(),
+        )
+        script = project_current.remote_script(prepared)
+        output = subprocess.run(
+            script, shell=True, text=True, capture_output=True, timeout=30,
+        )
+        assert output.returncode == 0, output.stderr
+        receipt = json.loads(output.stdout.strip().splitlines()[-1])
+        assert receipt["result"]["source_revision"] == git(source, "rev-parse", "HEAD")
+        assert receipt["result"]["recipe_identity"] == expected_pin
+        assert not sentinel.exists(), "the installed zog package was imported"
+
+
+def test_project_current_fails_closed_if_selected_module_missing_despite_installed_zog(
+        project_with_installed_zog_shadow):
+    root, source, controller, interpreter, sentinel = project_with_installed_zog_shadow
+    spec, record = selected(root, controller, historic=False)
+    spec["python_executable"] = str(interpreter)
+    # A global zog package must not silently replace the absent Project module.
+    (source / "src/zog/image_build/remote_operations.py").unlink()
+    script = project_current.remote_script(
+        project_current.binding(intent("9" * 32), record, spec, target()),
+    )
+    output = subprocess.run(
+        script, shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert output.returncode != 0
+    assert "selected Project image-build module is missing" in output.stderr
+    assert not sentinel.exists()
+
+
+
+def test_read_only_normal_import_uses_selected_project_companions_and_installed_deps(
+        project_with_installed_zog_shadow):
+    root, source, controller, interpreter, sentinel = project_with_installed_zog_shadow
+    site = Path(subprocess.check_output(
+        [str(interpreter), "-I", "-c",
+         "import site; print(site.getsitepackages()[0])"],
+        text=True,
+    ).strip())
+    # An unrelated third-party distribution remains installed and importable
+    # even while the globally installed regular 'zog' cannot shadow the
+    # Project's namespace.
+    (site / "ordinary_dependency.py").write_text("READY = True\n")
+    for role, prefix, marker in (
+        ("build_record", root / "companions/build-record/src", "project-build-record"),
+        ("box_control", root / "companions/box-control/box-control/src", "project-box-control"),
+    ):
+        package = prefix / "zog" / role
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("ORIGIN = " + repr(marker) + "\n")
+        installed = site / "zog" / role
+        installed.mkdir()
+        (installed / "__init__.py").write_text(
+            "raise RuntimeError('installed companion incorrectly selected')\n"
+        )
+    executable = source / "src/zog/image_build/remote_operations.py"
+    original = executable.read_text()
+    executable.write_text(
+        "import ordinary_dependency\n"
+        "from zog import build_record, box_control\n"
+        "assert ordinary_dependency.READY is True\n"
+        "assert build_record.ORIGIN == 'project-build-record'\n"
+        "assert box_control.ORIGIN == 'project-box-control'\n"
+        + original
+    )
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "Project-current source with local companions")
+
+    readiness = project_current.read_only_import_script(str(root), str(interpreter))
+    assert "-I" in readiness and "-B" in readiness
+    before = controller.read_bytes()
+    response = subprocess.run(
+        readiness, shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert response.returncode == 0, response.stderr
+    evidence = json.loads(response.stdout.strip().splitlines()[-1])
+    assert evidence["schema"] == "host-deploy-project-current-import-readiness-v1"
+    assert evidence["source_root"] == str(source)
+    assert evidence["python_executable"] == str(interpreter)
+    assert evidence["remote_operations"] == str(executable)
+    assert evidence["image_build_package"] == str(executable.parent / "__init__.py")
+    assert evidence["companions"]["build-record"]["origin"] == str(
+        root / "companions/build-record/src/zog/build_record/__init__.py"
+    )
+    assert evidence["companions"]["box-control"]["origin"] == str(
+        root / "companions/box-control/box-control/src/zog/box_control/__init__.py"
+    )
+    assert evidence["mutation"] is False
+    assert evidence["execution_authorized"] is False
+    assert not (root / "gateway-requests").exists()
+    assert controller.read_bytes() == before
+    assert not sentinel.exists()
+    assert not list(source.rglob("__pycache__"))
+
+    # The true Project-current dispatch uses this exact same bootstrap; this
+    # synthetic execution is local-only, not a live Host request or SSM send.
+    spec, record = selected(root, controller)
+    spec["python_executable"] = str(interpreter)
+    prepared = project_current.binding(
+        intent("a" * 32), record, spec, target(),
+    )
+    actual = subprocess.run(
+        project_current.remote_script(prepared), shell=True,
+        text=True, capture_output=True, timeout=30,
+    )
+    assert actual.returncode == 0, actual.stderr
+    receipt = json.loads(actual.stdout.strip().splitlines()[-1])
+    assert receipt["result"]["source_revision"] == git(source, "rev-parse", "HEAD")
+    assert receipt["result"]["recipe_identity"] == "first-pin"
+    assert not sentinel.exists()
+
+
+def test_import_readiness_holds_without_selected_project_module_before_request(
+        project_with_installed_zog_shadow):
+    root, source, _, interpreter, sentinel = project_with_installed_zog_shadow
+    (source / "src/zog/image_build/remote_operations.py").unlink()
+    result = subprocess.run(
+        project_current.read_only_import_script(str(root), str(interpreter)),
+        shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "selected Project image-build module is missing or redirected" in result.stderr
+    assert not (root / "gateway-requests").exists()
+    assert not sentinel.exists()
+
+
+def test_import_readiness_rejects_broken_selected_companion_not_installed_fallback(
+        project_with_installed_zog_shadow):
+    root, source, _, interpreter, sentinel = project_with_installed_zog_shadow
+    broken = root / "companions/box-control/box-control/src/zog/box_control"
+    broken.mkdir(parents=True)
+    response = subprocess.run(
+        project_current.read_only_import_script(str(root), str(interpreter)),
+        shell=True, text=True, capture_output=True, timeout=30,
+    )
+    assert response.returncode != 0
+    assert "selected Project box_control companion is incomplete" in response.stderr
+    assert not (root / "gateway-requests").exists()
+    assert not sentinel.exists()
+
+
+def test_import_readiness_rejects_unspecified_project_or_python():
+    with pytest.raises((RuntimeError, ValueError)):
+        project_current.read_only_import_script("../other-project", "/usr/bin/python3.12")
+    with pytest.raises((RuntimeError, ValueError)):
+        project_current.read_only_import_script("/srv/zog/certbot-seed", "python3")

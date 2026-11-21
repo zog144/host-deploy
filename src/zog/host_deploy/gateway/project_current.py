@@ -115,6 +115,110 @@ def validate(value):
 
 # Deliberately no source SHA or pin value here. They are read on the Project
 # Host when the one durable SSM attempt executes. No cross-Project search.
+_PROJECT_IMPORT_BOOTSTRAP = r'''
+import importlib
+import importlib.machinery
+import sys
+import types
+from pathlib import Path
+
+source = Path(sys.argv[1]).resolve(strict=True)
+project = Path(sys.argv[2]).resolve(strict=True)
+expected_root = (source / "src").resolve(strict=True)
+expected_package = expected_root / "zog/image_build"
+expected_init = expected_package / "__init__.py"
+expected_module = expected_package / "remote_operations.py"
+if (not expected_init.is_file() or not expected_module.is_file()
+        or not expected_init.resolve(strict=True).is_relative_to(expected_root)
+        or not expected_module.resolve(strict=True).is_relative_to(expected_root)):
+    raise SystemExit("selected Project image-build module is missing or redirected")
+
+# Preserve access to globally installed *other* zog components, but never
+# allow their package initializer to choose the image-build implementation.
+installed = importlib.machinery.PathFinder.find_spec("zog", sys.path)
+fallback = list(installed.submodule_search_locations or ()) if installed else []
+# Restore the selected Project's source-root import semantics for other
+# Project-local top-level modules too; -I otherwise ignores PYTHONPATH.
+source_roots = [
+    source / "src",
+    project / "companions/build-record/src",
+    project / "companions/box-control/box-control/src",
+]
+sys.path[:0] = [str(path) for path in source_roots if path.is_dir()]
+locations = [path / "zog" for path in source_roots]
+namespace = types.ModuleType("zog")
+namespace.__package__ = "zog"
+namespace.__path__ = [str(p) for p in locations if p.is_dir()] + fallback
+namespace.__spec__ = importlib.machinery.ModuleSpec(
+    "zog", loader=None, is_package=True,
+)
+sys.modules["zog"] = namespace
+
+# Check the resolution before executing any image-build code, not merely
+# after an incorrect globally installed module might have run.
+selected = importlib.machinery.PathFinder.find_spec(
+    "zog.image_build", namespace.__path__,
+)
+if (selected is None or selected.origin is None
+        or Path(selected.origin).resolve(strict=True) !=
+        expected_init.resolve(strict=True)):
+    raise SystemExit("image-build package does not resolve to selected Project")
+selected_module = importlib.machinery.PathFinder.find_spec(
+    "zog.image_build.remote_operations", [str(expected_package)],
+)
+if (selected_module is None or selected_module.origin is None
+        or Path(selected_module.origin).resolve(strict=True) !=
+        expected_module.resolve(strict=True)):
+    raise SystemExit("image-build executable does not resolve to selected Project")
+# Validate any Project-local companion before module import. A regular
+# installed zog package may supply missing components, but it must never
+# replace one explicitly selected from the Project's companions directory.
+def companion(name, root):
+    package = root / "zog" / name
+    if not package.is_dir():
+        return {"present": False}
+    expected = package / "__init__.py"
+    if not expected.is_file() or expected.is_symlink():
+        raise SystemExit("selected Project " + name + " companion is incomplete")
+    found = importlib.machinery.PathFinder.find_spec(
+        "zog." + name, namespace.__path__,
+    )
+    if (found is None or found.origin is None
+            or Path(found.origin).resolve(strict=True) !=
+               expected.resolve(strict=True)):
+        raise SystemExit("selected Project " + name + " companion was shadowed")
+    return {"present": True, "origin": str(expected)}
+
+companions = {
+    "build-record": companion("build_record", source_roots[1]),
+    "box-control": companion("box_control", source_roots[2]),
+}
+module = importlib.import_module("zog.image_build.remote_operations")
+if (Path(module.__file__).resolve(strict=True) !=
+        expected_module.resolve(strict=True)):
+    raise SystemExit("imported image-build executable differs from selected Project")
+# Import-only readiness takes the *identical* namespace and module-origin
+# path used for a real Project-current submission. It is deliberately
+# nonmutating: no request creation, producer main(), pipeline or controller job.
+if sys.argv[3:] == ["--inspect-only"]:
+    import json
+    report = {
+        "schema": "host-deploy-project-current-import-readiness-v1",
+        "source_root": str(source),
+        "project_root": str(project),
+        "python_executable": sys.executable,
+        "image_build_package": str(expected_init),
+        "remote_operations": str(expected_module),
+        "companions": companions,
+        "mutation": False,
+        "execution_authorized": False,
+    }
+    print(json.dumps(report, sort_keys=True))
+else:
+    sys.argv = [str(expected_module), *sys.argv[3:]]
+    module.main()'''
+
+
 _RUN = r'''
 import hashlib, json, os, re, subprocess, sys, tempfile
 from pathlib import Path
@@ -166,21 +270,21 @@ try:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
-    env = dict(os.environ)
-    env["PYTHONPATH"] = ":".join((
-        str(source / "src"),
-        str(project / "companions/build-record/src"),
-        str(project / "companions/box-control/box-control/src"),
-    ))
+    # A site-installed regular 'zog' can eclipse the selected Project's
+    # implicit 'src/zog' namespace even if PYTHONPATH starts with source/src.
+    # Run an isolated child with an explicit namespace and verify the module's
+    # actual file before invoking the producer. Keep other installed zog
+    # components available after the selected Project and its companions.
+    bootstrap = __ZOG_PROJECT_IMPORT_BOOTSTRAP__
     result = subprocess.run(
-        [python, "-m", "zog.image_build.remote_operations",
+        [python, "-I", "-B", "-c", bootstrap, str(source), str(project),
          "--repository-root", str(source),
          "--source-repository", "zog144/image-build",
          "--source-revision", revision,
          "--package-dir", str(source / "project/package"),
          "--state-dir", str(state),
          "--controller-config", str(controller), str(request_path)],
-        env=env, cwd=str(source), capture_output=True, text=True, timeout=240,
+        cwd=str(source), capture_output=True, text=True, timeout=240,
         check=False,
     )
     if result.returncode != 0:
@@ -212,6 +316,24 @@ try:
 except Exception as error:
     raise SystemExit("configured Project build operation failed: " + str(error)) from error
 '''
+_RUN = _RUN.replace("__ZOG_PROJECT_IMPORT_BOOTSTRAP__", repr(_PROJECT_IMPORT_BOOTSTRAP))
+
+
+
+def read_only_import_script(project_root, python_executable):
+    """Use the actual Project-current import bootstrap without writing a request.
+
+    The selected Project source comes before local companions, which come
+    before installed third-party packages and remaining Zog components.
+    This command is safe for Work's normal readiness inspection; it does not
+    call remote_operations.main() or submit anything to box/root-control.
+    """
+    project = _path(project_root)
+    python = image_build_lanes.validate_python_executable(python_executable)
+    return " ".join(shlex.quote(item) for item in (
+        python, "-I", "-B", "-c", _PROJECT_IMPORT_BOOTSTRAP,
+        str(project / "source"), str(project), "--inspect-only",
+    ))
 
 
 def remote_script(value):
