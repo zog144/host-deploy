@@ -164,8 +164,7 @@ def inventory(root, runtime, *, external=None):
                     (runtime / current).lstat()  # inspect link object, never follow
                 except OSError as error:
                     raise LegacyHold("legacy relative symlink target missing") from error
-    chain = interpreter_chain(root) if external is None else external
-    need(type(chain) is list and len(chain) > 0, "missing external interpreter attestation")
+    chain = validate_chain(interpreter_chain(root) if external is None else external)
     payload = {"schema": SCHEMA, "entries": entries,
                "python_interpreter_chain": chain}
     return {"schema": SCHEMA, "tree_sha256": digest(entries),
@@ -179,3 +178,35 @@ def assert_copy(root, original, copied, *, expected=None):
     if expected is not None:
         need(first == expected, "legacy rollback differs from reviewed selection")
     return first
+
+
+def validate_chain(chain):
+    """Validate the literal external interpreter chain independently of I/O."""
+    need(type(chain) is list and 1 <= len(chain) <= 16,
+         "invalid interpreter chain")
+    expected = EXTERNAL_PYTHON
+    seen = set()
+    for index, entry in enumerate(chain):
+        need(type(entry) is dict and entry.get("path") == expected
+             and expected not in seen, "foreign or cyclic interpreter chain")
+        seen.add(expected)
+        need(type(entry.get("uid")) is int and entry["uid"] == 0
+             and type(entry.get("gid")) is int and entry["gid"] == 0,
+             "foreign interpreter chain owner")
+        if index < len(chain) - 1:
+            need(set(entry) == {"type", "path", "target", "uid", "gid"}
+                 and entry["type"] == "symlink"
+                 and type(entry["target"]) is str,
+                 "unreviewed interpreter link metadata")
+            expected = str(_absolute_target(Path(expected), entry["target"],
+                                             external=True))
+        else:
+            need(set(entry) == {"type", "path", "mode", "uid", "gid",
+                                 "size", "sha256"}
+                 and entry["type"] == "file"
+                 and type(entry["mode"]) is int and entry["mode"] & 0o022 == 0
+                 and type(entry["size"]) is int and 0 < entry["size"] <= MAX_SIZE
+                 and type(entry["sha256"]) is str and len(entry["sha256"]) == 64
+                 and all(c in "0123456789abcdef" for c in entry["sha256"]),
+                 "unreviewed external interpreter executable")
+    return chain
