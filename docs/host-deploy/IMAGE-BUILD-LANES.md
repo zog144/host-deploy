@@ -172,3 +172,44 @@ explicit and recoverable after complete remote configuration. The generic
 disk-admission check remains. The retired Fonts-specific worker-space and
 fixed-duration acceptance gates stay removed; runtime memory enforcement is
 investigated separately and is not an additional Fonts blocker.
+
+## Explicit inherited-execution migration (first Fonts)
+
+The original `gateway-first-fonts-runtime` record is **historical evidence**, not
+an executable account-selection authority. Its UID/GID fields must never be
+used to run a new compilation. `host-deploy fonts-lane-migration-preview
+--workspace OWNER --project-root /verified/new/location/gateway-first-fonts-runtime`
+constructs a non-executable schema-5 candidate with
+`controller.execution_identity = "inherit"` and **no** controller UID/GID.
+The original record and its SHA-256 are retained; the preview reports the
+new canonical digest and the currently unmet runtime-compatibility condition.
+
+`fonts-lane-migration-stage` saves the exact candidate in
+`OWNER/first-fonts-inherited-execution-migration-v1.json`, never replacing the
+approved older lane. Repeated identical staging is read-only; conflicting
+identity/root/digest is rejected. The initial source-selected compiler
+`image-build@1f07e83...` does **not** support inherited execution: its
+`configuration.configured_runner` still requires explicit numeric UID/GID and
+its `box_control_adapter` forwards them. Therefore staging does **not**
+authorize activation, dispatch, or a new compiler build. The selected producer,
+box-control client and root-control server must first adopt a reviewed matching
+protocol. The returned digest is a review candidate, not a running lane digest.
+
+The runtime-side `effective_project_access.inspect()` must run **inside** the
+nonroot process that will execute the compilation: it reads its own effective
+UID/GID and uses `os.access(..., effective_ids=True)` on actual Project
+ancestors and create/read/write/traverse targets. It never uses passwd lookups,
+chown, runuser, sudo or a caller-selected account. A root SSM inspection cannot
+substitute for this check and fails closed. Do not infer filesystem access
+from the old worker's home. A new Project location is an explicit reviewed
+migration input; it is never inferred or silently retargeted.
+
+The gateway explicitly rejects a historical first-Fonts active schema-4 lane
+before preparing any remote dispatch. The source-owned activation path rejects
+the historical UID-selected record as well. `fonts-lane-verify` is now a
+**local evidence inspection**, not a remote account/readiness validation; it
+reports `migration_required=true` and `execution_authorized=false`.
+
+No extra Fonts work-space quota, external accounting, fixed worker timeout or
+per-compilation memory-cgroup verification prerequisite is introduced here.
+Ordinary generic lane disk admission and source/pin/Host binding checks remain.

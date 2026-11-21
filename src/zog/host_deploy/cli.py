@@ -1,6 +1,7 @@
 """Starter-package CLI. Each independently initialized workspace owns one host."""
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -95,12 +96,23 @@ def main():
             command.add_argument('--request-path',required=True)
     # Reviewed first-Fonts path: no caller-supplied spec or identity overrides.
     for name in ('fonts-lane-profile', 'fonts-lane-verify',
-                 'fonts-lane-prepare', 'fonts-lane-activate'):
+                 'fonts-lane-prepare', 'fonts-lane-activate',
+                 'fonts-lane-migration-preview', 'fonts-lane-migration-stage'):
         command = commands.add_parser(name)
         if name != 'fonts-lane-profile':
             command.add_argument('--workspace', required=True)
         if name == 'fonts-lane-activate':
             command.add_argument('--expected-specification-sha256', required=True)
+        if name in {'fonts-lane-migration-preview','fonts-lane-migration-stage'}:
+            command.add_argument('--project-root', required=True)
+    runtime_inventory = commands.add_parser('fonts-runtime-inventory',
+        help='Read-only root-owned capture of staged module/RECORD/entire runtime evidence')
+    runtime_inventory.add_argument('--release-id', required=True)
+    runtime_inspect = commands.add_parser('fonts-runtime-inspect',
+        help='Root-only readback of exact versioned controller bytes; does not activate')
+    runtime_inspect.add_argument('--selection', required=True)
+    runtime_inspect.add_argument('--expected-selection-sha256', required=True)
+    runtime_inspect.add_argument('--phase', choices=('staged', 'selected'), default='staged')
     for name in ['artifact-init','artifact-publish','artifact-fetch','artifact-prune']:
         command=commands.add_parser(name)
         command.add_argument('--store',required=True)
@@ -110,7 +122,19 @@ def main():
             command.add_argument('--retention-seconds',type=int,default=604800)
         if name=='artifact-fetch': command.add_argument('--output',required=True)
     arguments=parser.parse_args()
-    if arguments.command.startswith('fonts-lane-'):
+    if arguments.command == 'fonts-runtime-inventory':
+        from . import fonts_versioned_runtime as versioned
+        if os.geteuid() != 0:
+            raise PermissionError('versioned runtime inventory requires trusted Host root owner')
+        result = versioned.capture_installed_inventory(arguments.release_id)
+    elif arguments.command == 'fonts-runtime-inspect':
+        from . import fonts_versioned_runtime as versioned
+        if os.geteuid() != 0:
+            raise PermissionError('versioned runtime inspection requires trusted Host root owner')
+        selection = versioned.load_reviewed_selection(
+            arguments.selection, arguments.expected_selection_sha256)
+        result = versioned.inspect_installed(selection, phase=arguments.phase)
+    elif arguments.command.startswith('fonts-lane-'):
         from . import fonts_lane_profile
         if arguments.command == 'fonts-lane-profile':
             result = fonts_lane_profile.profile()
@@ -118,6 +142,11 @@ def main():
             result = fonts_lane_profile.verify(arguments.workspace)
         elif arguments.command == 'fonts-lane-prepare':
             result = fonts_lane_profile.prepare(arguments.workspace)
+        elif arguments.command in {'fonts-lane-migration-preview', 'fonts-lane-migration-stage'}:
+            from . import fonts_execution_migration
+            operation = (fonts_execution_migration.preview if arguments.command.endswith('preview')
+                         else fonts_execution_migration.stage)
+            result = operation(arguments.workspace, project_root=arguments.project_root)
         else:
             from . import image_build_lanes
             result = image_build_lanes.activate(

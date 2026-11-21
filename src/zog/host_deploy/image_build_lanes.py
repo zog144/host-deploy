@@ -13,10 +13,11 @@ from .runner import Host
 from .workspace import locked, save
 
 SCHEMA = 4
+INHERITED_SCHEMA = 5  # Explicit no-account-selector migration; not supported by pinned Fonts producer
 EXTERNAL_STATE_SCHEMA = 3
 MONTHLY_PIN_SCHEMA = 2
 LEGACY_SCHEMA = 1
-_RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCHEMA}
+_RECORD_SCHEMAS = {LEGACY_SCHEMA, MONTHLY_PIN_SCHEMA, EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
 _REVISION = re.compile(r"[0-9a-f]{40,64}")
 DEFAULT_ROOT = Path("/var/lib/zog/image-build-lanes")
@@ -89,13 +90,13 @@ def validate(spec):
             "monthly_pin_repository_path",
             "monthly_pin_identity",
         }
-    elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA}:
+    elif schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         required = common | {
             "monthly_pin_repository_path",
             "monthly_pin_identity",
             "observed_state_dir",
         }
-        if schema == SCHEMA:
+        if schema in {SCHEMA, INHERITED_SCHEMA}:
             required.add("python_executable")
     else:
         raise ValueError("unsupported image-build lane specification")
@@ -116,11 +117,11 @@ def validate(spec):
         spec["source_revision"]
     ):
         raise ValueError("lane source revision must be an immutable commit identity")
-    if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA}:
+    if schema in {EXTERNAL_STATE_SCHEMA, SCHEMA, INHERITED_SCHEMA}:
         _observed_state_path(spec["observed_state_dir"], spec["project_root"])
         if spec["observed_state_dir"] is not None and spec["mode"] != "managed":
             raise ValueError("external observed state requires a managed lane")
-    if schema == SCHEMA:
+    if schema in {SCHEMA, INHERITED_SCHEMA}:
         validate_python_executable(spec["python_executable"])
     if schema == LEGACY_SCHEMA:
         pin_identity = spec["pin_identity"]
@@ -168,21 +169,28 @@ def validate(spec):
     controller = spec["controller"]
     required_controller = {
         "socket_path",
-        "execution_user_id",
-        "execution_group_id",
         "startup_timeout_seconds",
         "execution_timeout_seconds",
         "termination_grace_seconds",
         "wait_timeout_seconds",
         "transport_timeout_seconds",
     }
+    if schema == INHERITED_SCHEMA:
+        # The runtime must derive its identity from the authenticated process;
+        # UID/GID in a lane or request can never select a different account.
+        required_controller.add("execution_identity")
+        if controller.get("execution_identity") != "inherit":
+            raise ValueError("inherited lane must use the effective process identity")
+    else:
+        required_controller.update({"execution_user_id", "execution_group_id"})
     if not isinstance(controller, dict) or set(controller) != required_controller:
         raise ValueError("invalid lane controller policy")
     socket_path = Path(controller["socket_path"])
     if not socket_path.is_absolute():
         raise ValueError("lane root-control socket must be absolute")
-    for key in ("execution_user_id", "execution_group_id"):
-        _positive(controller[key], key, 2**31 - 1)
+    if schema != INHERITED_SCHEMA:
+        for key in ("execution_user_id", "execution_group_id"):
+            _positive(controller[key], key, 2**31 - 1)
     for key in (
         "startup_timeout_seconds",
         "execution_timeout_seconds",
@@ -647,8 +655,10 @@ def _controller(spec):
     return {
         "project_root": spec["project_root"],
         "socket_path": controller["socket_path"],
-        "execution_user_id": controller["execution_user_id"],
-        "execution_group_id": controller["execution_group_id"],
+        **({"execution_identity": "inherit"} if spec["schema"] == INHERITED_SCHEMA else {
+            "execution_user_id": controller["execution_user_id"],
+            "execution_group_id": controller["execution_group_id"],
+        }),
         "startup_timeout_seconds": controller["startup_timeout_seconds"],
         "execution_timeout_seconds": controller["execution_timeout_seconds"],
         "termination_grace_seconds": controller["termination_grace_seconds"],
@@ -690,61 +700,6 @@ def _capacity(host, project_root):
 
 
 
-def _activate_retained_fonts(root, path, record, spec, workspace, host_config):
-    """Idempotent exact old-lane activation with durable interrupted-write recovery.
-
-    An active lane is only reported successful after read-only installed
-    controller readback. The original specification is never rewritten.
-    """
-    from . import fonts_lane_profile, fonts_lane_runtime
-    host = Host(host_config)
-    runtime_preflight(host, spec["python_executable"])
-    observed = fonts_lane_runtime.inspect(host, spec)
-    if record["state"] == "active":
-        if observed["status"] != "complete":
-            raise RuntimeError("active first Fonts installed controller differs or is incomplete")
-        return record  # absolutely no workspace file rewrite, no remote upload
-    if record["state"] != "prepared":
-        raise RuntimeError("first Fonts must be prepared or already active")
-    intent_path = Path(root) / fonts_lane_profile.INTENT_FILE
-    if intent_path.exists() or intent_path.is_symlink():
-        # Verify the exact previously authorized intent, not its mere presence.
-        expected = {"schema": "host-deploy-first-fonts-activation-intent-v1",
-                    "specification_sha256": specification_sha256(spec),
-                    "binding": fonts_lane_profile._binding(workspace, host_config)}
-        if fonts_lane_profile._read_regular(intent_path) != expected:
-            raise RuntimeError("retained first Fonts activation intent is foreign")
-        if observed["status"] != "complete":
-            raise RuntimeError("previous first Fonts remote activation unresolved; inspect original SSM command before retry")
-    elif observed["status"] == "absent":
-        # Normal disk admission survives PR32's independent RAM-gate removal.
-        capacity = _capacity(host, Path(spec["project_root"]))
-        used = sum(item["specification"]["resource_policy"]["disk_reservation_bytes"]
-                   for item in _active_records(root) if item["lane"] != spec["lane"])
-        if used + spec["resource_policy"]["disk_reservation_bytes"] > capacity["disk_free_bytes"]:
-            raise RuntimeError("image-build lane disk reservations exceed free capacity")
-        # Persist the exact identity before the first remote mutation; a lost
-        # SSM result is not permission to submit a replacement command.
-        fonts_lane_profile.activation_intent(root, workspace, host_config, spec)
-        fonts_lane_runtime.install(host, spec)
-        observed = fonts_lane_runtime.inspect(host, spec)
-    elif observed["status"] == "partial":
-        raise RuntimeError("pre-existing partial Fonts controller needs inspected recovery, not overwrite")
-    if observed["status"] != "complete":
-        raise RuntimeError("first Fonts controller failed installed readback")
-    project = Path(spec["project_root"])
-    record.update(
-        controller_config=str(project / "controller.json"),
-        source_root=str(project / "source"),
-        package_dir=str(project / "source" / "project" / "package"),
-        state_dir=str(project / "state"),
-        state="active",
-    )
-    # On a recovered complete remote installation, capacity was previously
-    # checked before writing; do not impose fresh unreviewed admission limits.
-    save(path, record)
-    return record
-
 
 def activate(directory, lane, *, expected_specification_sha256=None):
     with locked(directory) as root:
@@ -752,6 +707,10 @@ def activate(directory, lane, *, expected_specification_sha256=None):
         path = _path(root, lane)
         record = json.loads(path.read_text())
         spec = validate(record["specification"])
+        if spec["schema"] == INHERITED_SCHEMA:
+            # The immutable, pinned image-build producer still requires explicit
+            # UID/GID in its controller. Do not dispatch a partial migration.
+            raise RuntimeError("inherited execution requires a reviewed image-build/box-control/root-control runtime; migration preview is not activation")
         if lane == "gateway-first-fonts-runtime" or "fonts_lane_profile" in record:
             from . import fonts_lane_profile
             if lane != fonts_lane_profile.LANE or expected_specification_sha256 is None:
@@ -760,10 +719,10 @@ def activate(directory, lane, *, expected_specification_sha256=None):
                 root, record, spec, workspace, host_config,
                 expected_specification_sha256=expected_specification_sha256,
             )
-            # The approved retained lane is a different compatibility path.
-            # Never call the generic mkdir/upload implementation: it can
-            # replace an already installed controller.json after lost ACK.
-            return _activate_retained_fonts(root, path, record, spec, workspace, host_config)
+            # The old UID-selected first Fonts installation is retired. A
+            # reviewed inherited-runtime contract must replace it before
+            # compiler Host mutation is authorized.
+            raise RuntimeError("first Fonts requires an accepted inherited-execution migration")
         elif (expected_specification_sha256 is not None
                 and specification_sha256(spec) != expected_specification_sha256):
             raise RuntimeError("lane activation specification digest differs")
