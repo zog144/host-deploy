@@ -79,8 +79,9 @@ read-only selection with these required fields.
   Git source hashes cannot satisfy installed-module or RECORD attestation.
 - rollback: a protected independent copy of the original unit and old
   runtime tree under /opt/zog/compiler-runtime/rollback/<release_id>/,
-  with full original runtime tree SHA-256. Any unsafe, symlinked, aliased,
-  mutable or missing rollback bytes cause HOLD.
+  with full original runtime tree SHA-256. Any unsafe, unexpected-linked, aliased,
+  mutable or missing rollback bytes cause HOLD; the four reviewed literal legacy
+  venv links are handled only by the separate inventory defined below.
 - lane: the actual candidate schema-5 specification SHA-256, exact name
   gateway-first-fonts-runtime, and enabled: false. Historical schema-4
   files, original source, pin, identity and digest are never rewritten.
@@ -205,7 +206,7 @@ Host-install PR #49 and host-deploy PR #35 now bind the entire compiler unit com
 
 The versioned selection now requires a composition object containing sorted exact original_dropins and selected_dropins (name, SHA-256, size, mode, root UID/GID), plus original_effective and selected_effective dictionaries covering ExecStart, ExecStartPre, ReadOnlyPaths, Requires, and After. The inspector requires the exact on-disk staged, rollback and active drop-in sets, parses ordered ExecStart= resets, and checks systemd's actually loaded FragmentPath, DropInPaths and effective properties. Foreign/changed drop-ins HOLD. Selected manager-effective path= must equal the version-owned executable and cannot retain the old /opt/zog/fonts-controller-d9dfd6c0-20261114 runtime.
 
-This deliberately tightens the uninstalled draft selection schema. Native installed hashes and the approved canonical selection-file hash must be established from new genuine staging evidence, not guessed. The original compiler service was active during observation. The four symlinks inside the old runtime remain a separate unwaived preservation HOLD; no rewrites or flattening are authorized. The source correction performs no Host command, service start, compilation or SSM operation.
+This deliberately tightens the uninstalled draft selection schema. Native installed hashes and the approved canonical selection-file hash must be established from new genuine staging evidence, not guessed. The original compiler service was active during observation. The four symlinks inside the old runtime were a preservation HOLD; the later strict legacy-only inventory correction below allows exactly those links without rewriting or flattening. Native Python-chain attestation is still required. The source correction performs no Host command, service start, compilation or SSM operation.
 
 The mandatory composition additionally carries original_fragment and selected_fragment objects, each with exact path, SHA-256, byte size, mode, root UID/GID. The read-only inspector verifies these fields for staged, preserved and active fragment files, not merely the older service.staged_sha256 and rollback.unit_sha256 fields. Both fragment bindings must agree with the existing service/rollback path and digest fields. This is source-selection review metadata; actual installed values must be measured independently.
 
