@@ -308,8 +308,8 @@ def _read_fixed(path, expected_hash, expected_size=None):
         raise RuntimeHold("cannot verify installed bytes: " + str(path)) from error
 
 
-def _retained_tree_sha256(root):
-    """Hash every retained regular byte; reject aliases or writable/linked roots.
+def _retained_tree_inventory(root):
+    """Inventory every retained regular byte; reject links or writable roots.
 
     The rollback image is an independent byte-preserved directory snapshot,
     not just a recorded digest or a link to the selected live runtime.
@@ -350,7 +350,69 @@ def _retained_tree_sha256(root):
             })
     if not any(entry["type"] == "file" for entry in inventory):
         raise RuntimeHold("rollback runtime inventory is empty")
-    return _digest(inventory)
+    return inventory
+
+
+def _retained_tree_sha256(root):
+    return _digest(_retained_tree_inventory(root))
+
+
+def capture_installed_inventory(release_id):
+    """Read-only, root-owned evidence from a *real* staged versioned runtime.
+
+    Do not assume module/RECORD paths or invent installed hashes before they
+    exist. The output is a candidate for separate immutable source/installer
+    review; it is not an approved selection or compilation authorization.
+    """
+    if os.geteuid() != 0 or os.getegid() != 0:
+        raise RuntimeHold("installed runtime inventory requires trusted root owner")
+    if type(release_id) is not str or _ID.fullmatch(release_id) is None:
+        raise RuntimeHold("invalid installed immutable version ID")
+    root = Path(RELEASES) / release_id
+    inventory = _retained_tree_inventory(root)
+    required_modules = {
+        "root-control-module": "/zog/root_control/build.py",
+        "box-control-module": "/zog/box_control/build_jobs.py",
+        "image-build-module": "/zog/image_build/box_control_adapter.py",
+    }
+    selected = {}
+    for role, suffix in required_modules.items():
+        matches = [record for record in inventory
+                   if record["type"] == "file"
+                   and record["path"].endswith(suffix.lstrip("/"))
+                   and ("/" + record["path"]).endswith(suffix)]
+        if len(matches) != 1:
+            raise RuntimeHold("installed " + role + " is missing or ambiguous")
+        selected[role] = matches[0]
+    records = [record for record in inventory
+               if record["type"] == "file"
+               and record["path"].endswith(".dist-info/RECORD")]
+    if not records:
+        raise RuntimeHold("installed distribution RECORD absent")
+    # The integrated 'zog' distribution may have one aggregate RECORD, while
+    # separately packaged components have multiple RECORDs. Neither form
+    # is presumed until exact installed bytes and dependency closure exist.
+    return {
+        "schema": "zog-first-fonts-staged-installed-inventory-v1",
+        "release_id": release_id,
+        "sources": SELECTED_SOURCES,
+        "installed_tree_sha256": _digest(inventory),
+        "modules": {
+            role: {"path": str(root / file["path"]), "size": file["size"],
+                   "sha256": file["sha256"]}
+            for role, file in sorted(selected.items())
+        },
+        "records": [
+            {"path": str(root / file["path"]), "size": file["size"],
+             "sha256": file["sha256"]}
+            for file in records
+        ],
+        "file_count": sum(entry["type"] == "file" for entry in inventory),
+        "complete_runtime_inventory": inventory,
+        "independently_reviewed": False,
+        "execution_authorized": False,
+        "fonts_lane_enabled": False,
+    }
 
 
 def inspect_installed(selection, *, phase="staged"):
