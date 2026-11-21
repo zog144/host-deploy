@@ -483,3 +483,59 @@ def test_installed_module_paths_cannot_be_forged_by_role_label(tmp_path, monkeyp
                        / "lib/foreign-code.py")
     with pytest.raises(runtime.RuntimeHold, match="critical module path"):
         runtime.validate(selected)
+
+
+
+def test_ordered_execstart_resets_require_final_compiler_runtime():
+    c = runtime.composition
+    fragment = b"[Service]\nExecStart=/opt/old/default.py\n"
+    boot_a = b"[Service]\nExecStart=\nExecStart=/opt/old/boot-a.py\nReadOnlyPaths=/old/a\n"
+    fonts = b"[Service]\nExecStart=\nExecStart=/opt/old/fonts.py\n"
+    assert c.composed_exec(fragment, [boot_a, fonts]) == "/opt/old/fonts.py"
+    with pytest.raises(c.CompositionHold, match="multiple ExecStart"):
+        c.composed_exec(fragment, [b"[Service]\nExecStart=/another\n"])
+    selected = b"[Service]\nExecStart=\nExecStart=/opt/new/compiler-runtime/bin/root-control\n"
+    assert c.composed_exec(fragment, [boot_a, fonts, selected]).startswith("/opt/new/")
+
+
+def test_dropin_set_must_be_complete_and_duplicate_free():
+    c = runtime.composition
+    fields = {key: "" for key in c.KEYS}
+    base = {"original_dropins": [], "selected_dropins": [],
+            "original_effective": fields, "selected_effective": fields}
+    c.validate(base)
+    bad = copy.deepcopy(base)
+    item = {"name": "70-fonts.conf", "sha256": "a" * 64, "size": 8,
+            "mode": 0o644, "uid": 0, "gid": 0}
+    bad["selected_dropins"] = [item, item]
+    with pytest.raises(c.CompositionHold, match="duplicate"):
+        c.validate(bad)
+    bad["selected_dropins"] = [dict(item, name="../foreign.conf")]
+    with pytest.raises(c.CompositionHold, match="name"):
+        c.validate(bad)
+
+
+def test_manager_loaded_effective_properties_and_foreign_dropins():
+    c = runtime.composition
+    service = "zog-certbot-seed-root.service"
+    fragment = Path("/etc/systemd/system") / service
+    original = {
+        "ExecStart": "{ path=/opt/selected/bin/root-control ; argv[]=/opt/selected/bin/root-control ; }",
+        "ExecStartPre": "one-guard", "ReadOnlyPaths": "/state /projects",
+        "Requires": "b.mount a.mount", "After": "b.mount a.mount",
+    }
+    def runner(args, **kwargs):
+        fields = dict(original, FragmentPath=str(fragment),
+                      DropInPaths=str(Path(str(fragment) + ".d") / "70-fonts.conf"),
+                      LoadState="loaded")
+        return type("Result", (), {"returncode": 0,
+            "stdout": "".join(k + "=" + v + "\n" for k,v in fields.items())})()
+    assert c.verify_loaded(service, fragment=fragment, names=["70-fonts.conf"],
+                           expected=dict(original, Requires="a.mount b.mount",
+                                         After="a.mount b.mount"), runner=runner)
+    with pytest.raises(c.CompositionHold, match="drop-ins"):
+        c.verify_loaded(service, fragment=fragment, names=[],
+                        expected=original, runner=runner)
+    with pytest.raises(c.CompositionHold, match="ReadOnlyPaths"):
+        c.verify_loaded(service, fragment=fragment, names=["70-fonts.conf"],
+                        expected=dict(original, ReadOnlyPaths="/old"), runner=runner)
