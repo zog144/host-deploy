@@ -22,6 +22,23 @@ ROLLBACK = "/opt/zog/compiler-runtime/rollback"
 UNIT_DIR = "/etc/systemd/system"
 SELECTIONS = "/var/lib/zog/compiler-runtime/selections"
 COMPONENTS = frozenset({"root-control", "box-control", "image-build"})
+# Actual clean Git checkout SHA256 inventories measured by the exact-revision
+# CI on 2026-11-21. These are source bytes, NOT installed module/RECORD hashes.
+# Each new candidate requires an explicit reviewed source change to these pins.
+SELECTED_SOURCES = {
+    "root-control": {
+        "revision": "58b5a94311d771bb1c5f4c3e9c6191b44d6565c9",
+        "source_tree_sha256": "0ffddcfb39a9cc5295cc67196362e2dcb57301ed70199c502af1203e20c2d097",
+    },
+    "box-control": {
+        "revision": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
+        "source_tree_sha256": "9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00",
+    },
+    "image-build": {
+        "revision": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
+        "source_tree_sha256": "e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310",
+    },
+}
 REQUIRED_FILES = frozenset({
     "root-control-module", "box-control-module", "image-build-module",
     "root-control-record", "box-control-record", "image-build-record",
@@ -85,6 +102,8 @@ def validate(selection):
         if type(source["revision"]) is not str or _GIT.fullmatch(source["revision"]) is None:
             raise RuntimeHold("invalid " + role + " immutable Git commit")
         _hash(source["source_tree_sha256"], role + " source tree")
+        if source != SELECTED_SOURCES[role]:
+            raise RuntimeHold("selected " + role + " source revision or tree SHA256 differs from pinned tuple")
     service = _exact(selection["service"], {"name", "staged_unit", "active_unit",
                                             "staged_sha256", "exec_start"},
                      "service selection")
