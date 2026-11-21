@@ -105,6 +105,9 @@ def main():
             command.add_argument('--expected-specification-sha256', required=True)
         if name in {'fonts-lane-migration-preview','fonts-lane-migration-stage'}:
             command.add_argument('--project-root', required=True)
+    runtime_inventory = commands.add_parser('fonts-runtime-inventory',
+        help='Read-only root-owned capture of staged module/RECORD/entire runtime evidence')
+    runtime_inventory.add_argument('--release-id', required=True)
     runtime_inspect = commands.add_parser('fonts-runtime-inspect',
         help='Root-only readback of exact versioned controller bytes; does not activate')
     runtime_inspect.add_argument('--selection', required=True)
@@ -119,7 +122,12 @@ def main():
             command.add_argument('--retention-seconds',type=int,default=604800)
         if name=='artifact-fetch': command.add_argument('--output',required=True)
     arguments=parser.parse_args()
-    if arguments.command == 'fonts-runtime-inspect':
+    if arguments.command == 'fonts-runtime-inventory':
+        from . import fonts_versioned_runtime as versioned
+        if os.geteuid() != 0:
+            raise PermissionError('versioned runtime inventory requires trusted Host root owner')
+        result = versioned.capture_installed_inventory(arguments.release_id)
+    elif arguments.command == 'fonts-runtime-inspect':
         from . import fonts_versioned_runtime as versioned
         if os.geteuid() != 0:
             raise PermissionError('versioned runtime inspection requires trusted Host root owner')
