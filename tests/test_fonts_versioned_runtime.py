@@ -38,6 +38,10 @@ def fixture_selection(tmp_path, monkeypatch):
           "sha256": _sha(b"mock-py")}])
     (original / "retained-controller.py").write_bytes(b"old unchanged controller")
     (original / "retained-producer.py").write_bytes(b"old unchanged producer")
+    live = tmp_path / "old-runtime"
+    live.mkdir()
+    (live / "retained-controller.py").write_bytes(b"old unchanged controller")
+    (live / "retained-producer.py").write_bytes(b"old unchanged producer")
     old_bytes = b"[Service]\nExecStart=/old/accepted/controller\n"
     selected_exec = folder / "bin" / "controller-server"
     selected_exec.parent.mkdir(parents=True)
@@ -94,7 +98,7 @@ def fixture_selection(tmp_path, monkeypatch):
         "rollback": {
             "saved_unit": str(saved), "unit_sha256": _sha(old_bytes),
             "saved_runtime_root": str(original),
-            "original_runtime": str(original),
+            "original_runtime": str(live),
             "legacy_inventory_schema": runtime.legacy_rollback.SCHEMA,
             "runtime_tree_sha256": runtime.legacy_rollback.inventory(
                 tmp_path, original)["tree_sha256"],
