@@ -291,3 +291,80 @@ def test_installed_inventory_requires_bound_complete_tree_and_record(tmp_path, m
                         if f["role"] != "image-build-record"]
     with pytest.raises(runtime.RuntimeHold, match="incomplete"):
         runtime.validate(changed)
+
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned disposable installed inventory")
+def test_capture_actual_module_record_and_complete_version_tree(tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    release = selected["release_id"]
+    folder = Path(runtime.RELEASES) / release
+    modules = {
+        "root-control-module": "zog/root_control/build.py",
+        "box-control-module": "zog/box_control/build_jobs.py",
+        "image-build-module": "zog/image_build/box_control_adapter.py",
+    }
+    for role, rel in modules.items():
+        path = folder / "lib/python3.12/site-packages" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((role + " from selected source").encode("ascii"))
+    site = folder / "lib/python3.12/site-packages"
+    record = site / "zog-0.1.0.dist-info/RECORD"
+    record.parent.mkdir()
+    record.write_bytes(b"zog/root_control/build.py,sha256=digest,5\n")
+    evidence = runtime.capture_installed_inventory(release)
+    assert evidence["sources"] == runtime.SELECTED_SOURCES
+    assert evidence["independently_reviewed"] is False
+    assert evidence["execution_authorized"] is False
+    assert evidence["fonts_lane_enabled"] is False
+    assert evidence["installed_tree_sha256"] == runtime._retained_tree_sha256(folder)
+    assert evidence["file_count"] >= 11
+    for role, rel in modules.items():
+        selected_file = evidence["modules"][role]
+        assert selected_file["path"] == str(site / rel)
+        assert selected_file["sha256"] == _sha((site / rel).read_bytes())
+    assert evidence["records"] == [{
+        "path": str(record), "size": record.stat().st_size,
+        "sha256": _sha(record.read_bytes()),
+    }]
+    assert any(x["path"].endswith("dist-info/RECORD")
+               for x in evidence["complete_runtime_inventory"])
+    record.unlink()
+    with pytest.raises(runtime.RuntimeHold, match="RECORD absent"):
+        runtime.capture_installed_inventory(release)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned disposable installed inventory")
+def test_capture_refuses_ambiguous_or_missing_critical_module(tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    folder = Path(runtime.RELEASES) / selected["release_id"]
+    site = folder / "lib/python3.12/site-packages"
+    site.mkdir(parents=True)
+    record = site / "zog-0.1.0.dist-info/RECORD"
+    record.parent.mkdir()
+    record.write_bytes(b"zog/box_control/build_jobs.py,sha256=digest,5\n")
+    for role, rel in {
+        "root-control": "zog/root_control/build.py",
+        "box-control": "zog/box_control/build_jobs.py",
+        "image-build": "zog/image_build/box_control_adapter.py",
+    }.items():
+        path = site / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(role)
+    first = runtime.capture_installed_inventory(selected["release_id"])
+    assert len(first["records"]) == 1
+    duplicate = folder / "other/zog/root_control/build.py"
+    duplicate.parent.mkdir(parents=True)
+    duplicate.write_text("duplicate")
+    with pytest.raises(runtime.RuntimeHold, match="missing or ambiguous"):
+        runtime.capture_installed_inventory(selected["release_id"])
+
+
+def test_capture_requires_root_and_immutable_release_id(tmp_path, monkeypatch):
+    fixture_selection(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime.os, "geteuid", lambda: 1000)
+    with pytest.raises(runtime.RuntimeHold, match="trusted root"):
+        runtime.capture_installed_inventory("a" * 32)
+    monkeypatch.setattr(runtime.os, "geteuid", lambda: 0)
+    with pytest.raises(runtime.RuntimeHold, match="version ID"):
+        runtime.capture_installed_inventory("../selected")
