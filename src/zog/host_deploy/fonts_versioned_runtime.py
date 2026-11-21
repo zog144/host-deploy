@@ -7,7 +7,10 @@ root-control owner must independently authenticate its peer-to-child binding.
 """
 from __future__ import annotations
 
+import base64
+import csv
 import hashlib
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -429,6 +432,44 @@ def capture_installed_inventory(release_id):
     }
 
 
+def verify_module_record_bindings(selection):
+    """Verify each pinned critical module is attested inside its installed RECORD.
+
+    A matching RECORD *file hash* alone is insufficient: a stale RECORD could
+    describe different installed modules. Both combined Zog and distinct
+    component distributions are supported, but partial/mixed records HOLD.
+    """
+    validate(selection)
+    named = {entry["role"]: entry for entry in selection["files"]}
+    aggregate = named.get("zog-record")
+    for module_role, suffix in MODULE_PATH_SUFFIXES.items():
+        module = named[module_role]
+        record_role = "zog-record" if aggregate else module_role.removesuffix("-module") + "-record"
+        record = named[record_role]
+        record_path = Path(record["path"])
+        site = record_path.parent.parent
+        module_path = Path(module["path"])
+        try:
+            relative = module_path.relative_to(site).as_posix()
+        except ValueError as error:
+            raise RuntimeHold(module_role + " is outside its distribution's site-packages") from error
+        if not relative.endswith(suffix.lstrip("/")):
+            raise RuntimeHold(module_role + " RECORD path is foreign")
+        _read_fixed(record["path"], record["sha256"], record["size"])
+        try:
+            rows = list(csv.reader(io.StringIO(record_path.read_text(encoding="utf-8"))))
+        except (OSError, UnicodeError, csv.Error) as error:
+            raise RuntimeHold("cannot parse installed distribution RECORD") from error
+        matches = [row for row in rows if row and row[0] == relative]
+        encoded = base64.urlsafe_b64encode(
+            bytes.fromhex(module["sha256"])).decode("ascii").rstrip("=")
+        if (len(matches) != 1 or len(matches[0]) != 3
+                or matches[0][1] != "sha256=" + encoded
+                or matches[0][2] != str(module["size"])):
+            raise RuntimeHold("installed " + module_role + " differs from distribution RECORD")
+    return True
+
+
 def inspect_installed(selection, *, phase="staged"):
     """Read only. Require old unit live before switch, selected unit after switch.
 
@@ -459,6 +500,7 @@ def inspect_installed(selection, *, phase="staged"):
         raise RuntimeHold("selected ExecStart executable absent from installed-byte inventory")
     for item in selection["files"]:
         _read_fixed(item["path"], item["sha256"], item["size"])
+    verify_module_record_bindings(selection)
     selected_root = RELEASES + "/" + selection["release_id"]
     if _retained_tree_sha256(selected_root) != selection["installed_tree_sha256"]:
         raise RuntimeHold("selected full installed tree differs from reviewed bytes")
