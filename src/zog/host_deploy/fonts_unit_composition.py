@@ -44,6 +44,8 @@ def _files(spec, role):
              and entry["mode"] in (0o600, 0o640, 0o644)
              and entry["uid"] == entry["gid"] == 0,
              "invalid or unprotected drop-in selection")
+    need([entry["name"] for entry in spec] == sorted(names),
+         "drop-in selection must follow systemd lexical override order")
     return names
 
 
