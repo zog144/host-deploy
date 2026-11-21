@@ -3,6 +3,7 @@
 A fake /proc tree tests child identity without starting a compiler. The
 root-owned installed-file test runs only on disposable CI paths as root.
 """
+import base64
 import copy
 import hashlib
 import json
@@ -62,6 +63,19 @@ def fixture_selection(tmp_path, monkeypatch):
         path.write_bytes(body)
         files.append({"role": role, "path": str(path),
                       "sha256": _sha(body), "size": len(body)})
+    # RECORDs must bind actual critical-module paths, hashes and byte sizes,
+    # not merely have an independently approved RECORD file hash.
+    for record_role in sorted(runtime.SEPARATE_RECORD_ROLES):
+        component = record_role.removesuffix("-record")
+        module = next(x for x in files if x["role"] == component + "-module")
+        record = next(x for x in files if x["role"] == record_role)
+        relative = Path(module["path"]).relative_to(
+            Path(record["path"]).parent.parent).as_posix()
+        encoded = base64.urlsafe_b64encode(
+            bytes.fromhex(module["sha256"])).decode("ascii").rstrip("=")
+        line = (relative + ",sha256=" + encoded + "," + str(module["size"]) + chr(10)).encode()
+        Path(record["path"]).write_bytes(line)
+        record["sha256"], record["size"] = _sha(line), len(line)
     selected = {
         "schema": runtime.SCHEMA, "contract": runtime.CONTRACT,
         "release_id": release,
@@ -383,6 +397,54 @@ def test_capture_requires_root_and_immutable_release_id(tmp_path, monkeypatch):
     with pytest.raises(runtime.RuntimeHold, match="version ID"):
         runtime.capture_installed_inventory("../selected")
 
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned disposable RECORD verification")
+def test_stale_record_rejected_even_with_consistent_new_file_and_tree_hashes(
+        tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    record = next(x for x in selected["files"]
+                  if x["role"] == "image-build-record")
+    target = Path(record["path"])
+    tampered = b"zog/image_build/box_control_adapter.py,sha256=forged,5" + bytes([10])
+    target.write_bytes(tampered)
+    record["sha256"], record["size"] = _sha(tampered), len(tampered)
+    root = Path(runtime.RELEASES) / selected["release_id"]
+    selected["installed_tree_sha256"] = runtime._retained_tree_sha256(root)
+    with pytest.raises(runtime.RuntimeHold, match="differs from distribution RECORD"):
+        runtime.inspect_installed(selected)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned disposable RECORD verification")
+def test_aggregate_zog_record_validates_all_three_exact_module_memberships(
+        tmp_path, monkeypatch):
+    selected, *_ = fixture_selection(tmp_path, monkeypatch)
+    modules = [item for item in selected["files"]
+               if item["role"] in runtime.MODULE_PATH_SUFFIXES]
+    records = [item for item in selected["files"]
+               if item["role"] in runtime.SEPARATE_RECORD_ROLES]
+    selected["files"] = [item for item in selected["files"]
+                         if item["role"] not in runtime.SEPARATE_RECORD_ROLES]
+    for rec in records:
+        Path(rec["path"]).unlink()
+    site = Path(runtime.RELEASES) / selected["release_id"] / "lib/python3.12/site-packages"
+    target = site / "zog-0.1.0.dist-info/RECORD"
+    target.parent.mkdir()
+    lines = []
+    for module in modules:
+        rel = Path(module["path"]).relative_to(site).as_posix()
+        encoded = base64.urlsafe_b64encode(
+            bytes.fromhex(module["sha256"])).decode("ascii").rstrip("=")
+        lines.append(rel + ",sha256=" + encoded + "," + str(module["size"]))
+    data = (chr(10).join(lines) + chr(10)).encode()
+    target.write_bytes(data)
+    selected["files"].append({
+        "role": "zog-record", "path": str(target),
+        "sha256": _sha(data), "size": len(data),
+    })
+    selected["installed_tree_sha256"] = runtime._retained_tree_sha256(
+        Path(runtime.RELEASES) / selected["release_id"])
+    assert runtime.inspect_installed(selected)["execution_authorized"] is False
 
 
 def test_combined_zog_record_selection_is_accepted_but_partial_records_hold(
