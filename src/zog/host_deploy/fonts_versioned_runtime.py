@@ -131,7 +131,18 @@ def validate(selection):
     if not _under(exe, folder + "/bin"):
         raise RuntimeHold("service executable is not version-owned")
     try:
-        composition.validate(selection["composition"])
+        comp = composition.validate(selection["composition"])
+        selected_start = comp["selected_effective"]["ExecStart"]
+        match = re.search(r"(?:^|[ ;])path=([^ ;]+)", selected_start)
+        if match is None or match.group(1) != exe:
+            raise composition.CompositionHold(
+                "reviewed manager-effective ExecStart is not the versioned executable")
+        # Prior compiler /opt runtime may be preserved for rollback, but may
+        # not silently remain in the new unit's selected command/restrictions.
+        for property_value in comp["selected_effective"].values():
+            if "/opt/zog/fonts-controller-d9dfd6c0-20261114" in property_value:
+                raise composition.CompositionHold(
+                    "old compiler runtime remains in selected effective unit")
     except composition.CompositionHold as error:
         raise RuntimeHold(str(error)) from error
     rollback = _exact(selection["rollback"],
