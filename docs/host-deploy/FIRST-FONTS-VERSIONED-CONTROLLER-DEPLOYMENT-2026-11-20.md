@@ -29,7 +29,7 @@ The supported source tuple is **exactly**:
 
 | Component | Git commit | Complete clean tracked source-tree SHA-256 |
 | --- | --- | --- |
-| root-control | `8a159b182e63a4f491123db25ca91599b11b74f5` | `090666b537c84d8d800bba97e91595b085cb058e1215a0b143ee84d0029431de` |
+| root-control | `a672f007b33f83bf70970e3a571fd443366bd93f` | `c9475afdc6545adc963203f1ef00f77bd5aa542e2bf6337f660a5b64d0800989` |
 | box-control | `ad61fa6a4e9c3176149720868cb008e0512dbec9` | `9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00` |
 | image-build | `ff968a431dd2067e7d0e1f17d6e547f2779f647a` | `e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310` |
 
@@ -317,7 +317,7 @@ PR #54 at 5d093474063b0b11609e8be4b4dc090e531ef760, image-build PR #31
 at bce80b258e445191248d9998620884a79f029013, and box-control PR #21
 at ad61fa6a4e9c3176149720868cb008e0512dbec9, plus the newly selected
 root-control root-peer successor at
-8a159b182e63a4f491123db25ca91599b11b74f5.
+a672f007b33f83bf70970e3a571fd443366bd93f.
 
 The normal SSM Project-current envelope selects pipeline.submit with only
 the approved mode/targets. The producer's BoxControlExecutionAdapter
