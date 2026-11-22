@@ -5,6 +5,10 @@ on:
   pull_request:
     paths:
       - src/zog/host_deploy/fonts_versioned_runtime.py
+      - src/zog/host_deploy/fonts_lane_runtime.py
+      - src/zog/host_deploy/effective_project_access.py
+      - tests/test_fonts_identity_route.py
+      - tests/test_effective_project_access.py
       - src/zog/host_deploy/compiler_legacy_rollback.py
       - src/zog/host_deploy/cli.py
       - tests/test_fonts_versioned_runtime.py
@@ -42,6 +46,20 @@ jobs:
           ref: ff968a431dd2067e7d0e1f17d6e547f2779f647a
           path: companions/image-build
           persist-credentials: false
+      # Audit the actual SSM/Project-current -> producer -> box-control
+      # source path, not the historical schema-3 identity selector path.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/host-deploy
+          ref: 5d093474063b0b11609e8be4b4dc090e531ef760
+          path: companions/host-deploy-project-current
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/image-build
+          ref: bce80b258e445191248d9998620884a79f029013
+          path: companions/image-build-project-current
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
@@ -67,7 +85,7 @@ jobs:
         run: |
           python -m pip install 'pytest>=8,<10'
           python -m compileall -q src/zog/host_deploy/fonts_versioned_runtime.py src/zog/host_deploy/compiler_legacy_rollback.py src/zog/host_deploy/cli.py tests/test_fonts_versioned_runtime.py
-          PYTHONPATH=src python -m pytest -q tests/test_fonts_versioned_runtime.py
+          PYTHONPATH=src python -m pytest -q tests/test_fonts_versioned_runtime.py tests/test_effective_project_access.py tests/test_fonts_identity_route.py
       - name: Root-owned checks on disposable local runner files only
         run: |
           sudo env PYTHONPATH="$PWD/src:$PWD/tests" "$(command -v python)" -m pytest -q tests/test_fonts_versioned_runtime.py
