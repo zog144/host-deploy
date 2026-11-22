@@ -76,7 +76,6 @@ jobs:
           }
           for component, expected in sorted(revisions.items()):
               observed = source_tree_sha256(Path("companions") / component)
-              print("OBSERVED_SELECTED_SOURCE", component, json.dumps(observed, sort_keys=True), flush=True)
               if observed != SELECTED_SOURCES[component] or observed["revision"] != expected:
                   raise SystemExit("selected source commit/tree hash differs: " + component)
               print("ZOG_PINNED_SOURCE " + component + " " + observed["revision"]
