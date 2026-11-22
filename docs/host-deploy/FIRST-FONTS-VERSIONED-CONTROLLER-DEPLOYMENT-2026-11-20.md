@@ -31,7 +31,7 @@ The supported source tuple is **exactly**:
 | --- | --- | --- |
 | root-control | `a672f007b33f83bf70970e3a571fd443366bd93f` | `c9475afdc6545adc963203f1ef00f77bd5aa542e2bf6337f660a5b64d0800989` |
 | box-control | `ad61fa6a4e9c3176149720868cb008e0512dbec9` | `9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00` |
-| image-build | `ff968a431dd2067e7d0e1f17d6e547f2779f647a` | `e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310` |
+| image-build | `0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a` | `f17598d995888927e66504d2c1ca65ae675c1efb6ac1208e7de1ce9cdd409688` |
 
 The hashes were measured by the exact-revision clean-checkout
 `source_tree_sha256()` algorithm on GitHub Actions on November 21, 2026.
