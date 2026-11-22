@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: zog144/image-build
-          ref: ff968a431dd2067e7d0e1f17d6e547f2779f647a
+          ref: 0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a
           path: companions/image-build
           persist-credentials: false
       # Audit the actual SSM/Project-current -> producer -> box-control
@@ -72,10 +72,11 @@ jobs:
           revisions = {
               "root-control": "a672f007b33f83bf70970e3a571fd443366bd93f",
               "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
-              "image-build": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
+              "image-build": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
           }
           for component, expected in sorted(revisions.items()):
               observed = source_tree_sha256(Path("companions") / component)
+              print("MEASURED_IMAGE_BUILD_PIN", component, observed, flush=True)
               if observed != SELECTED_SOURCES[component] or observed["revision"] != expected:
                   raise SystemExit("selected source commit/tree hash differs: " + component)
               print("ZOG_PINNED_SOURCE " + component + " " + observed["revision"]
