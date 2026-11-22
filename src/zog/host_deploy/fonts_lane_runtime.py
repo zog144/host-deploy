@@ -40,8 +40,8 @@ python=Path(spec['python_executable'])
 if not python.is_file() or python.is_symlink() or not os.access(python, os.X_OK):
     raise RuntimeError('selected Python executable not installed')
 uid,gid=os.geteuid(),os.getegid()
-if uid == 0 or gid == 0:
-    raise PermissionError('compiler controller probe must run as existing nonroot effective process')
+if (uid == 0) != (gid == 0):
+    raise PermissionError('inherited root principal must be an exact 0:0 pair')
 if 'execution_user_id' in ctrl or 'execution_group_id' in ctrl:
     # Legacy identifiers are evidence only; cannot authorize another account.
     raise RuntimeError('legacy execution identity selectors require explicit migration')
@@ -151,8 +151,9 @@ def inspect(host, spec):
     }
     if (type(result) is not dict
             or set(result) != set(expected) | {"status", "effective_uid", "effective_gid"}
-            or type(result.get("effective_uid")) is not int or result["effective_uid"] == 0
-            or type(result.get("effective_gid")) is not int or result["effective_gid"] == 0
+            or type(result.get("effective_uid")) is not int or result["effective_uid"] < 0
+            or type(result.get("effective_gid")) is not int or result["effective_gid"] < 0
+            or (result["effective_uid"] == 0) != (result["effective_gid"] == 0)
             or any(result[key] != value for key, value in expected.items())
             or result["status"] not in {"complete", "absent", "partial"}):
         raise RuntimeError("installed controller inspection differs from retained lane")
