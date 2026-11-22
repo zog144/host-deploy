@@ -42,7 +42,7 @@ SELECTED_SOURCES = {
         "source_tree_sha256": "9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00",
     },
     "image-build": {
-        "revision": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
+        "revision": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
         "source_tree_sha256": "e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310",
     },
 }
