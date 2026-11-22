@@ -43,7 +43,7 @@ SELECTED_SOURCES = {
     },
     "image-build": {
         "revision": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
-        "source_tree_sha256": "e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310",
+        "source_tree_sha256": "f17598d995888927e66504d2c1ca65ae675c1efb6ac1208e7de1ce9cdd409688",
     },
 }
 MODULE_PATH_SUFFIXES = {
