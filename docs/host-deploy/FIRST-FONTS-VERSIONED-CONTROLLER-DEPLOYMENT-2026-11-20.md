@@ -12,12 +12,15 @@ No certbot-build-owner, certbot-build-worker, synthetic UID/GID,
 User/Group selector from RPC, new account, direct SSM compilation or root
 build is allowed.
 
-**The reviewed source candidate is now root-control PR #55**, box-control's
-inherited-peer-v2 successor and image-build's matching producer. Root-control
-PR #55 adds kernel SO_PEERCRED-bound, nonroot build ownership and a native
-child-observation contract in source. These revisions are not yet proof of
-a selected, installed systemd service or an actually running nonroot
-compiler child. The historical schema-4 lane, UID-required producer and
+**The reviewed source candidate is now the root-peer successor on root-control
+PR #55**, box-control's inherited-peer-v2 successor and image-build's
+matching producer. This root-control revision derives the execution identity
+from kernel SO_PEERCRED and permits an authenticated **exact 0:0 peer** without
+switching to an alternate account. A 0:nonzero or nonzero:0 pair is invalid.
+The selected source and its schema-2 protected registration/job records
+must be installed and independently attested. Source review alone does not
+authenticate any real child, approve a compiler run, or establish that systemd
+uses the intended version. The historical schema-4 lane, UID-required producer and
 associated hashes remain evidence only.
 
 ## Exact pinned candidate — 2026-11-21
@@ -26,7 +29,7 @@ The supported source tuple is **exactly**:
 
 | Component | Git commit | Complete clean tracked source-tree SHA-256 |
 | --- | --- | --- |
-| root-control | `58b5a94311d771bb1c5f4c3e9c6191b44d6565c9` | `0ffddcfb39a9cc5295cc67196362e2dcb57301ed70199c502af1203e20c2d097` |
+| root-control | `8a159b182e63a4f491123db25ca91599b11b74f5` | `090666b537c84d8d800bba97e91595b085cb058e1215a0b143ee84d0029431de` |
 | box-control | `ad61fa6a4e9c3176149720868cb008e0512dbec9` | `9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00` |
 | image-build | `ff968a431dd2067e7d0e1f17d6e547f2779f647a` | `e0aacfb08a8b0ef9b1883080ece7d93673906263bee30caa09a285e7a1466310` |
 
@@ -154,37 +157,47 @@ separately installed component or mutable branch may substitute.
    the old installed unit, bytes and service identity. Never invent a new
    worker or invoke direct SSM as a fallback.
 
-## Mandatory nonroot compiler child witness
+## Root-control authenticated child identity witness (including exact 0:0)
 
-A root-owned root-control daemon may supervise units; its compiler child
-must not execute as root. The **actual authenticated box-control peer** must
-be nonroot, read using kernel SO_PEERCRED by root-control. Root-control
-must reject root peers and derive transient-unit User/Group exclusively
-**server-side from those verified peer credentials**. It must not take an
-identity selection from SSM, caller JSON, username, home, session or daemon
-os.geteuid(). Identity-free build registration and lifecycle requests use
-the exact inherited-peer-v2 version; old records remain inspection-only.
+The root-owned root-control daemon may supervise units. For an actual build
+child, root-control must authenticate the incoming box-control Unix socket
+using kernel SO_PEERCRED, bind the immutable peer UID/GID to its schema-2
+registration and job records, and derive any transient systemd User/Group
+exclusively from that saved identity. A kernel-authenticated **0:0** principal
+is admissible under this policy; a mixed-zero identity or caller-specified
+UID/GID, User/Group, worker account or alternate execution principal is not.
 
-Before any real Fonts compilation, run a separately authorized *safe,
-non-compiling child probe* through the accepted controller. Verify the
-actual child PID and stable /proc/<pid>/stat start time, kernel status
-effective UID and GID (second fields of Uid and Gid), real systemd unit
-cgroup, matching nonroot root-control authenticated peer, saved operation/
-registration identity and cgroup/namespace/NoNewPrivileges controls.
-The source inspect_child_identity() validates the real kernel child EUID,
-EGID, start time and cgroup and rejects zero or mismatched credentials.
-It returns execution_authorized: false deliberately: root-control must
-add and prove the **authenticated owner-to-child linkage** independently,
-not a user-supplied peer UID/GID argument or fabricated JSON record.
-A root SSM process's UID cannot substitute for this evidence.
+The read-only host-deploy child inspector now requires the original selected
+Project path and root-control's existing build_root_id and job_id. It does
+**not** accept caller-supplied peer_uid/peer_gid or a purported trusted
+evidence object. It reads the protected root-owned root-control records from
+/var/lib/zog/build-resources/<SHA256(Project path)>/<build_root_id>,
+verifies schema-2 registration/job association, matching execution_identity,
+registered service unit and absence of identity fields in the job request,
+then independently observes the actual /proc child twice. The recorded
+peer identity must exactly equal all four actual UID/GID values; the PID,
+start-time ticks and cgroup must remain stable and match the selected unit.
+If a protected record is missing, untrusted, modified, a symlink, or does not
+bind that exact job and child unit, inspection fails.
 
-**Admission stays HOLD** until exact reviewed controller/producer source,
-installed-byte/RECORD hashes, unit/rollback selection, accepted nonroot
-peer-derived root-control contract (root explicitly rejected), real child
-EUID/EGID and cgroup, retained Project/lane/pin provenance and separately
-authorized lane activation all pass. No root compilation can be admitted.
-The selected root-control PR #55 source is only a candidate until installed
-native SO_PEERCRED, actual child EUID/EGID and cgroup checks pass.
+The result reports real/effective/saved/filesystem UID/GID, peer UID/GID,
+root_identity_observed, PID, start time, cgroup, and source of the protected
+root-control evidence. It **always** reports execution_authorized=false.
+In particular, a successful observation of root 0:0 does not authorize
+root compilation by itself or allow a job to be replayed. Root-control's
+selected installed-byte pin, actual authenticated socket peer, Project/
+operation binding and the normal controller lifecycle are independent native
+admission requirements.
+
+The read-only controller and Project access probes also report an existing
+effective 0:0 principal accurately; mixed-zero values still fail. Neither
+probe switches identity, opens an account, sends a build or grants authority.
+
+**Admission remains HOLD** until the reviewed source tuple, host-install
+exact selected service/runtime/RECORD/rollback attestations, protected
+root-control peer-to-child evidence, stable native systemd 252 child readback,
+retained Project/generation/pin provenance and separately authorized lane
+activation are all accepted. The Fonts lane remains disabled.
 
 ## CI and native handoff boundary
 
@@ -295,3 +308,31 @@ Native Work must check the actual systemd 252 `ConditionPathExists` behavior thr
 ### Startup guard ordering
 
 The temporary guard is `zzzz-zog-compiler-transaction-guard.conf`, deliberately placed last among reviewed drop-ins. Since a later `ConditionPathExists=` reset could erase the deny-by-default condition, the guarded inspector fails closed on any drop-in whose name sorts after the guard. Only the guarded selected inspection accepts the one exact additional file; normal selected inspection still requires the original approved drop-in set without extras. Source tests include a later malicious condition reset.
+
+
+## November 22 — selector-free normal SSM → Project-current → box-control audit
+
+The source CI checks the exact Project-current gateway producer from host-deploy
+PR #54 at 5d093474063b0b11609e8be4b4dc090e531ef760, image-build PR #31
+at bce80b258e445191248d9998620884a79f029013, and box-control PR #21
+at ad61fa6a4e9c3176149720868cb008e0512dbec9, plus the newly selected
+root-control root-peer successor at
+8a159b182e63a4f491123db25ca91599b11b74f5.
+
+The normal SSM Project-current envelope selects pipeline.submit with only
+the approved mode/targets. The producer's BoxControlExecutionAdapter
+constructs the typed build registration, command, environment, timeout,
+resource and isolation arguments; it never sets UID/GID/User/Group on the
+request. Both the actual box-control and root-control canonical request
+validators reject injected identity selectors. The controller still owns
+the kernel-authenticated peer identity and corresponding transient unit.
+Historical identity-bearing schema-3 records remain blocked from implicit
+translation, not reinterpreted as normal schema-4 Project-current requests.
+
+This audit is source-only. No live SSM → box-control operation, new attempt,
+controller installation, protected journal change or compilation occurred.
+Host-install PR #49 must update its source selection to the **exact new
+root-control commit and measured source-tree hash**, reattest the installed
+module/RECORD and entire versioned runtime, preserve existing rollback
+evidence, and complete a separate approved native acceptance. Do not
+automatically repin an existing installation or rewrite an accepted receipt.
