@@ -844,3 +844,22 @@ def test_reboot_persistent_guard_requires_exact_condition_and_absent_permit(tmp_
     expected = [record]
     with pytest.raises(composition.CompositionHold, match="drop-in set"):
         composition.verify(target, expected)
+
+
+
+@pytest.mark.skipif(os.geteuid() != 0,
+                    reason="guard admission requires root-owned systemd fixture")
+def test_guard_must_be_last_dropin_to_prevent_condition_reset(tmp_path):
+    from zog.host_deploy import fonts_unit_composition as composition
+    release = "b" * 32
+    directory = tmp_path / "root.service.d"
+    directory.mkdir()
+    guard = directory / composition.GUARD_NAME
+    guard.write_bytes(composition.transaction_guard_bytes(release))
+    guard.chmod(0o644)
+    assert composition.verify_transaction_guard(directory, release)
+    later = directory / "zzzzz-condition-reset.conf"
+    later.write_bytes(b"[Unit]\nConditionPathExists=\n")
+    with pytest.raises(composition.CompositionHold,
+                       match="ordered after protective startup guard"):
+        composition.verify_transaction_guard(directory, release)
