@@ -15,6 +15,36 @@ import subprocess
 from . import fonts_systemd_command_identity as command_identity
 
 KEYS = ("ExecStart", "ExecStartPre", "ReadOnlyPaths", "Requires", "After")
+
+GUARD_NAME = "00-zog-compiler-selection-guard.conf"
+
+
+def transaction_guard_bytes(release):
+    """Permanent-disk, deny-by-default systemd condition during a transaction.
+
+    No startup-permit file is ever issued by this installer. This drop-in
+    survives reboot independently of the fragment's temporary /dev/null mask.
+    """
+    need(type(release) is str and re.fullmatch(r"[0-9a-f]{32,64}", release),
+         "invalid guarded release")
+    return ("[Unit]\nConditionPathExists=/opt/zog/compiler-runtime/rollback/"
+            + release + "/startup-permit\n").encode("ascii")
+
+
+def verify_transaction_guard(directory, release):
+    path = Path(directory) / GUARD_NAME
+    expected = transaction_guard_bytes(release)
+    actual = inventory(directory)
+    matches = [item for item in actual if item["name"] == GUARD_NAME]
+    need(len(matches) == 1 and matches[0]["mode"] == 0o644,
+         "missing protected persistent startup guard")
+    need(path.read_bytes() == expected,
+         "persistent startup guard differs from reviewed condition")
+    permit = Path("/opt/zog/compiler-runtime/rollback") / release / "startup-permit"
+    need(not permit.exists() and not permit.is_symlink(),
+         "compiler startup permit unexpectedly exists")
+    return matches[0]
+
 _NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\.conf\Z")
 _HEX = re.compile(r"[a-f0-9]{64}\Z")
 
