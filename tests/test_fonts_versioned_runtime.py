@@ -429,7 +429,7 @@ def test_exact_reviewed_source_tuple_is_required_by_selection(tmp_path, monkeypa
     selected, *_ = fixture_selection(tmp_path, monkeypatch)
     assert selected["sources"] == runtime.SELECTED_SOURCES
     expected = {
-        "root-control": "8a159b182e63a4f491123db25ca91599b11b74f5",
+        "root-control": "a672f007b33f83bf70970e3a571fd443366bd93f",
         "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
         "image-build": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
     }
