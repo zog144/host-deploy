@@ -1,7 +1,8 @@
 """Read-only access probe for a compiler running as its effective process principal.
 
-This MUST execute *inside the actual nonroot compiler/controller process*, not
-through a root-owned SSM installation or an impersonating helper. No passwd,
+This MUST execute *inside the actual selected compiler/controller process*, not
+through a different SSM installation or an impersonating helper. A root
+process may be observed only as an exact 0:0 pair; this is not build admission. No passwd,
 NSS, setuid, setgroups, sudo, su or ownership-repair behavior exists here.
 """
 import os
@@ -16,10 +17,10 @@ def inspect(project_root):
     if str(root) != project_root or ".." in root.parts or "//" in project_root:
         raise ValueError("compiler project path must be normalized")
     uid, gid = os.geteuid(), os.getegid()
-    # A privileged installer or root SSM process is NOT a substitute for a
-    # working nonroot compiler. Do not weaken the root-control boundary.
-    if uid == 0 or gid == 0:
-        raise PermissionError("compiler must run as its existing nonroot effective process principal")
+    # Report only the process actually invoking this probe. Even matching
+    # root does not authorize a compiler child without root-control evidence.
+    if (uid == 0) != (gid == 0):
+        raise PermissionError("inherited root principal must be exactly 0:0")
     if root == Path("/"):
         raise ValueError("filesystem root is not a compiler project")
     existing = root
