@@ -27,6 +27,7 @@ RELEASES = "/opt/zog/compiler-runtime/versions"
 ROLLBACK = "/opt/zog/compiler-runtime/rollback"
 UNIT_DIR = "/etc/systemd/system"
 SELECTIONS = "/var/lib/zog/compiler-runtime/selections"
+ROOT_CONTROL_BUILD_STATE = "/var/lib/zog/build-resources"
 COMPONENTS = frozenset({"root-control", "box-control", "image-build"})
 # Actual clean Git checkout SHA256 inventories measured by the exact-revision
 # CI on 2026-11-21. These are source bytes, NOT installed module/RECORD hashes.
@@ -616,21 +617,132 @@ def inspect_installed(selection, *, phase="staged", transaction_guard=False):
             "child_identity_verified": False, "execution_authorized": False}
 
 
-def inspect_child_identity(selection, *, pid, peer_uid, peer_gid, unit_cgroup,
-                           proc_root="/proc"):
-    """Native witness only; kernel /proc child identity is not SSM caller identity.
+def _protected_root_control_record(path, state_root):
+    """Load only the installed root owner's durable, immutable peer-bound job.
 
-    peer_uid/gid MUST come from root-control's authenticated SO_PEERCRED and
-    bound registration, never from a user-supplied request or root SSM UID.
-    This returns *evidence*, not build authorization; the trusted root owner
-    must independently attest the peer and unchanged cgroup/operation.
+    A caller-provided peer UID/GID or a JSON object with a 'trusted' flag is
+    never sufficient: the compiler owner authenticates SO_PEERCRED and stores
+    it in these protected schema-2 registration/job records. The *selected*
+    root-control source and installed tree are independently pinned by the
+    versioned runtime selection.
+    """
+    root = Path(state_root)
+    path = Path(path)
+    if not path.is_relative_to(root) or path == root:
+        raise RuntimeHold("untrusted root-control record location")
+    for parent in (root, *reversed(path.parents)):
+        if parent == Path("/") or not parent.is_relative_to(root):
+            continue
+        try:
+            mode = parent.lstat()
+        except OSError as error:
+            raise RuntimeHold("root-control evidence directory missing") from error
+        if (not stat.S_ISDIR(mode.st_mode) or mode.st_uid != 0
+                or mode.st_gid != 0 or mode.st_mode & 0o022):
+            raise RuntimeHold("root-control evidence directory not root-protected")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != 0
+                    or before.st_gid != 0 or before.st_mode & 0o022
+                    or before.st_nlink != 1
+                    or not 0 < before.st_size <= 1024 * 1024):
+                raise RuntimeHold("root-control peer record is not protected")
+            raw = os.read(fd, before.st_size + 1)
+            after = os.fstat(fd)
+            if len(raw) != before.st_size or (
+                    before.st_ino, before.st_dev, before.st_size, before.st_mtime_ns
+            ) != (after.st_ino, after.st_dev, after.st_size, after.st_mtime_ns):
+                raise RuntimeHold("root-control peer record changed during inspection")
+        finally:
+            os.close(fd)
+    except OSError as error:
+        raise RuntimeHold("authenticated root-control peer record unavailable") from error
+    try:
+        result = json.loads(raw)
+    except (ValueError, UnicodeError) as error:
+        raise RuntimeHold("root-control peer record is malformed") from error
+    if type(result) is not dict:
+        raise RuntimeHold("root-control peer record is not an object")
+    return result
+
+
+def _root_control_peer_evidence(*, project_root, build_root_id, job_id,
+                                unit_cgroup):
+    """Resolve the peer ONLY from root-owned root-control records, not SSM.
+
+    The accepted root-control source binds each record to kernel SO_PEERCRED,
+    so there is no peer selector in either request or this inspector API.
+    """
+    if os.geteuid() != 0 or os.getegid() != 0:
+        raise RuntimeHold("trusted root-control peer inspection requires Host root")
+    project = _path(project_root, "selected Project path")
+    if (type(build_root_id) is not str or re.fullmatch(r"[0-9a-f]{32}", build_root_id) is None
+            or type(job_id) is not str or re.fullmatch(r"[0-9a-f]{32}", job_id) is None):
+        raise RuntimeHold("missing root-control operation identity")
+    root = Path(ROOT_CONTROL_BUILD_STATE)
+    # Project name is normalized at the call boundary; this MUST be the
+    # already-selected canonical Project, not an arbitrary caller-provided
+    # path inside a second Project.
+    try:
+        selected = Path(project).resolve(strict=True)
+    except OSError as error:
+        raise RuntimeHold("selected root-control Project is unavailable") from error
+    if str(selected) != project:
+        raise RuntimeHold("root-control Project path is redirected")
+    area = root / hashlib.sha256(project.encode("utf-8")).hexdigest() / build_root_id
+    registration = _protected_root_control_record(area / "registration.json", root)
+    job = _protected_root_control_record(area / "jobs" / (job_id + ".json"), root)
+    if (registration.get("schema") != 2
+            or registration.get("resource_id") != build_root_id
+            or registration.get("state") != "ready"
+            or job.get("schema") != 2
+            or job.get("job_id") != job_id
+            or type(job.get("request")) is not dict
+            or job["request"].get("build_root_id") != build_root_id
+            or type(job.get("unit_name")) is not str
+            or job["unit_name"] not in unit_cgroup.split("/")):
+        raise RuntimeHold("root-control registration/job does not bind selected unit")
+    identity = registration.get("execution_identity")
+    if (type(identity) is not dict or set(identity) != {"uid", "gid"}
+            or job.get("execution_identity") != identity):
+        raise RuntimeHold("root-control authenticated peer/job identity mismatch")
+    uid, gid = identity["uid"], identity["gid"]
+    if (type(uid) is not int or type(gid) is not int
+            or not 0 <= uid < 2**31 or not 0 <= gid < 2**31
+            or (uid == 0) != (gid == 0)):
+        raise RuntimeHold("invalid kernel-authenticated root-control peer identity")
+    # Root-control must have rejected request-supplied identity overrides.
+    forbidden = {"uid", "gid", "user", "group", "User", "Group",
+                 "execution_user_id", "execution_group_id",
+                 "build_uid", "build_gid", "execution_identity"}
+    if forbidden & set(job["request"]):
+        raise RuntimeHold("root-control build request contains identity selectors")
+    return {"uid": uid, "gid": gid,
+            "build_root_id": build_root_id, "job_id": job_id,
+            "unit_name": job["unit_name"],
+            "source": "root-control-protected-peer-bound-records-v2"}
+
+
+def inspect_child_identity(selection, *, project_root, build_root_id, job_id,
+                           pid, unit_cgroup, proc_root="/proc"):
+    """Inspect the actual child using root-control's protected peer binding.
+
+    No caller-supplied peer UID/GID, identity selector or 'trusted' boolean.
+    Only the trusted Host root can read the root-control saved schema-2 peer
+    binding selected by the pinned, installed controller. This function does
+    not authorize execution, create a build, or change the Fonts lane.
     """
     validate(selection)
-    if (type(pid) is not int or pid <= 1 or type(peer_uid) is not int
-            or type(peer_gid) is not int or peer_uid <= 0 or peer_gid <= 0
+    if (type(pid) is not int or pid <= 1
             or type(unit_cgroup) is not str or not unit_cgroup.startswith("/")
             or ".." in unit_cgroup.split("/") or not unit_cgroup.endswith(".service")):
-        raise RuntimeHold("missing nonroot peer or authenticated unit binding")
+        raise RuntimeHold("missing child process or authenticated unit binding")
+    owner = _root_control_peer_evidence(
+        project_root=project_root, build_root_id=build_root_id,
+        job_id=job_id, unit_cgroup=unit_cgroup)
+    peer_uid, peer_gid = owner["uid"], owner["gid"]
     proc = Path(proc_root) / str(pid)
     def read():
         status = (proc / "status").read_text()
@@ -665,13 +777,18 @@ def inspect_child_identity(selection, *, pid, peer_uid, peer_gid, unit_cgroup,
         raise RuntimeHold("compiler child identity changed during observation")
     uid, gid = first["Uid"][1], first["Gid"][1]
     if (any(value != peer_uid for value in first["Uid"])
-            or any(value != peer_gid for value in first["Gid"])
-            or uid == 0 or gid == 0):
-        raise RuntimeHold("actual compiler child is root or not bound to authenticated nonroot peer")
-    return {"schema": "zog-fonts-inherited-child-observation-v1",
+            or any(value != peer_gid for value in first["Gid"])):
+        raise RuntimeHold("actual compiler child is not bound to authenticated root-control peer")
+    return {"schema": "zog-fonts-inherited-child-observation-v2",
             "status": "kernel-child-identity-verified",
             "selection_sha256": selection_sha256(selection),
             "pid": pid, "start_time_ticks": started,
-            "effective_uid": uid, "effective_gid": gid, "unit_cgroup": unit_cgroup,
-            "root_compilation_allowed": False,
+            "real_uid": first["Uid"][0], "effective_uid": uid,
+            "saved_uid": first["Uid"][2], "fs_uid": first["Uid"][3],
+            "real_gid": first["Gid"][0], "effective_gid": gid,
+            "saved_gid": first["Gid"][2], "fs_gid": first["Gid"][3],
+            "peer_uid": peer_uid, "peer_gid": peer_gid,
+            "root_identity_observed": uid == 0 and gid == 0,
+            "unit_cgroup": unit_cgroup,
+            "peer_evidence": owner,
             "execution_authorized": False}
