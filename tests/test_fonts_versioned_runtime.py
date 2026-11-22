@@ -193,44 +193,150 @@ def test_missing_component_byte_or_duplicate_role_holds(tmp_path, monkeypatch):
         runtime.validate(duplicate)
 
 
+def _inspect_fake_child(monkeypatch, selection, proc, group, *, uid=1234, gid=1235,
+                        pid=123, **extras):
+    """Synthetic owner readback for unprivileged source-only kernel tests."""
+    owner = {"uid": uid, "gid": gid,
+             "source": "root-control-protected-peer-bound-records-v2",
+             "job_id": "b" * 32, "build_root_id": "a" * 32,
+             "unit_name": "zog-build-test.service"}
+    monkeypatch.setattr(runtime, "_root_control_peer_evidence",
+                        lambda **kwargs: owner)
+    return runtime.inspect_child_identity(
+        selection, project_root="/project", build_root_id="a" * 32,
+        job_id="b" * 32, pid=pid, unit_cgroup=group, proc_root=proc,
+        **extras)
+
+
 def test_kernel_child_euid_egid_cgroup_bound_to_inherited_peer(tmp_path, monkeypatch):
-    selection, _, _, _, _ = fixture_selection(tmp_path, monkeypatch)
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
     proc, group = fake_proc(tmp_path)
-    observed = runtime.inspect_child_identity(
-        selection, pid=123, peer_uid=1234, peer_gid=1235,
-        unit_cgroup=group, proc_root=proc)
+    observed = _inspect_fake_child(monkeypatch, selection, proc, group)
     assert (observed["effective_uid"], observed["effective_gid"]) == (1234, 1235)
     assert observed["selection_sha256"] == runtime.selection_sha256(selection)
+    assert observed["root_identity_observed"] is False
     assert observed["execution_authorized"] is False
-    assert observed["root_compilation_allowed"] is False
+
+
+def test_matching_root_peer_and_root_child_reports_identity_without_authorization(
+        tmp_path, monkeypatch):
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    proc, group = fake_proc(tmp_path, uid=0, gid=0)
+    observed = _inspect_fake_child(
+        monkeypatch, selection, proc, group, uid=0, gid=0)
+    assert (observed["peer_uid"], observed["peer_gid"]) == (0, 0)
+    assert (observed["effective_uid"], observed["effective_gid"]) == (0, 0)
+    assert observed["root_identity_observed"] is True
+    assert observed["start_time_ticks"] == "1234567"
+    assert observed["unit_cgroup"] == group
+    assert observed["execution_authorized"] is False
 
 
 @pytest.mark.parametrize("uid,gid,peer_uid,peer_gid", [
     (0, 1235, 1234, 1235), (1234, 0, 1234, 1235),
-    (1234, 1235, 0, 1235), (1234, 1235, 1234, 0),
+    (0, 0, 1234, 1235), (1234, 1235, 0, 0),
     (1234, 1235, 5555, 1235), (1234, 1235, 1234, 5555),
 ])
-def test_root_or_mismatched_peer_cannot_be_admitted(
+def test_mismatched_child_or_peer_rejected(
         tmp_path, monkeypatch, uid, gid, peer_uid, peer_gid):
     selection, *_ = fixture_selection(tmp_path, monkeypatch)
     proc, group = fake_proc(tmp_path, uid=uid, gid=gid)
+    with pytest.raises(runtime.RuntimeHold, match="not bound"):
+        _inspect_fake_child(monkeypatch, selection, proc, group,
+                            uid=peer_uid, gid=peer_gid)
+
+
+def test_missing_and_untrusted_evidence_or_wrong_cgroup_rejected(tmp_path, monkeypatch):
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    proc, group = fake_proc(tmp_path, uid=0, gid=0)
     with pytest.raises(runtime.RuntimeHold):
         runtime.inspect_child_identity(
-            selection, pid=123, peer_uid=peer_uid, peer_gid=peer_gid,
-            unit_cgroup=group, proc_root=proc)
-
-
-def test_missing_or_foreign_child_kernel_evidence_holds(tmp_path, monkeypatch):
-    selection, *_ = fixture_selection(tmp_path, monkeypatch)
-    proc, group = fake_proc(tmp_path)
+            selection, project_root="/unknown", build_root_id="a" * 32,
+            job_id="b" * 32, pid=123, unit_cgroup=group, proc_root=proc)
+    # A caller cannot pass a claimed peer or self-signed trusted:true flag.
+    with pytest.raises(TypeError):
+        runtime.inspect_child_identity(
+            selection, project_root="/project", build_root_id="a" * 32,
+            job_id="b" * 32, pid=123, unit_cgroup=group, proc_root=proc,
+            peer_uid=0, peer_gid=0)
+    with pytest.raises(TypeError):
+        runtime.inspect_child_identity(
+            selection, project_root="/project", build_root_id="a" * 32,
+            job_id="b" * 32, pid=123, unit_cgroup=group, proc_root=proc,
+            root_control_evidence={"trusted": True, "uid": 0, "gid": 0})
     with pytest.raises(runtime.RuntimeHold, match="cgroup"):
-        runtime.inspect_child_identity(selection, pid=123, peer_uid=1234,
-            peer_gid=1235, unit_cgroup="/system.slice/foreign.service",
-            proc_root=proc)
+        _inspect_fake_child(monkeypatch, selection, proc,
+            "/system.slice/foreign.service", uid=0, gid=0)
     (proc / "123" / "status").unlink()
     with pytest.raises(runtime.RuntimeHold, match="cannot observe"):
-        runtime.inspect_child_identity(selection, pid=123, peer_uid=1234,
-            peer_gid=1235, unit_cgroup=group, proc_root=proc)
+        _inspect_fake_child(monkeypatch, selection, proc, group, uid=0, gid=0)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned controller records")
+def test_real_protected_root_control_peer_evidence_binds_root_child(tmp_path, monkeypatch):
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    project = tmp_path / "certbot-seed"
+    project.mkdir()
+    group = "/system.slice/zog-build-test.service"
+    proc, _ = fake_proc(tmp_path, uid=0, gid=0, cgroup=group)
+    root = tmp_path / "root-owned-controller"
+    root.mkdir(mode=0o700)
+    monkeypatch.setattr(runtime, "ROOT_CONTROL_BUILD_STATE", str(root))
+    resource, job_id = "a" * 32, "b" * 32
+    area = root / hashlib.sha256(str(project).encode()).hexdigest() / resource
+    area.mkdir(parents=True)
+    (area / "jobs").mkdir()
+    original = {
+        "schema": 2, "resource_id": resource, "state": "ready",
+        "execution_identity": {"uid": 0, "gid": 0},
+    }
+    job = {
+        "schema": 2, "job_id": job_id, "unit_name": "zog-build-test.service",
+        "request": {"build_root_id": resource},
+        "execution_identity": {"uid": 0, "gid": 0},
+    }
+    reg = area / "registration.json"
+    saved = area / "jobs" / (job_id + ".json")
+    reg.write_text(json.dumps(original))
+    saved.write_text(json.dumps(job))
+    for p in [root, area.parent, area, area / "jobs"]:
+        p.chmod(0o700)
+    for p in [reg, saved]:
+        p.chmod(0o600)
+    def call():
+        return runtime.inspect_child_identity(
+            selection, project_root=str(project), build_root_id=resource,
+            job_id=job_id, pid=123, unit_cgroup=group, proc_root=proc)
+    accepted = call()
+    assert accepted["root_identity_observed"] is True
+    assert accepted["peer_evidence"]["source"] == (
+        "root-control-protected-peer-bound-records-v2")
+    assert accepted["execution_authorized"] is False
+    # Root-controlled journal record is mandatory, not a caller assertion.
+    saved.unlink()
+    with pytest.raises(runtime.RuntimeHold, match="record unavailable"):
+        call()
+    saved.write_text(json.dumps(job))
+    saved.chmod(0o666)
+    with pytest.raises(runtime.RuntimeHold, match="not protected"):
+        call()
+    saved.chmod(0o600)
+    job["execution_identity"] = {"uid": 1234, "gid": 1234}
+    saved.write_text(json.dumps(job))
+    with pytest.raises(runtime.RuntimeHold, match="identity mismatch"):
+        call()
+    job["execution_identity"] = {"uid": 0, "gid": 0}
+    job["request"]["execution_user_id"] = 0
+    saved.write_text(json.dumps(job))
+    with pytest.raises(runtime.RuntimeHold, match="identity selectors"):
+        call()
+    job["request"].pop("execution_user_id")
+    saved.write_text(json.dumps(job))
+    reg.unlink()
+    reg.symlink_to(saved)
+    with pytest.raises(runtime.RuntimeHold, match="record unavailable"):
+        call()
+    assert selection["lane"]["enabled"] is False
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="root-owned disposable installed-byte test")
