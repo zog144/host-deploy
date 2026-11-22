@@ -34,8 +34,8 @@ COMPONENTS = frozenset({"root-control", "box-control", "image-build"})
 # Each new candidate requires an explicit reviewed source change to these pins.
 SELECTED_SOURCES = {
     "root-control": {
-        "revision": "58b5a94311d771bb1c5f4c3e9c6191b44d6565c9",
-        "source_tree_sha256": "0ffddcfb39a9cc5295cc67196362e2dcb57301ed70199c502af1203e20c2d097",
+        "revision": "8a159b182e63a4f491123db25ca91599b11b74f5",
+        "source_tree_sha256": "090666b537c84d8d800bba97e91595b085cb058e1215a0b143ee84d0029431de",
     },
     "box-control": {
         "revision": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
