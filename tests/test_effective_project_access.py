@@ -18,10 +18,15 @@ def test_effective_existing_and_new_project_access_without_named_users(tmp_path,
     assert access.inspect(str(root))["status"] == "accessible"
 
 
-def test_root_privileged_install_cannot_be_mistaken_for_compiler_access(tmp_path, monkeypatch):
+def test_root_access_probe_only_reports_actual_effective_root_identity(tmp_path, monkeypatch):
     monkeypatch.setattr(access.os, "geteuid", lambda: 0)
     monkeypatch.setattr(access.os, "getegid", lambda: 0)
-    with pytest.raises(PermissionError,match="nonroot effective"):
+    record = access.inspect(str(tmp_path))
+    assert (record["effective_uid"], record["effective_gid"]) == (0, 0)
+    assert record["identity_override"] is False
+    assert "execution_authorized" not in record
+    monkeypatch.setattr(access.os, "getegid", lambda: 10)
+    with pytest.raises(PermissionError, match="exactly 0:0"):
         access.inspect(str(tmp_path))
 
 
