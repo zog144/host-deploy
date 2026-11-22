@@ -290,3 +290,8 @@ The read-only versioned controller inspector supports the explicit `transaction_
 The installer verifies the guarded selected composition before fsyncing the `selected` transaction and removing the startup guard. Similarly, restoration must verify the original loaded command/drop-in composition with the guard present, durably commit `restored`, then remove it. Crash/power-loss before the durable commit must leave the guard in place; after a commit but before guard cleanup the service remains conservatively unavailable until explicit recovery. No activation, SSM or compilation is permitted by this source change.
 
 Native Work must check the actual systemd 252 `ConditionPathExists` behavior through reboot and confirm the guard cannot be overridden by other drop-ins. This source acceptance alone is not native Host admission.
+
+
+### Startup guard ordering
+
+The temporary guard is `zzzz-zog-compiler-transaction-guard.conf`, deliberately placed last among reviewed drop-ins. Since a later `ConditionPathExists=` reset could erase the deny-by-default condition, the guarded inspector fails closed on any drop-in whose name sorts after the guard. Only the guarded selected inspection accepts the one exact additional file; normal selected inspection still requires the original approved drop-in set without extras. Source tests include a later malicious condition reset.
