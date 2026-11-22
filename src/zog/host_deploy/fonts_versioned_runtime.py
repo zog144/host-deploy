@@ -507,7 +507,7 @@ def verify_module_record_bindings(selection):
     return True
 
 
-def inspect_installed(selection, *, phase="staged"):
+def inspect_installed(selection, *, phase="staged", transaction_guard=False):
     """Read only. Require old unit live before switch, selected unit after switch.
 
     This function does not run systemctl, create a unit, switch its target,
@@ -516,6 +516,8 @@ def inspect_installed(selection, *, phase="staged"):
     validate(selection)
     if phase not in {"staged", "selected"}:
         raise RuntimeHold("unknown service selection phase")
+    if type(transaction_guard) is not bool or (transaction_guard and phase != "selected"):
+        raise RuntimeHold("persistent startup guard only valid for selected inspection")
     service, rollback = selection["service"], selection["rollback"]
     _read_fixed(service["staged_unit"], service["staged_sha256"])
     old = _read_fixed(rollback["saved_unit"], rollback["unit_sha256"])
@@ -546,8 +548,16 @@ def inspect_installed(selection, *, phase="staged"):
             {**comp["selected_fragment"], "path": service["active_unit"]}))
         composition.verify(staged_dir, comp["selected_dropins"])
         composition.verify(saved_dir, comp["original_dropins"])
-        composition.verify(original_dir, comp[
-            "original_dropins" if phase == "staged" else "selected_dropins"])
+        selected_original = comp[
+            "original_dropins" if phase == "staged" else "selected_dropins"]
+        if transaction_guard:
+            guard = composition.verify_transaction_guard(
+                original_dir, selection["release_id"])
+            expected_active = sorted([*selected_original, guard],
+                                     key=lambda item: item["name"])
+            composition.verify(original_dir, expected_active)
+        else:
+            composition.verify(original_dir, selected_original)
         # Compare the configured executable, complete argv, *and* stable
         # execution flags for both ExecStart and ExecStartPre. The source
         # composition has already been hash/ownership checked above.
@@ -568,8 +578,9 @@ def inspect_installed(selection, *, phase="staged"):
             loaded_evidence = composition.verify_loaded(
                 service["name"], fragment=service["active_unit"],
                 names=[entry["name"] for entry in
-                       comp["original_dropins" if phase == "staged"
-                            else "selected_dropins"]],
+                       (expected_active if transaction_guard else
+                        comp["original_dropins" if phase == "staged"
+                             else "selected_dropins"])],
                 expected=comp["original_effective" if phase == "staged"
                               else "selected_effective"])
     except composition.CompositionHold as error:
@@ -597,6 +608,7 @@ def inspect_installed(selection, *, phase="staged"):
             "selection_sha256": selection_sha256(selection),
             "source_revisions": {k: v["revision"] for k, v in selection["sources"].items()},
             "rollback_preserved": True, "fonts_lane_enabled": False,
+            "startup_guard_verified": transaction_guard,
             # systemd PID, timing and exit status are dynamic readback,
             # explicitly outside the approved selection SHA256.
             "manager_process_metadata": (
