@@ -27,16 +27,8 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: zog144/root-control
-          ref: 58b5a94311d771bb1c5f4c3e9c6191b44d6565c9
-          path: companions/root-control
-          persist-credentials: false
-      # Candidate root-control PR #55 root-peer successor: measure clean tree
-      # separately before replacing the previously approved tuple.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: zog144/root-control
           ref: 8a159b182e63a4f491123db25ca91599b11b74f5
-          path: companions/root-control-root-peer-candidate
+          path: companions/root-control
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -60,15 +52,10 @@ jobs:
           from zog.host_deploy.fonts_versioned_runtime import source_tree_sha256, SELECTED_SOURCES
           import json
           revisions = {
-              "root-control": "58b5a94311d771bb1c5f4c3e9c6191b44d6565c9",
+              "root-control": "8a159b182e63a4f491123db25ca91599b11b74f5",
               "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
               "image-build": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
           }
-          candidate = source_tree_sha256(Path("companions/root-control-root-peer-candidate"))
-          if candidate["revision"] != "8a159b182e63a4f491123db25ca91599b11b74f5":
-              raise SystemExit("root-peer source head changed")
-          print("ZOG_ROOT_PEER_CANDIDATE_TREE " + candidate["revision"] +
-                " sha256:" + candidate["source_tree_sha256"])
           for component, expected in sorted(revisions.items()):
               observed = source_tree_sha256(Path("companions") / component)
               if observed != SELECTED_SOURCES[component] or observed["revision"] != expected:
