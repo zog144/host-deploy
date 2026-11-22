@@ -16,7 +16,7 @@ from . import fonts_systemd_command_identity as command_identity
 
 KEYS = ("ExecStart", "ExecStartPre", "ReadOnlyPaths", "Requires", "After")
 
-GUARD_NAME = "00-zog-compiler-selection-guard.conf"
+GUARD_NAME = "zzzz-zog-compiler-transaction-guard.conf"
 
 
 def transaction_guard_bytes(release):
@@ -35,6 +35,8 @@ def verify_transaction_guard(directory, release):
     path = Path(directory) / GUARD_NAME
     expected = transaction_guard_bytes(release)
     actual = inventory(directory)
+    need(all(item["name"] <= GUARD_NAME for item in actual),
+         "drop-in ordered after protective startup guard")
     matches = [item for item in actual if item["name"] == GUARD_NAME]
     need(len(matches) == 1 and matches[0]["mode"] == 0o644,
          "missing protected persistent startup guard")
