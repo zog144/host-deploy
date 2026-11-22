@@ -820,3 +820,27 @@ def test_selected_immutable_runtime_link_still_holds(tmp_path):
     (runtime_dir / "python").symlink_to("module.py")
     with pytest.raises(runtime.RuntimeHold, match="linked"):
         runtime._retained_tree_sha256(runtime_dir)
+
+
+
+@pytest.mark.skipif(os.geteuid() != 0,
+                    reason="guard admission requires root-owned systemd fixture")
+def test_reboot_persistent_guard_requires_exact_condition_and_absent_permit(tmp_path):
+    from zog.host_deploy import fonts_unit_composition as composition
+    release = "a" * 32
+    target = tmp_path / "zog-certbot-seed-root.service.d"
+    target.mkdir()
+    contents = composition.transaction_guard_bytes(release)
+    guard = target / composition.GUARD_NAME
+    guard.write_bytes(contents)
+    guard.chmod(0o644)
+    record = composition.verify_transaction_guard(target, release)
+    assert record["sha256"] == hashlib.sha256(contents).hexdigest()
+    guard.write_bytes(b"[Unit]\nConditionPathExists=/tmp/unsafe-permit\n")
+    with pytest.raises(composition.CompositionHold, match="startup guard differs"):
+        composition.verify_transaction_guard(target, release)
+    guard.write_bytes(contents)
+    (target / "99-foreign.conf").write_bytes(b"[Service]\nExecStart=/foreign\n")
+    expected = [record]
+    with pytest.raises(composition.CompositionHold, match="drop-in set"):
+        composition.verify(target, expected)
