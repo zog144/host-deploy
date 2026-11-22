@@ -35,7 +35,7 @@ COMPONENTS = frozenset({"root-control", "box-control", "image-build"})
 SELECTED_SOURCES = {
     "root-control": {
         "revision": "a672f007b33f83bf70970e3a571fd443366bd93f",
-        "source_tree_sha256": "090666b537c84d8d800bba97e91595b085cb058e1215a0b143ee84d0029431de",
+        "source_tree_sha256": "c9475afdc6545adc963203f1ef00f77bd5aa542e2bf6337f660a5b64d0800989",
     },
     "box-control": {
         "revision": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
