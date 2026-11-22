@@ -138,6 +138,10 @@ def test_actual_box_and_root_control_wire_validators_reject_override_fields():
         globals_dict={
             "json": json, "math": math, "PurePosixPath": PurePosixPath,
             "RuntimeOperationError": Rejected,
+            "REGISTRATION_FIELDS": frozenset({
+                "prepared_root", "source_directory",
+                "output_directory", "input_manifest_id",
+            }),
         })
     root = _executable_functions(ROOT_PROTOCOL,
         ["identity", "positive", "canonical_request", "authenticated_build_peer"],
