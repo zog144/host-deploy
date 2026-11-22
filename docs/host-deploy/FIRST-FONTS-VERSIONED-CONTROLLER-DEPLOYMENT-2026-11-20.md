@@ -279,3 +279,14 @@ gate or activate the controller/Fonts lane during the source correction.
 
 No maintenance window, live unit switch, interrupted recovery, request
 replay, SSM submission or compiler work was performed.
+
+
+## November 22 — guarded selected inspection during reboot-safe transaction
+
+Host-install PR #49 now keeps a separate persistent deny-by-default `00-zog-compiler-selection-guard.conf` systemd drop-in during multi-file selection and restoration. Its exact [Unit] `ConditionPathExists=/opt/zog/compiler-runtime/rollback/<release>/startup-permit` points to a permit that the installer must **never create**; absent permit means reboot cannot start a unit while the guard is present, even after the temporary fragment mask has been replaced.
+
+The read-only versioned controller inspector supports the explicit `transaction_guard=True` option **only** for `phase="selected"`. In this mode it checks the exact root-owned guard bytes, mode 0644, absent permit, full selected+rollback installed inventories and the loaded manager's complete `DropInPaths` including the guard. The normal `inspect_installed(...phase="selected")` remains strictly unchanged and rejects any extra drop-in. Selected executable, stable `ExecStart`/`ExecStartPre` commands, permissions and immutable bytes must still match the independently approved selection.
+
+The installer verifies the guarded selected composition before fsyncing the `selected` transaction and removing the startup guard. Similarly, restoration must verify the original loaded command/drop-in composition with the guard present, durably commit `restored`, then remove it. Crash/power-loss before the durable commit must leave the guard in place; after a commit but before guard cleanup the service remains conservatively unavailable until explicit recovery. No activation, SSM or compilation is permitted by this source change.
+
+Native Work must check the actual systemd 252 `ConditionPathExists` behavior through reboot and confirm the guard cannot be overridden by other drop-ins. This source acceptance alone is not native Host admission.
