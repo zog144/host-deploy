@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: zog144/root-control
-          ref: 8a159b182e63a4f491123db25ca91599b11b74f5
+          ref: a672f007b33f83bf70970e3a571fd443366bd93f
           path: companions/root-control
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -70,12 +70,13 @@ jobs:
           from zog.host_deploy.fonts_versioned_runtime import source_tree_sha256, SELECTED_SOURCES
           import json
           revisions = {
-              "root-control": "8a159b182e63a4f491123db25ca91599b11b74f5",
+              "root-control": "a672f007b33f83bf70970e3a571fd443366bd93f",
               "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
               "image-build": "ff968a431dd2067e7d0e1f17d6e547f2779f647a",
           }
           for component, expected in sorted(revisions.items()):
               observed = source_tree_sha256(Path("companions") / component)
+              print("OBSERVED_SELECTED_SOURCE", component, json.dumps(observed, sort_keys=True), flush=True)
               if observed != SELECTED_SOURCES[component] or observed["revision"] != expected:
                   raise SystemExit("selected source commit/tree hash differs: " + component)
               print("ZOG_PINNED_SOURCE " + component + " " + observed["revision"]
