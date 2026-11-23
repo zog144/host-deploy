@@ -19,6 +19,7 @@ import stat
 import subprocess
 
 from . import fonts_unit_composition as composition
+from . import fonts_issuer_persistence as issuer_persistence
 from . import compiler_legacy_rollback as legacy_rollback
 
 SCHEMA = "zog-first-fonts-versioned-controller-selection-v1"
@@ -152,7 +153,8 @@ def validate(selection):
             if "/opt/zog/fonts-controller-d9dfd6c0-20261114" in str(property_value):
                 raise composition.CompositionHold(
                     "old compiler runtime remains in selected effective unit")
-    except composition.CompositionHold as error:
+    except (composition.CompositionHold,
+            issuer_persistence.IssuerPersistenceHold) as error:
         raise RuntimeHold(str(error)) from error
     rollback = _exact(selection["rollback"],
                       {"saved_unit", "unit_sha256", "saved_runtime_root",
@@ -574,6 +576,22 @@ def inspect_installed(selection, *, phase="staged", transaction_guard=False):
         composition.verify_composed(
             Path(rollback["saved_unit"]).read_bytes(),
             original_dropin_bytes, comp["original_effective"])
+        # Independent issuer persistence check: retain original protected
+        # prestart checks, read-only mounts and backing mount dependencies
+        # across the selected unit. The issuer's private storage remains
+        # a separate native acceptance boundary.
+        original_issuer_path = saved_dir / issuer_persistence.ISSUER_DROPIN
+        selected_issuer_path = staged_dir / issuer_persistence.ISSUER_DROPIN
+        has_issuer = service["name"] == issuer_persistence.COMPILER_UNIT or (
+            issuer_persistence.ISSUER_DROPIN in {
+                entry["name"] for entry in
+                [*comp["original_dropins"], *comp["selected_dropins"]]
+            })
+        issuer_report = issuer_persistence.verify(
+            selection,
+            original_issuer_path.read_bytes() if has_issuer and original_issuer_path.is_file() else None,
+            selected_issuer_path.read_bytes() if has_issuer and selected_issuer_path.is_file() else None,
+        )
         loaded_evidence = None
         if service["active_unit"].startswith("/etc/systemd/system/"):
             loaded_evidence = composition.verify_loaded(
@@ -610,6 +628,7 @@ def inspect_installed(selection, *, phase="staged", transaction_guard=False):
             "source_revisions": {k: v["revision"] for k, v in selection["sources"].items()},
             "rollback_preserved": True, "fonts_lane_enabled": False,
             "startup_guard_verified": transaction_guard,
+            "issuer_persistence": issuer_report,
             # systemd PID, timing and exit status are dynamic readback,
             # explicitly outside the approved selection SHA256.
             "manager_process_metadata": (
