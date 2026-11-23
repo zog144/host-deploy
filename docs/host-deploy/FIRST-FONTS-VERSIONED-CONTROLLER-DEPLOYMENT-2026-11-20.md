@@ -336,3 +336,47 @@ root-control commit and measured source-tree hash**, reattest the installed
 module/RECORD and entire versioned runtime, preserve existing rollback
 evidence, and complete a separate approved native acceptance. Do not
 automatically repin an existing installation or rewrite an accepted receipt.
+
+## November 23 — independent issuer persistence verification
+
+Source owner: host-deploy PR #35, coordinated with host-install PR #49.
+
+The read-only host-deploy verifier still checks all of these independently
+from the installer's selected/restore transaction:
+
+1. Original and selected **fragment** bytes, root-owned regular-file
+   metadata and the exact staged/active unit paths and hashes; saved old
+   fragment remains distinct from new selected unit.
+2. Exact original/selected **drop-in** names, ordering, byte SHA-256, size,
+   root ownership and mode. The manager-loaded FragmentPath, DropInPaths,
+   LoadState, ExecStart, ExecStartPre, ReadOnlyPaths, Requires and After must
+   match the reviewed stable effective selection. PIDs, timestamps and exit
+   status remain separate process observations, not approval digests.
+3. During selected-phase guarded inspection, the exact last, protected
+   deny-by-default compiler startup guard and absence of a startup permit.
+4. For **zog-certbot-seed-root.service** specifically, an independently
+   verified original and selected **issuer-persistence.conf** is mandatory.
+   Both drop-ins must have identical SHA-256/size/bytes and root-owned DAC
+   metadata. The issuer prestart entries must still be present in both
+   manager-effective ExecStartPre command lists with matching executable,
+   argv and non-ignored execution flags. Issuer ReadOnlyPaths must be
+   preserved and both Requires/After must retain all previous backing
+   mount dependencies. The verifier rejects missing, replaced, weakened or
+   unselected-service issuer restrictions. This check does not trust a
+   host-install approval result in place of checking the actual source and
+   selected unit/drop-in files.
+
+The `inspect_installed()` readback reports
+`issuer_persistence.verified`, the original/selected unit digests, the
+issuer drop-in digest and `native_issuer_storage_verified=false`,
+`startup_authorized=false`. Its existing `execution_authorized=false`
+and disabled Fonts lane remain unchanged.
+
+**Important separation:** host-install PR #49's approved replacement-unit
+binding is not itself a modification or acceptance of the installed
+issuer-persistence prestart helper. The independent issuer persistence owner
+must still identify and attest the actual helper's source and installed
+bytes, original issuer mount/STATE/grants, DAC, protected issuer storage,
+systemd 252 cold-start and reboot restrictions. No native start, restoration,
+maintenance window, SSM send, request replay or Fonts compilation is
+authorized by these source tests.
