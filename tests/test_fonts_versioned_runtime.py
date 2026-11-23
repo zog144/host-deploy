@@ -149,9 +149,9 @@ def test_inspect_installed_preserves_issuer_restrictions_in_both_phases(
         tmp_path, monkeypatch, service_name=issuer.COMPILER_UNIT)
     unit = selected["service"]["staged_unit"]
     raw = (
-        b"[Service]\\n"
-        b"ExecStartPre=/usr/bin/test -d /state/issuer\\n"
-        b"ReadOnlyPaths=/state/issuer /var/lib/zog-certify-manage\\n"
+        b"[Service]\n"
+        b"ExecStartPre=/usr/bin/test -d /state/issuer\n"
+        b"ReadOnlyPaths=/state/issuer /var/lib/zog-certify-manage\n"
     )
     meta = {
         "name": issuer.ISSUER_DROPIN, "sha256": _sha(raw), "size": len(raw),
