@@ -91,18 +91,19 @@ def _effective(comp, phase, prestart, readonly):
         require(type(item) is dict and set(item) == {"path", "argv", "flags"},
                 "issuer persistence effective prestart is unreviewed")
         flags = item["flags"]
-        require(type(flags) is dict
-                and flags == {"ignore_errors": "no", "flags": ""},
-                "issuer persistence prestart execution flags differ")
+        require(type(flags) is dict and set(flags) == {"ignore_errors", "flags"},
+                "issuer persistence effective prestart execution flags invalid")
         try:
             argv = shlex.split(item["argv"])
         except (TypeError, ValueError) as error:
             raise IssuerPersistenceHold("issuer effective prestart argv invalid") from error
         require(argv and argv[0] == item["path"],
                 "issuer persistence effective executable differs")
-        available.append(argv)
-    require(all(actual in available for actual in prestart),
-            "issuer persistence effective prestart was replaced")
+        available.append((argv, flags))
+    require(all(any(argv == actual and
+                    flags == {"ignore_errors": "no", "flags": ""}
+                    for argv, flags in available) for actual in prestart),
+            "issuer persistence effective prestart or execution flags changed")
     paths = props.get("ReadOnlyPaths")
     require(type(paths) is str and readonly <= set(paths.split()),
             "issuer persistence effective read-only mounts differ")
