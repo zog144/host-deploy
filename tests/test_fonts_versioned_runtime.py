@@ -20,7 +20,7 @@ def _sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def fixture_selection(tmp_path, monkeypatch):
+def fixture_selection(tmp_path, monkeypatch, *, service_name="zog-root-control.service"):
     versions = tmp_path / "versions"
     rollbacks = tmp_path / "rollback"
     units = tmp_path / "units"
@@ -46,7 +46,6 @@ def fixture_selection(tmp_path, monkeypatch):
     selected_exec = folder / "bin" / "controller-server"
     selected_exec.parent.mkdir(parents=True)
     selected_exec.write_bytes(b"#!/bin/sh\nexit 0\n")
-    service_name = "zog-root-control.service"
     staged = folder / "systemd" / service_name
     staged.parent.mkdir(parents=True)
     new_bytes = ("[Service]\nExecStart=" + str(selected_exec) + "\n").encode()
@@ -139,6 +138,64 @@ def fixture_selection(tmp_path, monkeypatch):
                  "specification_sha256": "e" * 64, "enabled": False},
     }
     return selected, original, current, saved, new_bytes
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned selected issuer fixture")
+def test_inspect_installed_preserves_issuer_restrictions_in_both_phases(
+        tmp_path, monkeypatch):
+    """Integration gate: selected unit, exact drop-ins and issuer constraints."""
+    from zog.host_deploy import fonts_issuer_persistence as issuer
+    selected, _, active, saved, new_bytes = fixture_selection(
+        tmp_path, monkeypatch, service_name=issuer.COMPILER_UNIT)
+    unit = selected["service"]["staged_unit"]
+    raw = (
+        b"[Service]\\n"
+        b"ExecStartPre=/usr/bin/test -d /state/issuer\\n"
+        b"ReadOnlyPaths=/state/issuer /var/lib/zog-certify-manage\\n"
+    )
+    meta = {
+        "name": issuer.ISSUER_DROPIN, "sha256": _sha(raw), "size": len(raw),
+        "mode": 0o644, "uid": 0, "gid": 0,
+    }
+    for path in (str(active) + ".d", str(saved) + ".d", unit + ".d"):
+        target = Path(path)
+        target.mkdir(parents=True)
+        (target / issuer.ISSUER_DROPIN).write_bytes(raw)
+    comp = selected["composition"]
+    comp["original_dropins"] = [copy.deepcopy(meta)]
+    comp["selected_dropins"] = [copy.deepcopy(meta)]
+    for part in ("original_effective", "selected_effective"):
+        props = comp[part]
+        props["ExecStartPre"] = [{
+            "path": "/usr/bin/test",
+            "argv": "/usr/bin/test -d /state/issuer",
+            "flags": {"ignore_errors": "no", "flags": ""},
+        }]
+        props["ReadOnlyPaths"] = "/state/issuer /var/lib/zog-certify-manage"
+        props["Requires"] = "state.mount issuer-storage.mount"
+        props["After"] = "state.mount issuer-storage.mount"
+    version = Path(runtime.RELEASES) / selected["release_id"]
+    selected["installed_tree_sha256"] = runtime._retained_tree_sha256(version)
+    result = runtime.inspect_installed(selected, phase="staged")
+    assert result["issuer_persistence"]["verified"] is True
+    assert result["issuer_persistence"]["startup_authorized"] is False
+    assert result["execution_authorized"] is False
+    assert result["fonts_lane_enabled"] is False
+    active.write_bytes(new_bytes)
+    result = runtime.inspect_installed(selected, phase="selected")
+    assert result["issuer_persistence"]["verified"] is True
+    assert result["issuer_persistence"]["selected_unit_sha256"] == (
+        selected["service"]["staged_sha256"])
+    assert result["issuer_persistence"]["original_unit_sha256"] == (
+        selected["rollback"]["unit_sha256"])
+    comp["selected_effective"]["ReadOnlyPaths"] = "/var/lib/zog-certify-manage"
+    with pytest.raises(runtime.RuntimeHold, match="issuer persistence"):
+        runtime.inspect_installed(selected, phase="selected")
+    comp["selected_effective"]["ReadOnlyPaths"] = (
+        "/state/issuer /var/lib/zog-certify-manage")
+    comp["selected_effective"]["Requires"] = "state.mount"
+    with pytest.raises(runtime.RuntimeHold, match="issuer persistence"):
+        runtime.inspect_installed(selected, phase="selected")
 
 
 def fake_proc(tmp_path, *, uid=1234, gid=1235, cgroup="/system.slice/zog-build-test.service"):
