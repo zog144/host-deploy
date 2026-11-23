@@ -64,18 +64,17 @@ def test_independent_issuer_readback_retains_both_unit_digests_and_guard():
     lambda s: s["composition"]["selected_dropins"][0].update(uid=1000),
     lambda s: s["composition"]["selected_dropins"][0].update(sha256="f" * 64),
     lambda s: s["composition"]["selected_effective"].update(ExecStartPre=[]),
-    lambda s: s["composition"]["selected_effective"]["ExecStartPre"][0]["argv"].__class__,
+    lambda s: s["composition"]["selected_effective"]["ExecStartPre"][0].update(
+        argv="/usr/bin/test -f /state/issuer"),
+    lambda s: s["composition"]["selected_effective"]["ExecStartPre"][0]["flags"].update(
+        ignore_errors="yes"),
     lambda s: s["composition"]["selected_effective"].update(ReadOnlyPaths="/tmp"),
     lambda s: s["composition"]["selected_effective"].update(Requires="state.mount"),
     lambda s: s["composition"]["selected_effective"].update(After="state.mount"),
 ])
 def test_issuer_restrictions_cannot_be_removed(mutation):
     selected, raw = fixture()
-    if mutation.__code__.co_consts and False:  # no side effects from condition
-        raise AssertionError
     mutation(selected)
-    if mutation.__code__.co_consts and False:
-        raise AssertionError
     with pytest.raises(issuer.IssuerPersistenceHold):
         issuer.verify(selected, raw, raw)
 
