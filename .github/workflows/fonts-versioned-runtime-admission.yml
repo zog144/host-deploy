@@ -5,6 +5,10 @@ on:
   pull_request:
     paths:
       - src/zog/host_deploy/fonts_versioned_runtime.py
+      - src/zog/host_deploy/fonts_issuer_persistence.py
+      - src/zog/host_deploy/fonts_unit_composition.py
+      - src/zog/host_deploy/fonts_systemd_command_identity.py
+      - tests/test_fonts_issuer_persistence.py
       - src/zog/host_deploy/fonts_lane_runtime.py
       - src/zog/host_deploy/effective_project_access.py
       - tests/test_fonts_identity_route.py
@@ -84,11 +88,11 @@ jobs:
       - name: Source-only regression and compile
         run: |
           python -m pip install 'pytest>=8,<10' 'boto3>=1.35,<2'
-          python -m compileall -q src/zog/host_deploy/fonts_versioned_runtime.py src/zog/host_deploy/compiler_legacy_rollback.py src/zog/host_deploy/cli.py tests/test_fonts_versioned_runtime.py
-          PYTHONPATH=src python -m pytest -q tests/test_fonts_versioned_runtime.py tests/test_effective_project_access.py tests/test_fonts_identity_route.py
+          python -m compileall -q src/zog/host_deploy/fonts_issuer_persistence.py src/zog/host_deploy/fonts_unit_composition.py src/zog/host_deploy/fonts_systemd_command_identity.py src/zog/host_deploy/fonts_versioned_runtime.py src/zog/host_deploy/compiler_legacy_rollback.py src/zog/host_deploy/cli.py tests/test_fonts_versioned_runtime.py
+          PYTHONPATH=src python -m pytest -q tests/test_fonts_versioned_runtime.py tests/test_fonts_issuer_persistence.py tests/test_effective_project_access.py tests/test_fonts_identity_route.py
       - name: Root-owned checks on disposable local runner files only
         run: |
-          sudo env PYTHONPATH="$PWD/src:$PWD/tests" "$(command -v python)" -m pytest -q tests/test_fonts_versioned_runtime.py
+          sudo env PYTHONPATH="$PWD/src:$PWD/tests" "$(command -v python)" -m pytest -q tests/test_fonts_versioned_runtime.py tests/test_fonts_issuer_persistence.py
       - name: Native Host and service activation remain prohibited
         if: always()
         run: |
