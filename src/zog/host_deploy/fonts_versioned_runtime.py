@@ -602,7 +602,8 @@ def inspect_installed(selection, *, phase="staged", transaction_guard=False):
                              else "selected_dropins"])],
                 expected=comp["original_effective" if phase == "staged"
                               else "selected_effective"])
-    except composition.CompositionHold as error:
+    except (composition.CompositionHold,
+            issuer_persistence.IssuerPersistenceHold) as error:
         raise RuntimeHold(str(error)) from error
     unit = Path(service["staged_unit"]).read_bytes()
     commands = [line for line in unit.splitlines()
