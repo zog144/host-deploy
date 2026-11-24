@@ -33,7 +33,8 @@ def fixture():
             "name": issuer.COMPILER_UNIT,
             "staged_sha256": hashlib.sha256(selected).hexdigest(),
         },
-        "rollback": {"unit_sha256": hashlib.sha256(original).hexdigest()},
+        "rollback": {"unit_sha256": hashlib.sha256(original).hexdigest(),
+                     "original_runtime": "/opt/zog/fonts-controller-d9dfd6c0-20261114"},
         "composition": {
             "original_dropins": [copy.deepcopy(metadata)],
             "selected_dropins": [copy.deepcopy(metadata)],
@@ -118,3 +119,66 @@ def test_compiler_unit_cannot_silently_omit_issuer_dropin():
     selected["composition"]["selected_dropins"] = []
     with pytest.raises(issuer.IssuerPersistenceHold, match="missing"):
         issuer.verify(selected, None, None)
+
+
+def test_retire_old_compiler_only_mount_and_prestart_but_keep_issuer_storage():
+    selected, raw = fixture()
+    comp = selected["composition"]
+    prior = comp["original_effective"]
+    old = selected["rollback"]["original_runtime"]
+    old_prestart = {
+        "path": "/usr/bin/test", "argv": "/usr/bin/test -d " + old + "/venv",
+        "flags": {"ignore_errors": "no", "flags": ""},
+    }
+    prior["ExecStartPre"].insert(0, old_prestart)
+    prior["ReadOnlyPaths"] += " " + old + "/venv"
+    # This is an issuer snapshot-protected application tree, not the old
+    # compiler. Its read-only restriction is mandatory even if not repeated
+    # literally in the issuer drop-in fixture.
+    prior["ReadOnlyPaths"] += " /opt/zog/certbot-seed-oct21"
+    chosen = comp["selected_effective"]
+    assert old_prestart not in chosen["ExecStartPre"]
+    assert old not in chosen["ReadOnlyPaths"]
+    chosen["ReadOnlyPaths"] += " /opt/zog/certbot-seed-oct21"
+    report = issuer.verify(selected, raw, raw)
+    assert report["verified"] is True
+    assert report["startup_authorized"] is False
+
+
+def test_retiring_compiler_never_removes_separate_issuer_protected_path():
+    selected, raw = fixture()
+    comp = selected["composition"]
+    comp["original_effective"]["ReadOnlyPaths"] += " /opt/zog/certbot-seed-oct21"
+    with pytest.raises(issuer.IssuerPersistenceHold, match="read-only"):
+        issuer.verify(selected, raw, raw)
+
+
+def test_only_retired_compiler_prestarts_may_be_removed():
+    selected, raw = fixture()
+    comp = selected["composition"]
+    comp["original_effective"]["ExecStartPre"].append({
+        "path": "/usr/bin/test", "argv": "/usr/bin/test -d /state/other-protected",
+        "flags": {"ignore_errors": "no", "flags": ""},
+    })
+    with pytest.raises(issuer.IssuerPersistenceHold, match="prestart"):
+        issuer.verify(selected, raw, raw)
+
+
+def test_unapproved_retirement_root_and_issuer_mount_dependency_fail():
+    selected, raw = fixture()
+    selected["rollback"]["original_runtime"] = "/opt/zog/certbot-seed-oct21"
+    with pytest.raises(issuer.IssuerPersistenceHold, match="reviewed retiring compiler"):
+        issuer.verify(selected, raw, raw)
+    selected["rollback"]["original_runtime"] = (
+        "/opt/zog/fonts-controller-d9dfd6c0-20261114")
+    selected["composition"]["selected_effective"]["After"] = "state.mount"
+    with pytest.raises(issuer.IssuerPersistenceHold, match="mount dependency"):
+        issuer.verify(selected, raw, raw)
+
+
+def test_old_compiler_path_prefix_collision_is_not_retired():
+    selected, raw = fixture()
+    selected["composition"]["original_effective"]["ReadOnlyPaths"] += (
+        " /opt/zog/fonts-controller-d9dfd6c0-20261114-other")
+    with pytest.raises(issuer.IssuerPersistenceHold, match="read-only"):
+        issuer.verify(selected, raw, raw)
