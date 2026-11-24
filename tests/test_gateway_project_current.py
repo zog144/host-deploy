@@ -530,3 +530,144 @@ def test_unexpected_import_arguments_never_invoke_project_producer(
         assert "unsupported Project-current import invocation" in result.stderr
         assert not (root / "gateway-requests").exists()
         assert not sentinel.exists()
+
+
+def _slow_durable_producer(root, source, *, create_pipeline=True):
+    """Disposable image-build-shaped producer: durable owner before long wait."""
+    module = source / "src/zog/image_build/remote_operations.py"
+    worker = """
+import json, sys, time
+from pathlib import Path
+def main():
+    request_path = Path(sys.argv[-1])
+    request = json.loads(request_path.read_text())
+    operation = request["operation_id"]
+    project = request_path.parents[2]
+    state = project / "state/image-build"
+    operation_dir = state / "remote-operations" / operation
+    operation_dir.mkdir(parents=True, exist_ok=True)
+    (operation_dir / "request.json").write_text(json.dumps(request))
+    if CREATE_PIPELINE:
+        pipeline_id = "d" * 32
+        record = {
+            "pipeline_id": pipeline_id, "status": "running",
+            "owner": {
+                "contract": request["schema"],
+                "operation_id": operation,
+                "source_repository": request["source"]["repository"],
+                "source_revision": request["source"]["revision"],
+            },
+            "attempts": {"fontconfig-final": "image-63dcd6a137f040bc9224dce166a916ed"},
+        }
+        dest = state / "pipelines" / pipeline_id
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "pipeline.json").write_text(json.dumps(record))
+        (operation_dir / "binding.json").write_text(json.dumps({"pipeline_id": pipeline_id}))
+    # Simulate long generation verification after the pipeline/attempt exist.
+    time.sleep(3)
+""".replace("CREATE_PIPELINE", "True" if create_pipeline else "False")
+    module.write_text(worker)
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "durable first-fonts producer with slow verification")
+
+
+def test_project_current_producer_timeout_keeps_original_pipeline_and_attempt(
+        tmp_path, monkeypatch):
+    root, source, controller = project(tmp_path)
+    _slow_durable_producer(root, source)
+    spec, record = selected(root, controller)
+    request_id = "e" * 32
+    binding = project_current.binding(intent(request_id), record, spec, target())
+    # Shrink the *test* timeout only; real policy remains controller=14400s.
+    monkeypatch.setattr(project_current, "_RUN",
+                        project_current._RUN.replace("timeout=14400", "timeout=0.75"))
+    submitted = subprocess.run(project_current.remote_script(binding),
+                               shell=True, capture_output=True, text=True, timeout=12)
+    assert submitted.returncode == 0, submitted.stderr
+    receipt = json.loads(submitted.stdout.strip().splitlines()[-1])
+    assert receipt["request_id"] == request_id
+    assert receipt["remote_request_sha256"] == binding["remote_request_sha256"]
+    result = receipt["result"]
+    assert result["status"] == "pending"
+    assert result["uncertainty"] is True
+    assert result["terminal_outcome"] is None
+    assert result["pipeline_id"] == "d" * 32
+    assert result["attempt_ids"] == ["image-63dcd6a137f040bc9224dce166a916ed"]
+    assert result["reconciliation_required"] is True
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script, PRODUCER_TIMEOUT_SECONDS,
+        CONTROL_TIMEOUT_SECONDS,
+    )
+    assert PRODUCER_TIMEOUT_SECONDS == 14400
+    assert CONTROL_TIMEOUT_SECONDS > PRODUCER_TIMEOUT_SECONDS
+    first = subprocess.run(
+        read_only_observation_script(str(root), sys.executable, request_id,
+                                     pipeline_id="d" * 32),
+        shell=True, capture_output=True, text=True, timeout=8)
+    assert first.returncode == 0, first.stderr
+    observed = json.loads(first.stdout.strip())
+    assert observed["operation_id"] == request_id
+    assert observed["pipeline_id"] == "d" * 32
+    assert observed["pipeline_status"] == "running"
+    assert observed["terminal_confirmed"] is False
+    assert observed["mutation"] is False
+    assert observed["execution_authorized"] is False
+    before = (root / "state/image-build/remote-operations" / request_id /
+              "binding.json").read_bytes()
+    assert before == json.dumps({"pipeline_id": "d" * 32}).encode()
+    assert (root / "gateway-requests" / request_id / "request.json").is_file()
+    assert not (root / "state/image-build/remote-operations" / request_id /
+                "result.json").exists(), "timeout must not invent a terminal producer result"
+    # Simulate later verified producer completion in *the same operation*.
+    producer_result = {
+        "schema": "image-build-remote-result-v1",
+        "operation_id": request_id, "operation_type": "pipeline.submit",
+        "source_repository": "zog144/image-build",
+        "source_revision": git(source, "rev-parse", "HEAD"),
+        "pipeline_id": "d" * 32, "status": "completed",
+        "terminal_outcome": "success", "uncertainty": False,
+    }
+    (root / "state/image-build/remote-operations" / request_id /
+     "result.json").write_text(json.dumps(producer_result))
+    second = subprocess.run(
+        read_only_observation_script(str(root), sys.executable, request_id,
+                                     pipeline_id="d" * 32),
+        shell=True, capture_output=True, text=True, timeout=8)
+    assert second.returncode == 0, second.stderr
+    complete = json.loads(second.stdout.strip())
+    assert complete["terminal_confirmed"] is True
+    assert complete["producer_status"] == "completed"
+    assert complete["pipeline_id"] == observed["pipeline_id"]
+    assert (root / "state/image-build/remote-operations" / request_id /
+            "binding.json").read_bytes() == before
+
+
+def test_project_current_timeout_without_pipeline_is_uncertain_not_failed(
+        tmp_path, monkeypatch):
+    root, source, controller = project(tmp_path)
+    _slow_durable_producer(root, source, create_pipeline=False)
+    spec, record = selected(root, controller)
+    request = project_current.binding(intent("f" * 32), record, spec, target())
+    monkeypatch.setattr(project_current, "_RUN",
+                        project_current._RUN.replace("timeout=14400", "timeout=0.75"))
+    result = subprocess.run(project_current.remote_script(request),
+                            shell=True, text=True, capture_output=True, timeout=12)
+    assert result.returncode == 0, result.stderr
+    receipt = json.loads(result.stdout.strip().splitlines()[-1])
+    assert receipt["result"]["pipeline_id"] is None
+    assert receipt["result"]["status"] == "pending"
+    assert receipt["result"]["uncertainty"] is True
+
+
+def test_observation_rejects_foreign_pipeline_and_does_not_create_request(tmp_path):
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    root, source, controller = project(tmp_path)
+    with pytest.raises((RuntimeError, ValueError)):
+        read_only_observation_script(str(root), sys.executable, "not-an-operation")
+    absent = subprocess.run(
+        read_only_observation_script(str(root), sys.executable, "e" * 32),
+        shell=True, capture_output=True, text=True, timeout=8)
+    assert absent.returncode != 0
+    assert not (root / "gateway-requests").exists()
