@@ -14,6 +14,10 @@ from .. import image_build_lanes
 from .github_dispatch import FIRST_FONTS_TASK
 from .image_build_dispatch import REMOTE_SCHEMA, _canonical, _target
 from .task_catalogue import REVIEWED_IMAGE_TASKS
+from .project_current_observation import (
+    _OBSERVER, PRODUCER_TIMEOUT_SECONDS, CONTROL_TIMEOUT_SECONDS,
+    read_only_observation_script,
+)
 
 SCHEMA = 4
 REVISION = re.compile(r"[0-9a-f]{40}")
@@ -229,6 +233,10 @@ _RUN = r'''
 import hashlib, json, os, re, subprocess, sys, tempfile
 from pathlib import Path
 
+# The observation helper is standard-library-only and reads the original
+# durable image-build request/binding/owner. It never submits a pipeline.
+exec(__ZOG_OBSERVER_BOOTSTRAP__)
+
 project = Path(sys.argv[1])
 controller = Path(sys.argv[2])
 python = sys.argv[3]
@@ -282,24 +290,67 @@ try:
     # actual file before invoking the producer. Keep other installed zog
     # components available after the selected Project and its companions.
     bootstrap = __ZOG_PROJECT_IMPORT_BOOTSTRAP__
-    result = subprocess.run(
-        [python, "-I", "-B", "-c", bootstrap, str(source), str(project),
-         "--repository-root", str(source),
-         "--source-repository", "zog144/image-build",
-         "--source-revision", revision,
-         "--package-dir", str(source / "project/package"),
-         "--state-dir", str(state),
-         "--controller-config", str(controller), str(request_path)],
-        cwd=str(source), capture_output=True, text=True, timeout=240,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("configured Project producer could not execute: " +
-                           result.stderr[-1000:])
-    output = result.stdout.strip().splitlines()
-    if not output:
-        raise RuntimeError("configured Project producer returned no result")
-    produced = json.loads(output[-1])
+    try:
+        completed = subprocess.run(
+            [python, "-I", "-B", "-c", bootstrap, str(source), str(project),
+             "--repository-root", str(source),
+             "--source-repository", "zog144/image-build",
+             "--source-revision", revision,
+             "--package-dir", str(source / "project/package"),
+             "--state-dir", str(state),
+             "--controller-config", str(controller), str(request_path)],
+            cwd=str(source), capture_output=True, text=True,
+            timeout=__ZOG_PRODUCER_TIMEOUT__, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        # The producer may have prepared an immutable pipeline and started
+        # a durable root-control job before its control wait expired. A
+        # Python subprocess timeout is NOT a pipeline terminal outcome.
+        observed = observe(project, operation_id)
+        produced = {
+            "schema": "image-build-remote-result-v1",
+            "operation_id": operation_id,
+            "operation_type": "pipeline.submit",
+            "source_revision": revision,
+            "source_repository": "zog144/image-build",
+            "status": "pending", "pipeline_id": observed["pipeline_id"],
+            "terminal_outcome": None, "uncertainty": True,
+            "attempt_ids": observed["attempt_ids"],
+            "reconciliation_required": True,
+            "failure": {"type": "producer-timeout",
+                        "reason": "bounded producer wait expired; observe original operation"},
+            "allowed_next_operations": ["pipeline.inspect"],
+        }
+    else:
+        if completed.returncode != 0:
+            # A failed transport/subprocess is also not proof that a
+            # durable pipeline failed. Only independent owned-state evidence
+            # may support this uncertain recovery receipt.
+            observed = observe(project, operation_id)
+            if (observed["pipeline_id"] is None
+                    and observed["producer_status"] == "unreconciled"):
+                raise RuntimeError(
+                    "configured Project producer failed before durable pipeline: "
+                    + completed.stderr[-1000:])
+            produced = {
+                "schema": "image-build-remote-result-v1",
+                "operation_id": operation_id,
+                "operation_type": "pipeline.submit",
+                "source_revision": revision,
+                "source_repository": "zog144/image-build",
+                "status": "pending", "pipeline_id": observed["pipeline_id"],
+                "terminal_outcome": None, "uncertainty": True,
+                "attempt_ids": observed["attempt_ids"],
+                "reconciliation_required": True,
+                "failure": {"type": "producer-exit",
+                            "reason": "producer exited; durable pipeline requires reconciliation"},
+                "allowed_next_operations": ["pipeline.inspect"],
+            }
+        else:
+            output = completed.stdout.strip().splitlines()
+            if not output:
+                raise RuntimeError("configured Project producer returned no result")
+            produced = json.loads(output[-1])
     if (produced.get("schema") != "image-build-remote-result-v1"
             or produced.get("operation_id") != operation_id
             or produced.get("operation_type") != "pipeline.submit"
@@ -308,7 +359,8 @@ try:
     summary = {k: produced.get(k) for k in (
         "status", "pipeline_id", "source_revision",
         "recipe_identity", "selected_generation", "terminal_outcome",
-        "failure", "allowed_next_operations",
+        "failure", "allowed_next_operations", "uncertainty",
+        "attempt_ids", "reconciliation_required",
     )}
     raw = json.dumps(produced, sort_keys=True, separators=(",", ":")).encode()
     print(json.dumps({
@@ -322,7 +374,9 @@ try:
 except Exception as error:
     raise SystemExit("configured Project build operation failed: " + str(error)) from error
 '''
-_RUN = _RUN.replace("__ZOG_PROJECT_IMPORT_BOOTSTRAP__", repr(_PROJECT_IMPORT_BOOTSTRAP))
+_RUN = (_RUN.replace("__ZOG_PROJECT_IMPORT_BOOTSTRAP__", repr(_PROJECT_IMPORT_BOOTSTRAP))
+           .replace("__ZOG_OBSERVER_BOOTSTRAP__", repr(_OBSERVER))
+           .replace("__ZOG_PRODUCER_TIMEOUT__", str(PRODUCER_TIMEOUT_SECONDS)))
 
 
 
