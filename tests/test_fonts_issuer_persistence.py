@@ -182,3 +182,36 @@ def test_old_compiler_path_prefix_collision_is_not_retired():
         " /opt/zog/fonts-controller-d9dfd6c0-20261114-other")
     with pytest.raises(issuer.IssuerPersistenceHold, match="read-only"):
         issuer.verify(selected, raw, raw)
+
+
+@pytest.mark.parametrize("suffix", [
+    "/../certbot-seed-oct21",
+    "/venv/../../certbot-seed-oct21",
+    "/./venv",
+    "//venv",
+])
+def test_unreviewed_noncanonical_old_compiler_paths_are_not_retired(suffix):
+    selected, raw = fixture()
+    old = selected["rollback"]["original_runtime"]
+    selected["composition"]["original_effective"]["ReadOnlyPaths"] += (
+        " " + old + suffix)
+    with pytest.raises(issuer.IssuerPersistenceHold, match="read-only"):
+        issuer.verify(selected, raw, raw)
+
+
+@pytest.mark.parametrize("suffix", [
+    "/../certbot-seed-oct21",
+    "/venv/../../certbot-seed-oct21",
+    "/./venv",
+    "//venv",
+])
+def test_unreviewed_noncanonical_old_compiler_prestart_is_not_retired(suffix):
+    selected, raw = fixture()
+    old = selected["rollback"]["original_runtime"]
+    selected["composition"]["original_effective"]["ExecStartPre"].append({
+        "path": "/usr/bin/test",
+        "argv": "/usr/bin/test -d " + old + suffix,
+        "flags": {"ignore_errors": "no", "flags": ""},
+    })
+    with pytest.raises(issuer.IssuerPersistenceHold, match="prestart"):
+        issuer.verify(selected, raw, raw)
