@@ -11,6 +11,7 @@ Never fall back to Host.submit_command if the protected journal is unavailable.
 from .image_build_execution import _binding
 from .ledger import load_dispatch, load_request
 from .project_current import validate as validate_current
+from .project_current_observation import CONTROL_TIMEOUT_SECONDS as PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS
 from .protocol import request_digest
 
 
@@ -88,7 +89,8 @@ def submit_once(gateway_root, request_id, *, binding, configuration,
         raise ProtectedOwnerUnavailable("owner SSM Host is not the selected compiler")
     from .project_current import remote_script
     if (script != remote_script(selected)
-            or type(seconds) is not int or seconds != 300):
+            or type(seconds) is not int
+            or seconds != PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS):
         raise ProtectedOwnerUnavailable("owner script or execution deadline differs from fixed Fonts task")
     journal_factory = _owner_factory(journal_factory)
 
