@@ -446,3 +446,42 @@ grant, certificate data owner/DAC, source/policy hashes, reboot recovery,
 0:0 child fixture and issuer helper rollback remain separate host-install
 Work acceptance. No live unit, transaction, previous failed attempt or
 Fonts request was changed in Regular.
+
+## November 24 — independent review of revised issuer policy path normalization
+
+The exact host-install PR #49 source head
+`5c335a202f3b00e78e859983aa38854c40d88c51` independently hashes to
+15,573 bytes / SHA-256
+`3607f36bb40ea093433224749570de47f607dc43e965b2e7aee49e88ef953bc7`
+for `compiler_issuer_persistence_binding.py`. The original and successor
+helper SHA-256 values remain unchanged. The reviewed policy correctly checks
+the unmodified issuer drop-in prestart and readonly entries in both original
+and selected manager-effective selections, retains the full `Requires`
+and `After` dependencies, and distinguishes protected rollback evidence
+from the current staged source/installed byte pin.
+
+**Source review HOLD:** The policy's
+`_within_compiler(token, root)` currently accepts any string that equals
+the retired root or starts with `root + "/"`, without rejecting
+`.`, `..`, or repeated path separators. For example,
+`/opt/zog/fonts-controller-d9dfd6c0-20261114/../certbot-seed-oct21`
+passes that textual test even though its normalized pathname resolves
+outside the retiring compiler directory. This must **not** become an
+exemption for an issuer prestart or read-only mount. The independent
+host-deploy verifier was further corrected to require canonical absolute
+paths in the retired-runtime exemption, and both prestart and readonly
+tests now reject traversal, dot segments and repeated separators.
+
+Host-install Regular must match that narrow canonical-path rule in
+`compiler_issuer_persistence_binding.py`, rerun focused/AL2023 tests,
+record the changed policy source SHA-256 and use a new reviewed policy
+version in the immutable staged-policy history (not overwrite old
+`approved-binding.py` or prior policy record). The installer currently
+pins the prior host-deploy verifier revision: repin to the reviewed
+corrected head once accepted. Keep historical `record.json` revisions,
+content-addressed policy files, protected original helper, original issuer
+baseline, existing issuer storage mount/UUID/grants and all old compiler
+receipts preserved.
+
+No native selection, service start, systemd 252 fixture, issuer storage
+mutation, reboot or Fonts compilation is authorized by this review.
