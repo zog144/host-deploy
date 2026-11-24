@@ -11,6 +11,7 @@ import shlex
 
 COMPILER_UNIT = "zog-certbot-seed-root.service"
 ISSUER_DROPIN = "issuer-persistence.conf"
+RETIRED_COMPILER_RUNTIME = "/opt/zog/fonts-controller-d9dfd6c0-20261114"
 
 
 class IssuerPersistenceHold(RuntimeError):
@@ -126,7 +127,7 @@ def _retired_runtime(selection):
     # Only the known old compiler tree is eligible. In particular the
     # issuer's separately protected /opt/zog/certbot-seed-oct21 must not
     # become a permitted retired path.
-    require(path == "/opt/zog/fonts-controller-d9dfd6c0-20261114",
+    require(path == RETIRED_COMPILER_RUNTIME,
             "original runtime is not the reviewed retiring compiler")
     return path
 
