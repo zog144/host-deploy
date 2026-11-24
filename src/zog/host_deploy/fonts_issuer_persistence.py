@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import shlex
+import posixpath
 
 COMPILER_UNIT = "zog-certbot-seed-root.service"
 ISSUER_DROPIN = "issuer-persistence.conf"
@@ -133,7 +134,13 @@ def _retired_runtime(selection):
 
 
 def _runtime_path(token, old_root):
-    return token == old_root or token.startswith(old_root + "/")
+    # A textual slash prefix is insufficient: /old/compiler/../issuer and
+    # /old/compiler/./alias are NOT reviewed descendants of the old runtime.
+    # Never resolve symlinks or consult mutable Host filesystem state here;
+    # require a canonical absolute path as part of the immutable selection.
+    return (type(token) is str and token.startswith("/")
+            and token == posixpath.normpath(token)
+            and (token == old_root or token.startswith(old_root + "/")))
 
 
 def _runtime_prestart(command, old_root):
