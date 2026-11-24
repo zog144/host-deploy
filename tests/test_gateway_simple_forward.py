@@ -571,3 +571,10 @@ def test_ssm_outer_timeout_then_read_only_reconcile_recovers_same_pipeline_witho
     assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
     assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
     assert len(counters["send"]) == 1
+    # Gateway's next poll must prefer the newer trusted Project result
+    # over the original SSM's permanently TimedOut control-window status.
+    again = simple_forward.advance(root, REQUEST_ID, host_factory=TimedOut)
+    assert again["phase"] == "running"
+    assert again["pipeline_id"] == "c" * 32
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
+    assert len(counters["send"]) == 1
