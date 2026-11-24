@@ -109,8 +109,26 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
         return {"request_id": request_id, "phase": "submitted",
                 "command_id": command_id}
     # Result recovery reads the SAME recorded CommandId. No SendCommand.
-    host = host_factory(configuration)
+    # An explicit trusted Project observation outranks a *stale* terminal
+    # SSM control-window status. Otherwise a Gateway polling iteration could
+    # incorrectly turn a reconciled running pipeline back into TimedOut.
     command_id = record["command_id"]
+    observation_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
+    if binding.get("schema") == 4 and observation_path.is_file():
+        saved = json.loads(observation_path.read_text())
+        observed = saved.get("observation", {})
+        if (saved.get("schema") == 1 and saved.get("request_id") == request_id
+                and saved.get("command_id") == command_id
+                and type(observed) is dict
+                and observed.get("status") == "reconciled-project"):
+            state = load_request(root, request_id)["states"]["completion"]
+            if state in ("running", "recovery_blocked", "completed", "failed"):
+                return {"request_id": request_id, "phase": state,
+                        "command_id": command_id,
+                        "pipeline_id": observed.get("producer", {}).get("pipeline_id"),
+                        "observation_required": state in
+                            ("running", "recovery_blocked")}
+    host = host_factory(configuration)
     observation = host.inspect_command(command_id)
     if observation is None:
         return {"request_id": request_id, "phase": "submitted",
