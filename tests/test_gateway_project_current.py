@@ -619,6 +619,11 @@ def test_project_current_producer_timeout_keeps_original_pipeline_and_attempt(
     assert not (root / "state/image-build/remote-operations" / request_id /
                 "result.json").exists(), "timeout must not invent a terminal producer result"
     # Simulate later verified producer completion in *the same operation*.
+    pipeline_file = (root / "state/image-build/pipelines" /
+                     ("d" * 32) / "pipeline.json")
+    pipeline_record = json.loads(pipeline_file.read_text())
+    pipeline_record["status"] = "complete"
+    pipeline_file.write_text(json.dumps(pipeline_record))
     producer_result = {
         "schema": "image-build-remote-result-v1",
         "operation_id": request_id, "operation_type": "pipeline.submit",
@@ -671,3 +676,74 @@ def test_observation_rejects_foreign_pipeline_and_does_not_create_request(tmp_pa
         shell=True, capture_output=True, text=True, timeout=8)
     assert absent.returncode != 0
     assert not (root / "gateway-requests").exists()
+
+
+def test_read_only_observation_fails_closed_on_foreign_pipeline_owner(
+        tmp_path, monkeypatch):
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    root, source, controller = project(tmp_path)
+    _slow_durable_producer(root, source)
+    spec, record = selected(root, controller)
+    req = project_current.binding(intent("b" * 32), record, spec, target())
+    monkeypatch.setattr(project_current, "_RUN",
+                        project_current._RUN.replace("timeout=14400", "timeout=0.75"))
+    created = subprocess.run(project_current.remote_script(req),
+                             shell=True, capture_output=True, text=True, timeout=12)
+    assert created.returncode == 0, created.stderr
+    pipeline = root / "state/image-build/pipelines" / ("d" * 32) / "pipeline.json"
+    selected_record = json.loads(pipeline.read_text())
+    readback = read_only_observation_script(
+        str(root), sys.executable, "b" * 32, pipeline_id="d" * 32)
+    for owner_key, invalid in (("operation_id", "f" * 32),
+                               ("source_revision", "f" * 40)):
+        changed = json.loads(json.dumps(selected_record))
+        changed["owner"][owner_key] = invalid
+        pipeline.write_text(json.dumps(changed))
+        response = subprocess.run(readback, shell=True,
+                                  capture_output=True, text=True, timeout=8)
+        assert response.returncode != 0
+        assert "pipeline owner differs" in response.stderr
+    pipeline.write_text(json.dumps(selected_record))
+    response = subprocess.run(
+        read_only_observation_script(
+            str(root), sys.executable, "b" * 32, pipeline_id="f" * 32),
+        shell=True, capture_output=True, text=True, timeout=8)
+    assert response.returncode != 0
+    assert "expected pipeline" in response.stderr or "differs" in response.stderr
+
+
+def test_producer_completion_not_terminal_if_pipeline_still_running(
+        tmp_path, monkeypatch):
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    root, source, controller = project(tmp_path)
+    _slow_durable_producer(root, source)
+    spec, record = selected(root, controller)
+    req = project_current.binding(intent("c" * 32), record, spec, target())
+    monkeypatch.setattr(project_current, "_RUN",
+                        project_current._RUN.replace("timeout=14400", "timeout=0.75"))
+    created = subprocess.run(project_current.remote_script(req),
+                             shell=True, capture_output=True, text=True, timeout=12)
+    assert created.returncode == 0, created.stderr
+    directory = root / "state/image-build/remote-operations" / ("c" * 32)
+    (directory / "result.json").write_text(json.dumps({
+        "schema": "image-build-remote-result-v1", "operation_id": "c" * 32,
+        "operation_type": "pipeline.submit",
+        "source_repository": "zog144/image-build",
+        "source_revision": git(source, "rev-parse", "HEAD"),
+        "pipeline_id": "d" * 32,
+        "status": "completed", "terminal_outcome": "success",
+        "uncertainty": False,
+    }))
+    observed = subprocess.run(
+        read_only_observation_script(
+            str(root), sys.executable, "c" * 32, pipeline_id="d" * 32),
+        shell=True, capture_output=True, text=True, timeout=8)
+    assert observed.returncode == 0, observed.stderr
+    evidence = json.loads(observed.stdout.strip())
+    assert evidence["pipeline_status"] == "running"
+    assert evidence["terminal_confirmed"] is False
+    assert evidence["uncertainty"] is True
