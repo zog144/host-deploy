@@ -114,6 +114,40 @@ def _effective(comp, phase, prestart, readonly):
     return props
 
 
+def _retired_runtime(selection):
+    """One independently recorded original runtime, never an issuer mount."""
+    rollback = selection.get("rollback")
+    require(type(rollback) is dict, "missing protected rollback runtime")
+    path = rollback.get("original_runtime")
+    require(type(path) is str and path.startswith("/")
+            and path != "/" and "//" not in path
+            and "." not in path.split("/") and ".." not in path.split("/"),
+            "unusable protected original compiler runtime")
+    # Only the known old compiler tree is eligible. In particular the
+    # issuer's separately protected /opt/zog/certbot-seed-oct21 must not
+    # become a permitted retired path.
+    require(path == "/opt/zog/fonts-controller-d9dfd6c0-20261114",
+            "original runtime is not the reviewed retiring compiler")
+    return path
+
+
+def _runtime_path(token, old_root):
+    return token == old_root or token.startswith(old_root + "/")
+
+
+def _runtime_prestart(command, old_root):
+    """Only a command actually referring to the retired tree is removable."""
+    require(type(command) is dict and set(command) == {"path", "argv", "flags"},
+            "unreviewed original prestart identity")
+    try:
+        argv = shlex.split(command["argv"])
+    except (TypeError, ValueError) as error:
+        raise IssuerPersistenceHold("unparseable original prestart argv") from error
+    return (type(command["path"]) is str
+            and (_runtime_path(command["path"], old_root)
+                 or any(_runtime_path(arg, old_root) for arg in argv)))
+
+
 def verify(selection, original_dropin, selected_dropin):
     """Verify the original and selected issuer restrictions independently.
 
@@ -144,11 +178,27 @@ def verify(selection, original_dropin, selected_dropin):
     prestart, readonly = _constraints(original_dropin)
     original_properties = _effective(comp, "original", prestart, readonly)
     selected_properties = _effective(comp, "selected", prestart, readonly)
-    require(original_properties["ExecStartPre"] == selected_properties["ExecStartPre"],
-            "issuer persistence effective prestart changed between units")
-    require(set(original_properties["ReadOnlyPaths"].split())
-            <= set(selected_properties["ReadOnlyPaths"].split()),
-            "issuer persistence original read-only mounts were removed")
+    # The original compiler may have additional prestart commands and
+    # read-only paths for its *retiring runtime*. The issuer's drop-in
+    # commands/paths are already required by _effective() in BOTH versions.
+    # All other original protections must remain in the selected manager.
+    old_runtime = _retired_runtime(selection)
+    retained_prestarts = [
+        command for command in original_properties["ExecStartPre"]
+        if not _runtime_prestart(command, old_runtime)
+    ]
+    require(all(command in selected_properties["ExecStartPre"]
+                for command in retained_prestarts),
+            "non-retired original prestart or issuer check removed")
+    protected_paths = {
+        entry for entry in original_properties["ReadOnlyPaths"].split()
+        if not _runtime_path(entry, old_runtime)
+    }
+    require(protected_paths <= set(selected_properties["ReadOnlyPaths"].split()),
+            "issuer or non-retired original read-only mount removed")
+    # Requires/After may include backing-mount and issuer dependencies;
+    # never treat a unit dependency as retiring merely because an unrelated
+    # compiler path is retired. Keep them all until independently classified.
     for name in ("Requires", "After"):
         require(set(original_properties[name].split())
                 <= set(selected_properties[name].split()),
