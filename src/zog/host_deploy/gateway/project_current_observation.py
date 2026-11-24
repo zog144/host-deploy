@@ -140,7 +140,8 @@ def observe(project, operation_id, expected_pipeline_id=None):
     status = result.get("status") if result is not None else "unreconciled"
     terminal = bool(
         result is not None and result.get("uncertainty") is False
-        and ((status == "completed" and result.get("terminal_outcome") == "success")
+        and ((status == "completed" and result.get("terminal_outcome") == "success"
+              and pipeline is not None and pipeline.get("status") == "complete")
              or (status == "failed" and result.get("terminal_outcome") is not None))
     )
     attempts = (pipeline.get("attempts") if pipeline is not None else None)
