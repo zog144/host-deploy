@@ -149,6 +149,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
         raise ValueError("invalid retained pipeline attempt identity")
     return {
         "schema": OBSERVATION_SCHEMA,
+        "project_root": str(project),
         "request_id": operation_id,
         "operation_id": operation_id,
         "source_revision": revision,
