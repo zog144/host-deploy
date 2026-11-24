@@ -220,8 +220,9 @@ def reconcile_project_observation(root, request_id, observation):
             or observation.get("execution_authorized") is not False
             or type(observation.get("source_revision")) is not str
             or not REVISION.fullmatch(observation["source_revision"])
-            or observation.get("terminal_confirmed") not in (True, False)
-            or observation.get("uncertainty") is not (
+            or type(observation.get("terminal_confirmed")) is not bool
+            or type(observation.get("uncertainty")) is not bool
+            or observation["uncertainty"] is not (
                 not observation["terminal_confirmed"])):
         raise ForwardingDenied("read-only Project observation identity or status differs")
     pipeline = observation.get("pipeline_id")
