@@ -147,6 +147,12 @@ def test_inspect_installed_preserves_issuer_restrictions_in_both_phases(
     from zog.host_deploy import fonts_issuer_persistence as issuer
     selected, _, active, saved, new_bytes = fixture_selection(
         tmp_path, monkeypatch, service_name=issuer.COMPILER_UNIT)
+    # The original runtime in this disposable fixture is a tmp_path tree,
+    # not the production retired compiler. Keep the production constant
+    # unchanged outside this isolated test.
+    monkeypatch.setattr(
+        issuer, "RETIRED_COMPILER_RUNTIME",
+        selected["rollback"]["original_runtime"])
     unit = selected["service"]["staged_unit"]
     raw = (
         b"[Service]\n"
