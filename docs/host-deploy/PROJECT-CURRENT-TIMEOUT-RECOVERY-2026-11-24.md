@@ -101,7 +101,10 @@ observations remain `running` or `recovery_blocked`. Only matching
 producer `result.json` containing an unambiguous `completed/success`
 or explicit terminal failure may generate an immutable Gateway terminal
 receipt. This is **not** exposed as an arbitrary SQS message or requester
-field; ordinary Gateway polling never resubmits the operation.
+field; ordinary Gateway polling never resubmits the operation. Once an
+operator has reconciled that same Project/pipeline, a later Gateway polling
+iteration will **not** let the original SSM control-window `TimedOut`
+observation overwrite the newer trusted pipeline observation.
 
 ## Source acceptance and native HOLD
 
