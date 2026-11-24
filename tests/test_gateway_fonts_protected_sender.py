@@ -153,13 +153,13 @@ def test_protected_owner_rejects_forged_request_or_different_target(prepared):
     with pytest.raises((RuntimeError, ValueError)):
         fonts_owner_sender.submit_once(
             root, request_id, binding=wrong, configuration=target(),
-            host=Host(target()), script=script, seconds=300,
+            host=Host(target()), script=script, seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
             journal_factory=OwnerJournal)
     different = dict(target(), instance_id="i-abcdef01234567890")
     with pytest.raises(fonts_owner_sender.ProtectedOwnerUnavailable):
         fonts_owner_sender.submit_once(
             root, request_id, binding=binding, configuration=different,
-            host=Host(target()), script=script, seconds=300,
+            host=Host(target()), script=script, seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
             journal_factory=OwnerJournal)
     assert OwnerJournal.intents == {}
     assert calls == []
