@@ -536,3 +536,38 @@ def test_legacy_schema_timeout_still_uses_original_control_window(forwarding):
     # not widened merely because the first Fonts Project can run longer.
     assert simple_forward.CONTROL_TIMEOUT_SECONDS == 300
     assert simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS == 14700
+
+
+def test_ssm_outer_timeout_then_read_only_reconcile_recovers_same_pipeline_without_send(
+        forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    class TimedOut(Host):
+        def inspect_command(self, command_id):
+            counters["inspect"].append(command_id)
+            return {"CommandId": command_id, "InstanceId": TARGET["instance_id"],
+                    "Status": "TimedOut"}
+    assert simple_forward.advance(root, REQUEST_ID, host_factory=TimedOut)[
+        "phase"] == "recovery_blocked"
+    from zog.host_deploy.gateway.ledger import reconcile_dispatch
+    reconcile_dispatch(root, REQUEST_ID)
+    observation = {
+        "schema": simple_forward.PROJECT_OBSERVATION_SCHEMA,
+        "project_root": binding["project_root"],
+        "request_id": REQUEST_ID, "operation_id": REQUEST_ID,
+        "source_revision": SOURCE["revision"], "pipeline_id": "c" * 32,
+        "pipeline_status": "running",
+        "attempt_ids": ["image-63dcd6a137f040bc9224dce166a916ed"],
+        "producer_status": "unreconciled", "terminal_outcome": None,
+        "terminal_confirmed": False, "uncertainty": True,
+        "mutation": False, "execution_authorized": False,
+    }
+    resumed = simple_forward.reconcile_project_observation(
+        root, REQUEST_ID, observation)
+    assert resumed["phase"] == "running"
+    assert resumed["pipeline_id"] == "c" * 32
+    assert load_dispatch(root, REQUEST_ID)["command_id"] == "command-123"
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+    assert len(counters["send"]) == 1
