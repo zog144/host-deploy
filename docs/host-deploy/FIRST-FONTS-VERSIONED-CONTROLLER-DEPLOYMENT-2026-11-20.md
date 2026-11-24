@@ -380,3 +380,69 @@ bytes, original issuer mount/STATE/grants, DAC, protected issuer storage,
 systemd 252 cold-start and reboot restrictions. No native start, restoration,
 maintenance window, SSM send, request replay or Fonts compilation is
 authorized by these source tests.
+
+## November 24 — narrow retirement of previous compiler runtime
+
+The original versioned compiler uses
+`/opt/zog/fonts-controller-d9dfd6c0-20261114`, which is separately
+preserved in the protected original runtime/rollback inventory. The new
+`ExecStart` selects the immutable version under
+`/opt/zog/compiler-runtime/versions/<release>/bin`; the old compiler
+tree must NOT remain in its selected executable or systemd effective
+command/restriction strings. This old compiler is **not** the independent
+issuer application tree `/opt/zog/certbot-seed-oct21`, whose read-only
+mount protection remains mandatory.
+
+An earlier independent issuer verifier compared ALL original and selected
+`ExecStartPre` entries for equality and required ALL original
+`ReadOnlyPaths` entries to be present in the selected unit. Those generic
+comparisons unintentionally retained the old compiler's prestart or read-only
+tree even when it had no relationship to issuer storage. The new comparison
+takes a **narrow evidence-bound exception**:
+
+- `rollback.original_runtime` must be exactly
+  `/opt/zog/fonts-controller-d9dfd6c0-20261114` and is still protected
+  by the complete original/saved runtime inventory. Only original
+  `ExecStartPre` commands whose executable or complete argv token resolves
+  within that exact old compiler path may disappear. All other original
+  prestart command identities must remain present.
+- Only the old compiler directory itself and its child paths may disappear
+  from original effective `ReadOnlyPaths`. Unrelated names with a similar
+  prefix are not eligible, and unrelated original issuer/application paths,
+  including `/opt/zog/certbot-seed-oct21`, remain mandatory.
+- The **original and selected issuer-persistence.conf** must remain
+  root-owned and byte-identical to its reviewed metadata. Every issuer
+  `ExecStartPre` entry declared by that drop-in must still appear in both
+  manager-effective command lists, with the same executable/argv and
+  nonignored flags. Every issuer `ReadOnlyPaths` entry in the protected
+  drop-in must remain; no issuer storage paths are exempted by retirement.
+- `Requires` and `After` retain the entire previously reviewed backing
+  dependency set. The verifier does NOT guess that a mount dependency can
+  disappear merely because an unrelated old compiler path is retired.
+- The rest of PR #35 still verifies selected/rollback fragment hashes,
+  selected root-owned executable, complete installed module/RECORD and runtime
+  tree, actual loaded systemd manager properties, selected guard/drop-ins,
+  and independent actual child identity. The return still states
+  `execution_authorized=false`, `native_issuer_storage_verified=false`,
+  `startup_authorized=false`, and the Fonts lane remains disabled.
+
+This amendment is only in host-deploy's **read-only issuer verifier**.
+**Matching host-install Regular source review is required before the
+already-staged release can be admitted**: its
+`compiler_issuer_persistence_binding.reviewed_replacement_binding()`
+currently compares the entire old/new effective prestart command lists and
+the entire old/new read-only path sets, and must narrow those comparisons to
+the *same* exact retired compiler tree while retaining issuer drop-in
+prestarts, issuer storage paths, backing mounts, immutable baseline,
+protected transaction and approved unit bytes. Because this policy is
+source-hash-pinned and installed beside the issuer startup helper, a
+matching change must have its **new source/installed-byte SHA-256 independently
+reviewed and attested**. Do not patch existing protected staged policy bytes
+or silently relabel an old helper rollback record. Work must hold selected
+startup until both programs' installed bytes and evidence agree.
+
+Native systemd 252, issuer backing filesystem identity/UUID, protected
+grant, certificate data owner/DAC, source/policy hashes, reboot recovery,
+0:0 child fixture and issuer helper rollback remain separate host-install
+Work acceptance. No live unit, transaction, previous failed attempt or
+Fonts request was changed in Regular.
