@@ -120,7 +120,7 @@ def forwarding(tmp_path, monkeypatch):
             counters["new_host"].append(config)
         def submit_command(self, script, seconds):
             assert script == "fixed-reviewed-remote-script"
-            assert seconds == simple_forward.CONTROL_TIMEOUT_SECONDS
+            assert seconds == simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS
             counters["send"].append(script)
             return "command-123"
         def inspect_command(self, command_id):
@@ -132,7 +132,8 @@ def forwarding(tmp_path, monkeypatch):
                         "schema": image_build_execution.RECEIPT_SCHEMA,
                         "request_id": REQUEST_ID,
                         "remote_request_sha256": "0" * 64,
-                        "result": {"status": "pending",
+                        "result": {"status": "pending", "uncertainty": False,
+                                   "source_revision": SOURCE["revision"],
                                    "pipeline_id": "c" * 32},
                     })}
     return root, value, binding, Host, counters
@@ -151,15 +152,16 @@ def test_authorized_issue_fifo_to_configured_ssm_and_recovered_result(forwarding
     # Simulate a restart/lost result, preserving the original CommandId.
     reconcile_dispatch(root, REQUEST_ID)
     finished = simple_forward.advance(root, REQUEST_ID, host_factory=Host)
-    assert finished["phase"] == "completed"
+    assert finished["phase"] == "running"
     assert finished["command_id"] == "command-123"
     assert counters["inspect"] == ["command-123"]
     assert len(counters["send"]) == 1
     saved = json.loads((root / "requests" / REQUEST_ID /
-                        "remote-result.json").read_text())
+                        "dispatch-observation.json").read_text())
     assert saved["command_id"] == "command-123"
-    assert saved["result"]["result"]["pipeline_id"] == "c" * 32
-    assert load_request(root, REQUEST_ID)["states"]["completion"] == "completed"
+    assert saved["observation"]["producer"]["pipeline_id"] == "c" * 32
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
 
 
 def test_acknowledgement_loss_is_never_automatically_resent(forwarding, monkeypatch):
@@ -297,7 +299,7 @@ def test_real_sqs_delivery_is_acked_then_forwarded_once(forwarding, monkeypatch)
     assert load_dispatch(root, value["request_id"])["command_id"] == "command-123"
 
     service.poll_once(wait_seconds=0)
-    assert load_request(root, value["request_id"])["states"]["completion"] == "completed"
+    assert load_request(root, value["request_id"])["states"]["completion"] == "running"
     assert counters["inspect"] == ["command-123"]
     assert len(counters["send"]) == 1
 
@@ -431,7 +433,7 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
     result = simple_forward.advance(
         root, value["request_id"], host_factory=Host, owner_factory=OwnerJournal)
     assert result["phase"] == "submitted"
-    assert sent == [(script, simple_forward.CONTROL_TIMEOUT_SECONDS)]
+    assert sent == [(script, simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS)]
     assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"
 
 
@@ -456,3 +458,80 @@ def test_issue_body_has_no_compiler_selection_or_snapshot():
     assert set(selected["parameters"]) == {"lane", "task"}
     assert "selection" not in json.dumps(event)
     assert "recipe_snapshot" not in json.dumps(event)
+
+
+def test_project_current_ssm_timeout_is_recovery_blocked_not_pipeline_terminal(
+        forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    class LongSSM(Host):
+        def inspect_command(self, command_id):
+            counters["inspect"].append(command_id)
+            return {"CommandId": command_id,
+                    "InstanceId": TARGET["instance_id"],
+                    "Status": "TimedOut"}
+    blocked = simple_forward.advance(root, REQUEST_ID, host_factory=LongSSM)
+    assert blocked == {
+        "request_id": REQUEST_ID, "phase": "recovery_blocked",
+        "command_id": "command-123", "ssm_status": "TimedOut",
+        "observation_required": True,
+    }
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "recovery_blocked"
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+    assert simple_forward.advance(root, REQUEST_ID, host_factory=LongSSM)["phase"] == "recovery_blocked"
+    assert len(counters["send"]) == 1
+
+
+def test_project_current_observation_is_same_pipeline_and_never_resubmits(forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    assert simple_forward.advance(root, REQUEST_ID, host_factory=Host)["phase"] == "running"
+    previous = load_request(root, REQUEST_ID)
+    assert previous["states"]["completion"] == "running"
+    unchanged = {
+        "schema": simple_forward.PROJECT_OBSERVATION_SCHEMA,
+        "project_root": binding["project_root"],
+        "request_id": REQUEST_ID, "operation_id": REQUEST_ID,
+        "source_revision": SOURCE["revision"],
+        "pipeline_id": "c" * 32,
+        "pipeline_status": "running",
+        "attempt_ids": ["image-63dcd6a137f040bc9224dce166a916ed"],
+        "producer_status": "unreconciled", "terminal_outcome": None,
+        "terminal_confirmed": False, "uncertainty": True,
+        "mutation": False, "execution_authorized": False,
+    }
+    result = simple_forward.reconcile_project_observation(root, REQUEST_ID, unchanged)
+    assert result["phase"] == "running"
+    assert result["pipeline_id"] == "c" * 32
+    assert len(counters["send"]) == 1
+    for bad in (
+        {"pipeline_id": "f" * 32},
+        {"source_revision": "f" * 40},
+        {"operation_id": "e" * 32},
+        {"mutation": True},
+        {"execution_authorized": True},
+        {"terminal_confirmed": True, "uncertainty": False,
+         "producer_status": "pending", "terminal_outcome": "success"},
+    ):
+        with pytest.raises(simple_forward.ForwardingDenied):
+            simple_forward.reconcile_project_observation(root, REQUEST_ID,
+                    {**unchanged, **bad})
+    # Read-only observation targets the SAME original request+pipeline, and
+    # only original image-build's durable terminal result can finish it.
+    terminal = {**unchanged, "pipeline_status": "complete",
+                "producer_status": "completed", "terminal_outcome": "success",
+                "terminal_confirmed": True, "uncertainty": False}
+    complete = simple_forward.reconcile_project_observation(root, REQUEST_ID, terminal)
+    assert complete["phase"] == "completed"
+    assert len(counters["send"]) == 1
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "completed"
+    assert (root / "requests" / REQUEST_ID / "remote-result.json").is_file()
+
+
+def test_legacy_schema_timeout_still_uses_original_control_window(forwarding):
+    # The schema-4 tests prove 14,700 seconds is selected. Legacy policy is
+    # not widened merely because the first Fonts Project can run longer.
+    assert simple_forward.CONTROL_TIMEOUT_SECONDS == 300
+    assert simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS == 14700
