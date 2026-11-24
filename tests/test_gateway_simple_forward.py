@@ -72,6 +72,7 @@ def direct_binding(value):
         "schema": 4, "direct_forward": True,
         "request_id": value["request_id"],
         "workspace_id": WORKSPACE, "lane": "gateway-first-fonts-runtime",
+        "project_root": "/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime",
         "target": TARGET, "source": SOURCE,
         "remote_request": {
             "schema": "image-build-remote-operation-v1",
