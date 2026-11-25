@@ -13,8 +13,6 @@ import time
 
 from . import image_build_lanes as lanes
 from . import fonts_lane_runtime
-from .gateway import fonts_lane_review
-from .gateway import graphics_catalogue_owner as fonts
 from .provision import configuration
 from .workspace import locked, save
 
@@ -69,6 +67,7 @@ def _binding(workspace, host):
 
 def profile():
     """Source pins and reviewed retained-lane identity, not a new lane spec."""
+    from .gateway import graphics_catalogue_owner as fonts
     if (fonts.SOURCE != lanes.FIRST_FONTS_PRODUCER_REVISION
             or lanes.expected_build_record_revision(fonts.SOURCE) != COMPANION_REVISION):
         raise RuntimeError("first Fonts producer/companion source review differs")
@@ -110,6 +109,7 @@ def _retained(root):
 
 def _approved(root, *, records=None):
     """Compare the *actual retained* specification, never produce a substitute."""
+    from .gateway import fonts_lane_review
     reviewed = profile()
     records = _retained(root) if records is None else records
     selected = [record for record in records if record["lane"] == LANE]
