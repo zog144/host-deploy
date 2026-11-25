@@ -135,7 +135,10 @@ def test_mixed_active_certbot_seed_needs_no_schema4_and_never_restores_lane(tmp_
     published = recovery.publish(root, **approvals, host_factory=Host)
     assert viewed == published
     assert (root / recovery.RECEIPT).stat().st_mode & 0o777 == 0o600
-    assert verify_approved_lane(root, ws, host, record, spec) == viewed
+    assert recovery.verify_published(root, ws, host, record, spec) == viewed
+    # Read-only provenance is NOT fresh compiler-controller admission authority.
+    with pytest.raises(RuntimeError, match="not current compiler-controller admission"):
+        verify_approved_lane(root, ws, host, record, spec)
     assert originals == (lane.read_bytes(), intent.read_bytes())
     assert not (root / migration.HISTORY).exists()
 
@@ -208,3 +211,33 @@ def test_record_drift_or_missing_archive_conflict_cannot_be_silenced(tmp_path):
     archive.write_text('{"foreign":"archive"}')
     with pytest.raises(RuntimeError, match="history|archive"):
         recovery.inspect(root2, **approvals2, host_factory=Host)
+
+
+
+def test_remote_controller_drift_between_inspection_and_publication_holds(tmp_path):
+    root, ws, host, record, spec, approvals = fixture(tmp_path)
+
+    def drift(report):
+        # First read-only inspection succeeds; publication's fresh
+        # selected-Host readback sees a changed controller and must HOLD.
+        if "controller_sha256" in report and len(Host.calls) == 4:
+            report["controller_sha256"] = "f" * 64
+
+    Host.corrupt = drift
+    with pytest.raises(RuntimeError, match="authenticated"):
+        recovery.publish(root, **approvals, host_factory=Host)
+    assert len(Host.calls) == 4
+    assert not (root / recovery.RECEIPT).exists()
+
+
+def test_published_mixed_receipt_cannot_authorize_later_controller_drift(tmp_path):
+    root, ws, host, record, spec, approvals = fixture(tmp_path)
+    recovery.publish(root, **approvals, host_factory=Host)
+    # The old protected local record still passes local provenance checks,
+    # but cannot authorize build dispatch after independent Host drift.
+    Host.corrupt = lambda report: (
+        report.update(controller_sha256="f" * 64)
+        if "controller_sha256" in report else None)
+    assert recovery.verify_published(root, ws, host, record, spec)["execution_authorized"] is False
+    with pytest.raises(RuntimeError, match="not current compiler-controller admission"):
+        verify_approved_lane(root, ws, host, record, spec)
