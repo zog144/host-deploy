@@ -61,6 +61,31 @@ transition verification, `mutation=false`,
 `ssm_send_authorized=false`, `execution_authorized=false` and
 `compilation_authorized=false`.
 
+## Legacy unjournaled command discovery (read-only candidate stage)
+
+Older `Host.command()` calls may have no root-control journal at all. To
+avoid inventing the missing original CommandIds, the separate
+`discover_unbound_candidates()` source function uses AWS
+`ssm:ListCommands` **only** (not GetCommandInvocation or SendCommand)
+with fixed compiler instance ID, `AWS-RunShellScript`, and the bounded
+November 13–17 UTC date filters. It verifies actual AWS STS account and
+SSM client's Region first, paginates no more than eight pages of 50,
+rejects repeated IDs/pagination tokens and selects only commands whose
+*original script* mentions the exact historical first-Fonts destination,
+controller or initializer markers. It reports only candidate CommandIds,
+original script SHA-256, request time and command status; no script
+contents, stdout or stderr are returned.
+
+Every candidate is explicitly **unauthenticated** as to original
+operation, root-control journal, migration approval, and later
+`certbot-seed` selection. An incomplete scan is marked
+`query_complete=false`, never misreported as proof no old command
+exists. No candidate can be fed to `inspect()` unless the separate,
+externally accepted original witness and exact retained root journal
+bind it. Where no such old journal exists, further original
+CloudTrail/Work receipt reconciliation needs **new source review**;
+a postdated journal or fabricated schema-4 archive is prohibited.
+
 ## Crucial native status and next requirements
 
 **The existence of the exact two original November 14 root-control journal
