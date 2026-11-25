@@ -265,17 +265,18 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
             (type(expected_pipeline) is not str
              or not IDENTITY.fullmatch(expected_pipeline))):
         raise ForwardingDenied("retained pipeline identity is invalid")
-    # This new, fixed SSM command only inspects the frozen compiler Host.
-    # Its identity is distinct from the protected original Task C build send.
+    # This fixed observer is sent by its own protected root-control journal
+    # operation, never through a direct Gateway Host.submit_command fallback.
     script = read_only_observation_script(
         binding["project_root"], binding["python_executable"], request_id,
         pipeline_id=expected_pipeline)
+    from . import fonts_inspection_owner as inspection_owner
     try:
         host = host_factory(config)
-        inspection_id = host.submit_command(script, seconds=120)
-        if (type(inspection_id) is not str or not inspection_id
-                or len(inspection_id) > 128):
-            raise ValueError("invalid read-only SSM inspection CommandId")
+        inspection_number, inspection_id = inspection_owner.submit_or_recover(
+            root, request_id, binding=binding, target=binding["target"],
+            original_command_id=record["command_id"],
+            pipeline_id=expected_pipeline, script=script, host=host)
         deadline = time.monotonic() + 210
         observed_ssm = None
         while time.monotonic() < deadline:
@@ -288,6 +289,9 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
                             (_RUNNING | set(_TERMINAL))):
                     raise ValueError("read-only SSM command/Host identity differs")
                 if observed_ssm["Status"] in _TERMINAL:
+                    inspection_owner.finish(
+                        root, request_id, inspection_number, inspection_id,
+                        status=observed_ssm["Status"])
                     break
             time.sleep(2)
         if observed_ssm is None or observed_ssm.get("Status") != "Success":
@@ -367,8 +371,8 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
     else:
         completion = "running" if pipeline is not None else "recovery_blocked"
 
-    # The readback result and exact source/pipeline/attempt evidence digests
-    # remain recorded under the original SSM CommandId. No sender is used.
+    # The readback result is bound to its separately journaled inspection
+    # CommandId and the unchanged original protected build CommandId.
     snapshot = {
         "schema": PROJECT_OBSERVATION_SCHEMA,
         "command_id": record["command_id"],
