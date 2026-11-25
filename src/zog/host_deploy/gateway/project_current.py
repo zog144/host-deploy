@@ -49,32 +49,40 @@ def _template(request_id):
 
 
 def verify_approved_lane(root, workspace, host, record, spec):
-    """Read-only bridge from historical first Fonts approval to active lane.
+    """Read-only validation of either independently retained source history.
 
-    The registry/Gateway retains the lane *record* and its archived history.
-    The compiler Host owns the remote Project bytes. Never substitute a
-    syntactically valid schema-5 Project at the default lane root or infer
-    migration provenance from the compiler's visible files.
+    An archived schema-4 -> schema-5 migration and the mixed active
+    certbot-seed existing-Project/never-archived initialization are *distinct
+    evidence paths*. Never synthesize the missing archived schema-4 lane.
+    The latter is eligible only after a separate explicitly source/native
+    reviewed, create-only recovery receipt exists in the owning workspace.
     """
-    from .. import fonts_lane_migration, fonts_lane_profile
     from .. import image_build_lanes as lanes
-    from ..fonts_lane_runtime import CONTROLLER_FILE
-
-    expected_root = fonts_lane_profile.PROJECT_ROOT
     if (record.get("lane") != "gateway-first-fonts-runtime"
             or spec.get("lane") != "gateway-first-fonts-runtime"
             or record.get("schema") != lanes.INHERITED_SCHEMA
             or spec.get("schema") != lanes.INHERITED_SCHEMA
-            or spec.get("project_root") != expected_root
-            or record.get("specification") != spec
+            or record.get("state") != "active"
+            or record.get("specification") != spec):
+        raise RuntimeError("first Fonts active lane identity differs")
+    if spec.get("project_selection") == "existing":
+        from .. import fonts_lane_recovery
+        return fonts_lane_recovery.verify_published(
+            root, workspace, host, record, spec)
+    # Archived schema-4 migration, retaining all original bytes, remains
+    # required for its distinct managed migration root. No missing archive
+    # may be converted into a certbot-seed recovery receipt.
+    from .. import fonts_lane_migration, fonts_lane_profile
+    from ..fonts_lane_runtime import CONTROLLER_FILE
+    expected_root = fonts_lane_profile.PROJECT_ROOT
+    if (spec.get("project_root") != expected_root
             or record.get("controller_config") !=
                 str(Path(expected_root) / CONTROLLER_FILE)
             or record.get("source_root") != str(Path(expected_root) / "source")
             or record.get("package_dir") !=
                 str(Path(expected_root) / "source/project/package")
             or record.get("state_dir") != str(Path(expected_root) / "state")):
-        raise RuntimeError(
-            "first Fonts lane root/controller differs from reviewed migration")
+        raise RuntimeError("migrated first Fonts controller/root differs")
     proof = fonts_lane_migration.verify_existing(root, workspace, host, record)
     if (proof.get("corrected_project_root") != expected_root
             or proof.get("historical_specification_sha256")
@@ -82,7 +90,7 @@ def verify_approved_lane(root, workspace, host, record, spec):
             or proof.get("execution_authorized") is not False
             or proof.get("binding") != fonts_lane_profile._binding(
                 workspace, host)):
-        raise RuntimeError("first Fonts migration provenance differs")
+        raise RuntimeError("first Fonts archived migration provenance differs")
     return proof
 
 
