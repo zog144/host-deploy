@@ -148,7 +148,7 @@ def test_mixed_active_certbot_seed_needs_no_schema4_and_never_restores_lane(tmp_
 def test_unapproved_digest_blocks_before_any_host_call(tmp_path, name):
     root, _, _, _, _, approvals = fixture(tmp_path)
     approvals[name] = "sha256:" + "f"*64
-    with pytest.raises(RuntimeError, match="digest|specification"):
+    with pytest.raises(RuntimeError, match="digest|specification|intent|provenance"):
         recovery.publish(root, **approvals, host_factory=Host)
     assert not Host.calls and not (root / recovery.RECEIPT).exists()
 
@@ -169,7 +169,13 @@ def test_mixed_intent_mismatch_never_publishes(tmp_path, field, value):
     save(path, updated)
     with pytest.raises(RuntimeError, match="intent|provenance"):
         recovery.publish(root, **approvals, host_factory=Host)
-    assert not Host.calls and not (root / recovery.RECEIPT).exists()
+    # An altered but well-formed manifest hash needs an independent
+    # native readback to distinguish it; never a compiler submission.
+    if field == "initialization_manifest_sha256":
+        assert Host.calls == ["host-install-fonts-project-init --verify"]
+    else:
+        assert not Host.calls
+    assert not (root / recovery.RECEIPT).exists()
 
 
 def test_compiler_or_initializer_mismatch_holds(tmp_path):
