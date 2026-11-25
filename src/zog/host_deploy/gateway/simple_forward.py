@@ -298,6 +298,8 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
     if (type(observation) is not dict
             or observation.get("schema") != PROJECT_OBSERVATION_SCHEMA
             or observation.get("project_root") != binding["project_root"]
+            or type(observation.get("project_owner_uid")) is not int
+            or observation["project_owner_uid"] != FIRST_FONTS_COMPILER_PROJECT_UID
             or observation.get("request_id") != request_id
             or observation.get("operation_id") != request_id
             or observation.get("evidence_source") != "local-selected-project"
@@ -323,12 +325,19 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
         raise ForwardingDenied("owned Project differs from original SSM producer")
 
     evidence = observation["evidence"]
+    evidence_digest = evidence.get("evidence_sha256")
+    computed_digest = hashlib.sha256(json.dumps(
+        {key: value for key, value in evidence.items()
+         if key != "evidence_sha256"},
+        sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("ascii")).hexdigest()
     if (type(evidence.get("request_sha256")) is not str
             or type(evidence.get("pipeline_sha256")) is not (
                 str if pipeline is not None else type(None))
-            or type(evidence.get("evidence_sha256")) is not str
-            or len(evidence["evidence_sha256"]) != 64):
-        raise ForwardingDenied("selected Host evidence has no durable digest")
+            or type(evidence_digest) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", evidence_digest)
+            or computed_digest != evidence_digest):
+        raise ForwardingDenied("selected compiler evidence digest differs")
     if observation["terminal_confirmed"]:
         outcome = observation.get("terminal_outcome")
         if (observation.get("producer_status") == "completed"
@@ -355,7 +364,10 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
     snapshot = {
         "schema": PROJECT_OBSERVATION_SCHEMA,
         "command_id": record["command_id"],
+        "inspection_command_id": inspection_id,
+        "compiler_instance_id": config["instance_id"],
         "project_root": binding["project_root"],
+        "project_owner_uid": observation["project_owner_uid"],
         "source_revision": observation["source_revision"],
         "pipeline_id": pipeline,
         "pipeline_status": observation.get("pipeline_status"),
@@ -372,6 +384,8 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
     record_dispatch_observation(root, request_id, {
         "schema": "host-deploy-direct-ssm-observation-v1",
         "command_id": record["command_id"],
+        "inspection_command_id": inspection_id,
+        "compiler_instance_id": config["instance_id"],
         "status": "reconciled-project",
         "producer": {
             "request_id": request_id,
