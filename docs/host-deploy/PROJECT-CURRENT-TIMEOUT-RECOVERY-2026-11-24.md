@@ -93,8 +93,9 @@ state (when present), `mutation=false` and
 closed. The helper does not call the pipeline or controller.
 
 After independently confirming the exact Host/Project provenance,
-the trusted **Gateway administrator running on the selected compiler Host**
-may invoke:
+the trusted **registry Gateway administrator** may invoke the explicit
+observation command below **only with the installed protected root-control
+inspection owner**. The Gateway is not co-located with the compiler Project:
 
 ```python
 from zog.host_deploy.gateway.simple_forward import reconcile_project_observation
@@ -103,13 +104,14 @@ result = reconcile_project_observation(gateway_root, original_request_id)
 
 There is **no caller-supplied observation parameter**. The function itself
 checks the original admitted dispatch, unchanged selected Workspace/Host/Project,
-protected SSM CommandId and prior pipeline/revision evidence, then runs the
-reviewed standard-library-only observer against the *actual local* Project
-files. Gateway input cannot supply `terminal_confirmed`, `producer_status`,
+protected SSM CommandId and prior pipeline/revision evidence, then sends the fixed observer through a distinct durable protected
+root-control inspection operation to the selected compiler Host. Gateway
+input cannot supply `terminal_confirmed`, `producer_status`,
 `pipeline_status`, `source_revision`, or any status-bearing evidence
-dictionary. A different Host without the selected local Project cannot
-reconcile it. The observer requires unsymlinked, process-owned, non-writable-
-by-others Project directories and evidence files, with matching request,
+dictionary. The compiler observer anchors all Project path ancestors and evidence
+files through no-follow directory descriptors, checks opened inode custody,
+and rechecks the Project binding before reporting. It requires the actual
+compiler Project's protected ownership and matching request,
 producer binding, source revision and pipeline owner. Missing or tampered
 evidence produces a HOLD, not a terminal result.
 
@@ -137,12 +139,19 @@ message or requester-supplied JSON. Ordinary Gateway polling never replays
 the original producer. A later poll cannot replace a newer reconciled Project
 status with the original SSM control-window `TimedOut` result.
 
-**Native dependency:** this direct-readback API works only when the installed
-trusted Gateway process has read-only access to the *actual selected compiler
-Host Project* under the reviewed service identity. Work must verify that
-co-location, canonical path, source/attempt ownership and modes on the
-Host; never use a copied Project directory or a supplied JSON blob as a
-substitute for the selected machine's evidence.
+**Native dependency:** the registry Gateway and compiler remain separate.
+The Gateway cannot use generic `Host.submit_command` to perform inspection.
+A protected root-control `LocalTaskCJournal` must be available to the
+trusted owner, with a root-owned directory, an independently reviewed
+fixed inspection policy and appropriate SSM principal. Each explicit
+inspection writes a local create-only intent before the journal itself
+records a distinct immutable send-once operation. Lost acknowledgement
+is reconciled from that protected journal, never resent. The owner checks
+the frozen request, target, original protected CommandId, Project, expected
+pipeline and exact generated script hash; it does not replace or replay the
+original build operation. Native Work must verify this exact permission
+and installed-byte contract before any SSM inspection; the source-only
+candidate is not permission to run one.
 
 ## Source acceptance and native HOLD
 
@@ -240,10 +249,15 @@ JSON recovery.
 Only after all checks pass can an explicitly requested publish create
 a protected 0600, create-only, nonauthorizing provenance receipt
 `first-fonts-mixed-state-recovery-v1.json`. The original active lane,
-pending intent and absent schema-4 archive remain **unchanged**. Normal
-Gateway admission requires this independently verified receipt when
-using the existing certbot-seed Project; a missing, mismatched or stale
-receipt is HOLD.
+pending intent and absent schema-4 archive remain **unchanged**. The publisher performs a **second compiler Host readback under the
+publication lock** and refuses a controller/source change between the two
+inspections. Even a matching retained receipt proves only historical
+read-only provenance, not a fresh immutable compiler-controller identity.
+**New direct Gateway build admission for the existing certbot-seed Project
+remains explicitly disabled** until a separately reviewed fixed current
+controller attestation can be enforced at the actual admission boundary.
+This prevents a controller that changed after receipt publication from
+obtaining submission authority through local hashes alone.
 
 **Known native HOLD:** the previously observed initializer expected
 image-build source revision `620378bd...`, while current
@@ -260,3 +274,43 @@ window, 300-second legacy routes and protected build send-once owner
 remain unchanged. Work must first install and attest a separately
 reviewed exact source revision; no native SSM command, pipeline replay,
 Project write, Gateway start, or Fonts compilation occurred in Regular.
+
+
+## November 25 independent review corrections — source-only and still HOLD
+
+The corrections after review `2d5792396fea6464cc77b7c9ea37c84b5a403b6f`
+retain the original 14,400/14,700-second windows, the original Task C
+journal CommandId and the existing pipeline identity.
+
+1. **No unprotected observation sender.** The registry process does not call
+   `Host.submit_command` directly for Project inspection. The fixed
+   script is compared against the frozen original admitted operation and
+   dispatched by the root-control protected owner using a *different*
+   one-use inspection operation ID and an O_EXCL/fsynced Gateway attempt
+   record. Only a confirmed terminal inspection command may finish its
+   attempt; an uncertain acknowledgement cannot create another attempt
+   until separately reconciled. The owner contract requires the existing
+   protected root-control library and actual root-backed storage. This
+   does not manufacture new AWS permission or promise a dedicated SSM
+   document; Work must independently verify the selected principal,
+   inspection-owner installation and permissible IAM policy.
+2. **Anchored file custody.** The embedded standard-library-only observer
+   opens every ancestor from the real filesystem root with `O_DIRECTORY`,
+   `O_NOFOLLOW` and `dir_fd`, checks opened dev/inode, owner/mode and
+   disallows redirects. Every retained request, producer, pipeline and
+   attempt JSON file is opened through that Project descriptor and checked
+   before/after read. It refuses a changed Project identity at final
+   readback. Source tests deliberately exercise symlinked ancestry.
+3. **Non-authorizing mixed-state receipt.** The recovery publisher re-observes
+   the actual selected controller and other initializing Project while
+   holding the publication lock. A changed controller cannot be accepted
+   merely because local intent/lane bytes are unchanged. A later drift
+   cannot be excluded by a historical receipt: this draft intentionally
+   HOLDs new direct forwarding using an existing certbot-seed lane pending
+   a separately accepted current-controller admission mechanism. Nothing
+   may reinterpret the receipt as permission to submit another build.
+
+The native test has not been performed. Do not issue a new inspection or
+build SSM call, unmask the gateway, publish a native mixed-state receipt,
+rewrite the historical request, or resume the old pipeline without its
+separately reviewed and explicitly authorized procedure.
