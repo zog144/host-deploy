@@ -193,3 +193,70 @@ pipeline with the read-only helper; **do not replay request
 a second pipeline, change the queue, or claim native success without a
 separately approved acceptance check. The Fonts lane remains under its
 existing authorization boundary.
+
+
+## Nov 25 — split registry Gateway/compiler and unarchived mixed-state recovery
+
+The registry Gateway runs on a different Host than compiler instance
+`i-00ad300038a599044`. The active schema-5 first-Fonts lane selects the
+**existing certbot-seed Project** at
+`/home/certbot-build-owner/certbot-seed`; its owner is UID 24201.
+The pending `first-fonts-inherited-migration-v1.json` intent with
+`phase=installing` concerns the **different** initialization destination
+`/var/lib/zog/image-build/projects/gateway-first-fonts-runtime`.
+The approved schema-4 record and its archive are absent. These separate
+Project identities must NOT be conflated or recreated.
+
+PR #57 now makes the Gateway build an immutable read-only observer script
+and dispatch it through a distinct, 120-second SSM inspection on the
+**frozen compiler instance**, rather than trying to read a Gateway-local
+Project. It verifies the returned CommandId, instance ID, successful SSM
+result, original operation/pipeline/source binding, selected Project root,
+Project-owner UID 24201, evidence digest and terminal attempt records.
+The original build CommandId remains unchanged and never replays. The
+inspector accepts no caller-supplied status and cannot submit, resume or
+compile. An unexpected Host, command identity, ownership, source or
+incomplete attempt is HOLD. A historical terminal Gateway failure cannot
+be reclassified by this new observation path.
+
+The new **schema-4-archive-free** recovery is deliberately explicit:
+`fonts-lane-mixed-recovery-inspect` and
+`fonts-lane-mixed-recovery-publish` require the Workspace and **three
+independently approved, full SHA-256 values** for the original historical
+specification, corrected *initializing* specification, and actual active
+*selected certbot-seed* schema-5 specification. The old digest is pinned
+in source; the other two must come from independent reviewed evidence,
+not from simply echoing the active record or intent. The source verifies
+both Workspace/Host and active lane identity, original and corrected
+intent digests, schema-5 existing Project selection, root/controller,
+separate destination, absence of the original archive, initializer
+manifest and three source-tree hashes. Then it performs two read-only
+checks on the compiler: `host-install-fonts-project-init --verify` for
+the pending **other Project**, and
+`existing_project_runtime.inspect()` for the actual certbot-seed
+selection. This is not a migration copy, rematerialization or manual
+JSON recovery.
+
+Only after all checks pass can an explicitly requested publish create
+a protected 0600, create-only, nonauthorizing provenance receipt
+`first-fonts-mixed-state-recovery-v1.json`. The original active lane,
+pending intent and absent schema-4 archive remain **unchanged**. Normal
+Gateway admission requires this independently verified receipt when
+using the existing certbot-seed Project; a missing, mismatched or stale
+receipt is HOLD.
+
+**Known native HOLD:** the previously observed initializer expected
+image-build source revision `620378bd...`, while current
+`certbot-seed` had revision `bce80b25...`. Do not falsely accept
+`host-install-fonts-project-init --verify` under that mismatch.
+The new source allows a supported proof path *without* a schema-4
+record, but this live discrepancy must be independently resolved before
+publication or authorization of another build. Historical request
+`0f06e78980aeee4f0948a48198dc8276` and its prior Gateway
+terminal failure remain immutable.
+
+The 14,400-second producer, 14,700-second Project-current control
+window, 300-second legacy routes and protected build send-once owner
+remain unchanged. Work must first install and attest a separately
+reviewed exact source revision; no native SSM command, pipeline replay,
+Project write, Gateway start, or Fonts compilation occurred in Regular.
