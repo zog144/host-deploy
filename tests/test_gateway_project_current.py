@@ -798,3 +798,38 @@ def test_owned_completed_pipeline_without_attempt_completion_is_not_terminal(
                                    text=True, timeout=8)
     assert refused_again.returncode != 0
     assert "attempt evidence missing" in refused_again.stderr
+
+
+def test_selected_project_observer_rejects_unprotected_or_symlinked_evidence(
+        tmp_path, monkeypatch):
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    root, source, controller = project(tmp_path)
+    _slow_durable_producer(root, source)
+    spec, record = selected(root, controller)
+    request_id = "5" * 32
+    binding = project_current.binding(intent(request_id), record, spec, target())
+    monkeypatch.setattr(project_current, "_RUN",
+                        project_current._RUN.replace("timeout=14400", "timeout=0.75"))
+    run = subprocess.run(project_current.remote_script(binding), shell=True,
+                         capture_output=True, text=True, timeout=12)
+    assert run.returncode == 0, run.stderr
+    command = read_only_observation_script(
+        str(root), sys.executable, request_id, pipeline_id="d" * 32)
+    pipeline = root / "state/image-build/pipelines" / ("d" * 32) / "pipeline.json"
+    original = pipeline.read_bytes()
+    pipeline.chmod(0o666)
+    unprotected = subprocess.run(command, shell=True, capture_output=True,
+                                 text=True, timeout=8)
+    assert unprotected.returncode != 0
+    assert "unsafe selected Project evidence custody" in unprotected.stderr
+    pipeline.chmod(0o644)
+    pipeline.unlink()
+    other = tmp_path / "unselected-pipeline.json"
+    other.write_bytes(original)
+    pipeline.symlink_to(other)
+    redirected = subprocess.run(command, shell=True, capture_output=True,
+                                text=True, timeout=8)
+    assert redirected.returncode != 0
+    assert "unsafe selected Project evidence custody" in redirected.stderr
