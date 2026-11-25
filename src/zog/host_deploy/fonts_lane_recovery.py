@@ -176,55 +176,55 @@ def _facts(root, *, original_sha, corrected_sha, selected_sha):
     }
 
 
+def _native_report(facts, host_factory):
+    """Re-observe BOTH compiler Projects; never trust a cached native snapshot."""
+    from .runner import Host
+    from . import fonts_lane_migration as migration
+    host = (Host if host_factory is None else host_factory)(facts["host"])
+    initial = migration._initialization_verified(host)
+    if (initial["manifest_sha256"] !=
+            facts["intent"]["initialization_manifest_sha256"]
+            or initial["source_tree_sha256"] !=
+            facts["intent"]["initialized_source_tree_sha256"]):
+        raise RuntimeError("native initializer manifest/source trees differ from original intent")
+    execution = existing_project_runtime.inspect(host, facts["spec"])
+    if execution["status"] != "complete":
+        raise RuntimeError("selected certbot-seed controller is not installed")
+    return {
+        "schema": RECEIPT_SCHEMA,
+        "status": "verified-read-only",
+        "binding": facts["binding"],
+        "selected_project_root": EXISTING_EXECUTION_PROJECT,
+        "initialized_project_root": str(lanes.FIRST_FONTS_MIGRATED_ROOT),
+        "original_specification_sha256": facts["original_sha"],
+        "corrected_specification_sha256": facts["corrected_sha"],
+        "selected_specification_sha256": facts["selected_sha"],
+        "selected_lane_record_sha256": facts["record_sha"],
+        "pending_intent_sha256": facts["intent_sha"],
+        "initialization_manifest_sha256": initial["manifest_sha256"],
+        "initialized_source_tree_sha256": initial["source_tree_sha256"],
+        "selected_controller_sha256": execution["controller_sha256"],
+        "selected_source_revision_observed": execution["source_revision"],
+        "compiler_effective_uid_observed": execution["effective_user_id"],
+        "execution_authorized": False,
+        "mutation": False,
+    }
+
+
 def inspect(directory, *, expected_original_specification_sha256,
             expected_corrected_specification_sha256,
             expected_selected_specification_sha256, host_factory=None):
-    """Explicit read-only native reconciliation; no lane mutation or submit.
+    """Read-only native evidence for both distinct compiler Projects.
 
-    Caller supplies independently reviewed exact three digests, never SQS
-    fields. Missing original schema-4 bytes are NOT guessed. The archived
-    original digest is compared to its pre-reviewed constant, and the
-    corrected intent digest is compared to the separately supplied approval.
-    Two separate Projects must each pass their own read-only native proof.
+    Source-only inspection never grants a new build. Native proof is repeated
+    at the publication boundary and immutable receipt remains nonauthorizing.
     """
-    from .runner import Host
-    from . import fonts_lane_migration as migration
     with locked(directory) as root:
         facts = _facts(root,
                        original_sha=expected_original_specification_sha256,
                        corrected_sha=expected_corrected_specification_sha256,
                        selected_sha=expected_selected_specification_sha256)
-        host = (Host if host_factory is None else host_factory)(facts["host"])
-        # The retained initializer is not a claim about the already selected
-        # certbot-seed Project: verify BOTH independently.
-        initial = migration._initialization_verified(host)
-        if (initial["manifest_sha256"] !=
-                facts["intent"]["initialization_manifest_sha256"]
-                or initial["source_tree_sha256"] !=
-                facts["intent"]["initialized_source_tree_sha256"]):
-            raise RuntimeError("native initializer manifest/source trees differ from original intent")
-        execution = existing_project_runtime.inspect(host, facts["spec"])
-        if execution["status"] != "complete":
-            raise RuntimeError("selected certbot-seed controller is not installed")
-        return {
-            "schema": RECEIPT_SCHEMA,
-            "status": "verified-read-only",
-            "binding": facts["binding"],
-            "selected_project_root": EXISTING_EXECUTION_PROJECT,
-            "initialized_project_root": str(lanes.FIRST_FONTS_MIGRATED_ROOT),
-            "original_specification_sha256": facts["original_sha"],
-            "corrected_specification_sha256": facts["corrected_sha"],
-            "selected_specification_sha256": facts["selected_sha"],
-            "selected_lane_record_sha256": facts["record_sha"],
-            "pending_intent_sha256": facts["intent_sha"],
-            "initialization_manifest_sha256": initial["manifest_sha256"],
-            "initialized_source_tree_sha256": initial["source_tree_sha256"],
-            "selected_controller_sha256": execution["controller_sha256"],
-            "selected_source_revision_observed": execution["source_revision"],
-            "compiler_effective_uid_observed": execution["effective_user_id"],
-            "execution_authorized": False,
-            "mutation": False,
-        }
+        return _native_report(facts, host_factory)
 
 
 def publish(directory, *, expected_original_specification_sha256,
@@ -249,6 +249,12 @@ def publish(directory, *, expected_original_specification_sha256,
         if (facts["record_sha"] != report["selected_lane_record_sha256"]
                 or facts["intent_sha"] != report["pending_intent_sha256"]):
             raise RuntimeError("mixed-state evidence changed between native readback and publication")
+        # The controller can drift while the local lane and intent remain
+        # identical. Reinspect the actual selected Host while holding the
+        # publication lock. An old receipt is NOT an admission-time proof.
+        if _native_report(facts, host_factory) != report:
+            raise RuntimeError(
+                "compiler controller or initialization changed before receipt publication")
         path = root / RECEIPT
         raw = _canonical(report) + b"\n"
         if path.exists() or path.is_symlink():
