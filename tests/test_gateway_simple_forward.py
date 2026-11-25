@@ -4,14 +4,17 @@ Mock only AWS and the actual installed workspace/SSM remote executor; the
 authorization/parser, SQS dedup, durable ledger and recovery are real.
 """
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
 from zog.host_deploy import image_build_lanes
 from zog.host_deploy.gateway import (
     github_dispatch, simple_forward, image_build_dispatch, fonts_owner_sender,
-    image_build_execution,
+    fonts_inspection_owner, image_build_execution,
 )
 from zog.host_deploy.gateway.consumer import GatewayConsumer
 from zog.host_deploy.gateway.ledger import (
@@ -72,6 +75,8 @@ def direct_binding(value):
         "schema": 4, "direct_forward": True,
         "request_id": value["request_id"],
         "workspace_id": WORKSPACE, "lane": "gateway-first-fonts-runtime",
+        "project_root": "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime",
+        "python_executable": sys.executable,
         "target": TARGET, "source": SOURCE,
         "remote_request": {
             "schema": "image-build-remote-operation-v1",
@@ -93,7 +98,12 @@ def forwarding(tmp_path, monkeypatch):
     value = approved()
     admit(root, value)
     binding = direct_binding(value)
-    counters = {"send": [], "inspect": [], "new_host": []}
+    # The synthetic compiler Project is only inspected through FakeHost SSM.
+    binding["project_root"] = str(tmp_path / "remote-compiler-project")
+    monkeypatch.setattr(simple_forward, "FIRST_FONTS_COMPILER_PROJECT_UID",
+                        os.geteuid())
+    counters = {"send": [], "inspect": [], "new_host": [],
+                "read_only_probes": [], "probe_results": {}}
     def prepared(gateway, request_id, *, direct_forward):
         assert gateway == root and request_id == value["request_id"]
         assert direct_forward is True
@@ -114,17 +124,84 @@ def forwarding(tmp_path, monkeypatch):
                         lambda root, operation_id, **kwargs:
                         kwargs["host"].submit_command(
                             kwargs["script"], seconds=kwargs["seconds"]))
+    # The transport fixture's old incomplete binding is intentionally not a
+    # Project-current admission fixture. Stub only that upstream selection;
+    # exercise the real durable inspection-owner journal and recovery path.
+    monkeypatch.setattr(
+        fonts_inspection_owner, "_validation",
+        lambda root, request_id, binding, target, original_command_id,
+               pipeline_id, script, host: {
+            "schema": fonts_inspection_owner.SCHEMA,
+            "request_id": request_id, "original_command_id": original_command_id,
+            "target": target, "project_root": binding["project_root"],
+            "python_executable": binding["python_executable"],
+            "pipeline_id": pipeline_id,
+            "frozen_binding_sha256": "d" * 64,
+            "script_sha256": __import__("hashlib").sha256(
+                script.encode("utf-8")).hexdigest(),
+            "timeout_seconds": 120,
+        })
+    class InspectionJournal:
+        intents = {}
+        commands = {}
+
+        def inspect(self, operation_id):
+            return (self.intents.get(operation_id),
+                    self.commands.get(operation_id), None)
+
+        def submit_once(self, *, operation_id, request_sha256, script,
+                        target, seconds, sender):
+            assert operation_id not in self.intents
+            self.intents[operation_id] = {
+                "schema": "zog-task-c-trusted-host-local-intent-v1",
+                "operation_id": operation_id, "request_sha256": request_sha256,
+                "script_sha256": __import__("hashlib").sha256(
+                    script.encode("utf-8")).hexdigest(), "target": target,
+                "document": "AWS-RunShellScript",
+                "execution_timeout_seconds": seconds}
+            command_id = sender.submit_command(script, seconds=seconds)
+            self.commands[operation_id] = {
+                "schema": "zog-task-c-trusted-host-command-v1",
+                "operation_id": operation_id, "request_sha256": request_sha256,
+                "command_id": command_id}
+            return command_id
+
+        def close(self):
+            pass
+    monkeypatch.setattr(fonts_inspection_owner, "_owner_factory",
+                        lambda factory: InspectionJournal)
     class Host:
         def __init__(self, config):
             assert config == TARGET
             counters["new_host"].append(config)
         def submit_command(self, script, seconds):
+            if seconds == 120:
+                # Simulated read-only SSM execution on a different Host.
+                assert script.startswith(sys.executable + " -I -B -c ")
+                assert "gateway-requests" in script
+                assert "subprocess" not in script
+                assert "pipeline.resume" not in script
+                assert "send_command" not in script
+                observed = subprocess.run(script, shell=True,
+                                          capture_output=True, text=True, timeout=10)
+                identity = "inspection-" + str(
+                    len(counters["read_only_probes"]) + 1)
+                counters["read_only_probes"].append((identity, script))
+                counters["probe_results"][identity] = {
+                    "CommandId": identity, "InstanceId": TARGET["instance_id"],
+                    "Status": "Success" if observed.returncode == 0 else "Failed",
+                    "StandardOutputContent": observed.stdout,
+                    "StandardErrorContent": observed.stderr,
+                }
+                return identity
             assert script == "fixed-reviewed-remote-script"
-            assert seconds == simple_forward.CONTROL_TIMEOUT_SECONDS
+            assert seconds == simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS
             counters["send"].append(script)
             return "command-123"
         def inspect_command(self, command_id):
             counters["inspect"].append(command_id)
+            if command_id in counters["probe_results"]:
+                return counters["probe_results"][command_id]
             return {"CommandId": command_id,
                     "InstanceId": TARGET["instance_id"],
                     "Status": "Success",
@@ -132,7 +209,8 @@ def forwarding(tmp_path, monkeypatch):
                         "schema": image_build_execution.RECEIPT_SCHEMA,
                         "request_id": REQUEST_ID,
                         "remote_request_sha256": "0" * 64,
-                        "result": {"status": "pending",
+                        "result": {"status": "pending", "uncertainty": False,
+                                   "source_revision": SOURCE["revision"],
                                    "pipeline_id": "c" * 32},
                     })}
     return root, value, binding, Host, counters
@@ -151,15 +229,16 @@ def test_authorized_issue_fifo_to_configured_ssm_and_recovered_result(forwarding
     # Simulate a restart/lost result, preserving the original CommandId.
     reconcile_dispatch(root, REQUEST_ID)
     finished = simple_forward.advance(root, REQUEST_ID, host_factory=Host)
-    assert finished["phase"] == "completed"
+    assert finished["phase"] == "running"
     assert finished["command_id"] == "command-123"
     assert counters["inspect"] == ["command-123"]
     assert len(counters["send"]) == 1
     saved = json.loads((root / "requests" / REQUEST_ID /
-                        "remote-result.json").read_text())
+                        "dispatch-observation.json").read_text())
     assert saved["command_id"] == "command-123"
-    assert saved["result"]["result"]["pipeline_id"] == "c" * 32
-    assert load_request(root, REQUEST_ID)["states"]["completion"] == "completed"
+    assert saved["observation"]["producer"]["pipeline_id"] == "c" * 32
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
 
 
 def test_acknowledgement_loss_is_never_automatically_resent(forwarding, monkeypatch):
@@ -297,7 +376,7 @@ def test_real_sqs_delivery_is_acked_then_forwarded_once(forwarding, monkeypatch)
     assert load_dispatch(root, value["request_id"])["command_id"] == "command-123"
 
     service.poll_once(wait_seconds=0)
-    assert load_request(root, value["request_id"])["states"]["completion"] == "completed"
+    assert load_request(root, value["request_id"])["states"]["completion"] == "running"
     assert counters["inspect"] == ["command-123"]
     assert len(counters["send"]) == 1
 
@@ -387,6 +466,9 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
         },
     }
     host = {**TARGET, "workspace_id": WORKSPACE}
+    from zog.host_deploy.gateway import project_current
+    monkeypatch.setattr(project_current, "verify_approved_lane",
+                        lambda *_: {"execution_authorized": False})
     monkeypatch.setattr(image_build_dispatch, "owned_workspace",
                         lambda directory, workspace: "selected-workspace")
     monkeypatch.setattr(image_build_dispatch, "locked_workspace",
@@ -431,7 +513,7 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
     result = simple_forward.advance(
         root, value["request_id"], host_factory=Host, owner_factory=OwnerJournal)
     assert result["phase"] == "submitted"
-    assert sent == [(script, simple_forward.CONTROL_TIMEOUT_SECONDS)]
+    assert sent == [(script, simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS)]
     assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"
 
 
@@ -456,3 +538,304 @@ def test_issue_body_has_no_compiler_selection_or_snapshot():
     assert set(selected["parameters"]) == {"lane", "task"}
     assert "selection" not in json.dumps(event)
     assert "recipe_snapshot" not in json.dumps(event)
+
+
+def test_project_current_ssm_timeout_is_recovery_blocked_not_pipeline_terminal(
+        forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    class LongSSM(Host):
+        def inspect_command(self, command_id):
+            counters["inspect"].append(command_id)
+            return {"CommandId": command_id,
+                    "InstanceId": TARGET["instance_id"],
+                    "Status": "TimedOut"}
+    blocked = simple_forward.advance(root, REQUEST_ID, host_factory=LongSSM)
+    assert blocked == {
+        "request_id": REQUEST_ID, "phase": "recovery_blocked",
+        "command_id": "command-123", "ssm_status": "TimedOut",
+        "observation_required": True,
+    }
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "recovery_blocked"
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+    assert simple_forward.advance(root, REQUEST_ID, host_factory=LongSSM)["phase"] == "recovery_blocked"
+    assert len(counters["send"]) == 1
+
+
+def _owned_project_files(binding):
+    """Actual local Project evidence; NOT a supplied Gateway status object."""
+    project = Path(binding["project_root"])
+    operation_id = binding["request_id"]
+    request = binding["remote_request"]
+    request_dir = project / "gateway-requests" / operation_id
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "request.json").write_text(json.dumps(request))
+    operation_dir = project / "state/image-build/remote-operations" / operation_id
+    operation_dir.mkdir(parents=True, exist_ok=True)
+    (operation_dir / "request.json").write_text(json.dumps(request))
+    (operation_dir / "binding.json").write_text(
+        json.dumps({"pipeline_id": "c" * 32}))
+    pipeline_path = (project / "state/image-build/pipelines" /
+                     ("c" * 32) / "pipeline.json")
+    pipeline_path.parent.mkdir(parents=True, exist_ok=True)
+    pipeline = {
+        "schema": 1,
+        "pipeline_id": "c" * 32,
+        "status": "running",
+        "operation": "image",
+        "arguments": {"targets": [
+            "libpng-final", "freetype-final", "fontconfig-final",
+        ]},
+        "attempts": {
+            "fontconfig-final": "image-63dcd6a137f040bc9224dce166a916ed",
+        },
+        "owner": {
+            "contract": "image-build-remote-operation-v1",
+            "operation_id": operation_id,
+            "source_repository": "zog144/image-build",
+            "source_revision": SOURCE["revision"],
+        },
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    return project, operation_dir, pipeline_path
+
+
+def _complete_owned_pipeline(project, pipeline_path):
+    pipeline = json.loads(pipeline_path.read_text())
+    generation = "a" * 64
+    for attempt_id in pipeline["attempts"].values():
+        path = (project / "state/image-build/attempts" /
+                attempt_id / "status.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "status": "complete", "generation": generation,
+        }))
+    pipeline["generation"] = generation
+    pipeline["status"] = "complete"
+    pipeline_path.write_text(json.dumps(pipeline))
+
+
+def test_project_current_observation_is_same_pipeline_and_never_resubmits(forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    assert simple_forward.advance(root, REQUEST_ID, host_factory=Host)["phase"] == "running"
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
+    project, operation_dir, pipeline_path = _owned_project_files(binding)
+    # A hostile caller can no longer inject terminal status as a JSON dict.
+    with pytest.raises(TypeError):
+        simple_forward.reconcile_project_observation(root, REQUEST_ID, {
+            "terminal_confirmed": True, "producer_status": "completed",
+        })
+    assert simple_forward.reconcile_project_observation(
+        root, REQUEST_ID, host_factory=Host)["phase"] == "running"
+    assert len(counters["send"]) == 1
+
+    for mutation in ("foreign-owner", "changed-source", "foreign-pipeline"):
+        path = (pipeline_path if mutation != "foreign-pipeline"
+                else operation_dir / "binding.json")
+        original = path.read_bytes()
+        altered = json.loads(original)
+        if mutation == "foreign-owner":
+            altered["owner"]["operation_id"] = "e" * 32
+        elif mutation == "changed-source":
+            altered["owner"]["source_revision"] = "f" * 40
+        else:
+            altered["pipeline_id"] = "f" * 32
+        path.write_text(json.dumps(altered))
+        with pytest.raises(simple_forward.ForwardingDenied):
+            simple_forward.reconcile_project_observation(root, REQUEST_ID, host_factory=Host)
+        path.write_bytes(original)
+    # Forged terminal producer output cannot replace the *running*
+    # pipeline evidence, even when the original request/result IDs match.
+    (operation_dir / "result.json").write_text(json.dumps({
+        "schema": "image-build-remote-result-v1",
+        "operation_id": REQUEST_ID, "operation_type": "pipeline.submit",
+        "source_repository": "zog144/image-build",
+        "source_revision": SOURCE["revision"],
+        "pipeline_id": "c" * 32,
+        "status": "completed", "terminal_outcome": "success",
+        "uncertainty": False,
+    }))
+    assert simple_forward.reconcile_project_observation(
+        root, REQUEST_ID, host_factory=Host)["phase"] == "running"
+    (operation_dir / "result.json").unlink()
+
+    # Only actual completion in image-build's pipeline and attempt records
+    # can create the terminal Gateway receipt; original SSM output and
+    # original submit result are not modified or replayed.
+    _complete_owned_pipeline(project, pipeline_path)
+    complete = simple_forward.reconcile_project_observation(root, REQUEST_ID, host_factory=Host)
+    assert complete["phase"] == "completed"
+    assert len(counters["send"]) == 1
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "completed"
+    receipt = json.loads((root / "requests" / REQUEST_ID /
+                          "remote-result.json").read_text())
+    assert receipt["result"]["pipeline_status"] == "complete"
+    assert receipt["result"]["evidence"]["attempt_statuses"]
+    assert receipt["result"]["terminal_confirmed"] is True
+
+
+def test_legacy_schema_timeout_still_uses_original_control_window(forwarding):
+    # The schema-4 tests prove 14,700 seconds is selected. Legacy policy is
+    # not widened merely because the first Fonts Project can run longer.
+    assert simple_forward.CONTROL_TIMEOUT_SECONDS == 300
+    assert simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS == 14700
+
+
+def test_ssm_outer_timeout_then_read_only_reconcile_recovers_same_pipeline_without_send(
+        forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    class TimedOut(Host):
+        def inspect_command(self, command_id):
+            counters["inspect"].append(command_id)
+            return {"CommandId": command_id, "InstanceId": TARGET["instance_id"],
+                    "Status": "TimedOut"}
+    assert simple_forward.advance(root, REQUEST_ID, host_factory=TimedOut)[
+        "phase"] == "recovery_blocked"
+    from zog.host_deploy.gateway.ledger import reconcile_dispatch
+    reconcile_dispatch(root, REQUEST_ID)
+    _owned_project_files(binding)
+    resumed = simple_forward.reconcile_project_observation(
+        root, REQUEST_ID, host_factory=Host)
+    assert resumed["phase"] == "running"
+    assert resumed["pipeline_id"] == "c" * 32
+    assert load_dispatch(root, REQUEST_ID)["command_id"] == "command-123"
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+    assert len(counters["send"]) == 1
+    # Gateway's next poll must prefer the newer trusted Project result
+    # over the original SSM's permanently TimedOut control-window status.
+    again = simple_forward.advance(root, REQUEST_ID, host_factory=TimedOut)
+    assert again["phase"] == "running"
+    assert again["pipeline_id"] == "c" * 32
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
+    assert len(counters["send"]) == 1
+
+
+@pytest.mark.parametrize("failure", [
+    "wrong-command", "wrong-compiler", "forged-terminal", "tampered-digest",
+    "wrong-project-owner",
+])
+def test_split_host_rejects_forged_ssm_and_observation(forwarding, failure):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _owned_project_files(binding)
+    class Altered(Host):
+        def inspect_command(self, command_id):
+            result = dict(super().inspect_command(command_id))
+            if not command_id.startswith("inspection-"):
+                return result
+            if failure == "wrong-command":
+                result["CommandId"] = "other-command"
+            elif failure == "wrong-compiler":
+                result["InstanceId"] = "i-aaaaaaaaaaaaaaaaa"
+            else:
+                observation = json.loads(result["StandardOutputContent"])
+                if failure == "forged-terminal":
+                    observation.update(
+                        terminal_confirmed=True, uncertainty=False,
+                        producer_status="completed", terminal_outcome="success")
+                elif failure == "tampered-digest":
+                    observation["evidence"]["pipeline_sha256"] = "0" * 64
+                else:
+                    observation["project_owner_uid"] += 123
+                result["StandardOutputContent"] = json.dumps(observation)
+            return result
+    with pytest.raises(simple_forward.ForwardingDenied):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Altered)
+    assert len(counters["send"]) == 1
+    assert load_dispatch(root, REQUEST_ID)["command_id"] == "command-123"
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+
+
+def test_split_host_incomplete_attempt_and_historical_failure_never_replay(
+        forwarding):
+    from zog.host_deploy.gateway.ledger import mark_completion
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _, _, pipeline_path = _owned_project_files(binding)
+    state = json.loads(pipeline_path.read_text())
+    state.update(status="complete", generation="a" * 64)
+    pipeline_path.write_text(json.dumps(state))
+    with pytest.raises(simple_forward.ForwardingDenied):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert len(counters["read_only_probes"]) == 1
+    assert len(counters["send"]) == 1
+    mark_completion(root, REQUEST_ID, "failed")
+    with pytest.raises(simple_forward.ForwardingDenied, match="historical"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert len(counters["read_only_probes"]) == 1
+    assert len(counters["send"]) == 1
+
+
+
+def test_split_host_observation_denies_missing_protected_owner(forwarding, monkeypatch):
+    from zog.host_deploy.gateway import fonts_inspection_owner as owner
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _owned_project_files(binding)
+    def unavailable(_):
+        raise owner.InspectionOwnerUnavailable("no installed root owner")
+    monkeypatch.setattr(owner, "_owner_factory", unavailable)
+    with pytest.raises(simple_forward.ForwardingDenied, match="uncertain"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert counters["read_only_probes"] == []
+    assert len(counters["send"]) == 1
+    assert not list((root / "requests" / REQUEST_ID).glob("project-inspection-*.intent.json"))
+
+
+def test_split_host_inspection_lost_ack_is_never_resent(forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _owned_project_files(binding)
+    class Lost(Host):
+        def submit_command(self, script, seconds):
+            if seconds == 120:
+                counters["read_only_probes"].append(("lost-ack", script))
+                raise TimeoutError("inspection SendCommand acknowledgement lost")
+            return super().submit_command(script, seconds)
+    with pytest.raises(simple_forward.ForwardingDenied, match="uncertain"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Lost)
+    assert len(counters["read_only_probes"]) == 1
+    # The local and root-backed intents were retained before the sender
+    # failed. A second request MUST NOT create a fresh inspection SendCommand.
+    with pytest.raises(simple_forward.ForwardingDenied, match="uncertain"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert len(counters["read_only_probes"]) == 1
+    assert len(counters["send"]) == 1
+    attempts = list((root / "requests" / REQUEST_ID).glob("project-inspection-*.intent.json"))
+    assert len(attempts) == 1
+    intent = json.loads(attempts[0].read_text())
+    assert intent["original_command_id"] == "command-123"
+    assert intent["target"] == TARGET
+    assert intent["project_root"] == binding["project_root"]
+    assert len(intent["script_sha256"]) == 64
+
+
+def test_frozen_project_inspection_has_no_direct_sender_call():
+    import inspect
+    from zog.host_deploy.gateway import fonts_inspection_owner
+    code = inspect.getsource(simple_forward.reconcile_project_observation)
+    assert "host.submit_command(" not in code
+    assert "inspection_owner.submit_or_recover(" in code
+    code = inspect.getsource(fonts_inspection_owner.submit_or_recover)
+    assert "journal.submit_once(" in code
+    assert "sender=host" in code

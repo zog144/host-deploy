@@ -41,10 +41,10 @@ def test_real_root_owner_journal_accepts_only_once_for_original_request(tmp_path
     returned = fonts_owner_sender.submit_once(
         gateway, request["request_id"], binding=binding,
         configuration=target(), host=sender, script=selected_script,
-        seconds=300, journal_factory=factory,
+        seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS, journal_factory=factory,
     )
     assert returned == "root-owner-command-123"
-    assert calls == [(selected_script, 300)]
+    assert calls == [(selected_script, fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS)]
     journal = factory()
     original, result, cancel = journal.inspect(request["request_id"])
     assert original["schema"] == SCHEMA
@@ -61,6 +61,6 @@ def test_real_root_owner_journal_accepts_only_once_for_original_request(tmp_path
         fonts_owner_sender.submit_once(
             gateway, request["request_id"], binding=binding,
             configuration=target(), host=sender, script=selected_script,
-            seconds=300, journal_factory=factory,
+            seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS, journal_factory=factory,
         )
     assert len(calls) == 1

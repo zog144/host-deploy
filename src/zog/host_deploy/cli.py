@@ -99,7 +99,9 @@ def main():
     # Reviewed first-Fonts path: no caller-supplied spec or identity overrides.
     for name in ('fonts-lane-profile', 'fonts-lane-verify',
                  'fonts-lane-prepare', 'fonts-lane-activate', 'fonts-lane-migration-plan',
-                 'fonts-lane-migration-stage', 'fonts-lane-migration-activate'):
+                 'fonts-lane-migration-stage', 'fonts-lane-migration-activate',
+                 'fonts-lane-mixed-recovery-inspect',
+                 'fonts-lane-mixed-recovery-publish'):
         command = commands.add_parser(name)
         if name != 'fonts-lane-profile':
             command.add_argument('--workspace', required=True)
@@ -112,6 +114,10 @@ def main():
             command.add_argument('--expected-corrected-specification-sha256', required=True)
         if name == 'fonts-lane-migration-activate':
             command.add_argument('--expected-corrected-specification-sha256', required=True)
+        if name.startswith('fonts-lane-mixed-recovery-'):
+            command.add_argument('--expected-original-specification-sha256', required=True)
+            command.add_argument('--expected-corrected-specification-sha256', required=True)
+            command.add_argument('--expected-selected-specification-sha256', required=True)
     for name in ['artifact-init','artifact-publish','artifact-fetch','artifact-prune']:
         command=commands.add_parser(name)
         command.add_argument('--store',required=True)
@@ -143,6 +149,16 @@ def main():
             result = fonts_lane_migration.activate(
                 arguments.workspace,
                 expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256)
+        elif arguments.command.startswith('fonts-lane-mixed-recovery-'):
+            from . import fonts_lane_recovery
+            operation = (fonts_lane_recovery.inspect
+                         if arguments.command.endswith('-inspect')
+                         else fonts_lane_recovery.publish)
+            result = operation(
+                arguments.workspace,
+                expected_original_specification_sha256=arguments.expected_original_specification_sha256,
+                expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256,
+                expected_selected_specification_sha256=arguments.expected_selected_specification_sha256)
         else:
             from . import image_build_lanes
             result = image_build_lanes.activate(

@@ -153,13 +153,13 @@ def test_protected_owner_rejects_forged_request_or_different_target(prepared):
     with pytest.raises((RuntimeError, ValueError)):
         fonts_owner_sender.submit_once(
             root, request_id, binding=wrong, configuration=target(),
-            host=Host(target()), script=script, seconds=300,
+            host=Host(target()), script=script, seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
             journal_factory=OwnerJournal)
     different = dict(target(), instance_id="i-abcdef01234567890")
     with pytest.raises(fonts_owner_sender.ProtectedOwnerUnavailable):
         fonts_owner_sender.submit_once(
             root, request_id, binding=binding, configuration=different,
-            host=Host(target()), script=script, seconds=300,
+            host=Host(target()), script=script, seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
             journal_factory=OwnerJournal)
     assert OwnerJournal.intents == {}
     assert calls == []
@@ -191,3 +191,43 @@ def test_owner_source_contract_has_no_second_s3_approval_or_shell_relay():
     assert "S3" not in source
     assert "compiler-selection.json" not in source
     assert "Host.submit_command(" not in inspect.getsource(simple_forward.advance)
+
+
+
+def test_protected_inspection_owner_rejects_forged_script_target_and_original_id(
+        prepared):
+    from zog.host_deploy.gateway import fonts_inspection_owner
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    from zog.host_deploy.gateway.ledger import (
+        mark_dispatch_submitting, mark_dispatch_submitted,
+    )
+    root, request_id, binding, Host, calls = prepared
+    mark_dispatch_submitting(root, request_id)
+    mark_dispatch_submitted(root, request_id, "original-build-command")
+    script = read_only_observation_script(
+        binding["project_root"], binding["python_executable"], request_id)
+    host = Host(target())
+    args = dict(
+        binding=binding, target=binding["target"],
+        original_command_id="original-build-command",
+        pipeline_id=None, script=script, host=host)
+    approved = fonts_inspection_owner._validation(root, request_id, **args)
+    assert approved["target"] == binding["target"]
+    assert approved["project_root"] == binding["project_root"]
+    assert approved["original_command_id"] == "original-build-command"
+    assert approved["timeout_seconds"] == 120
+    import hashlib
+    assert approved["script_sha256"] == hashlib.sha256(
+        script.encode("utf-8")).hexdigest()
+    for altered in (
+        dict(args, script=script + " ; echo unreviewed"),
+        dict(args, target={**binding["target"], "instance_id": "i-aaaaaaaaaaaaaaaaa"}),
+        dict(args, original_command_id="forged-command"),
+        dict(args, binding={**binding, "project_root": "/tmp/foreign"}),
+    ):
+        with pytest.raises((RuntimeError, ValueError)):
+            fonts_inspection_owner._validation(
+                root, request_id, **altered)
+    assert calls == []

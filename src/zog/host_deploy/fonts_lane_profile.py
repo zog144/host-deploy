@@ -13,8 +13,6 @@ import time
 
 from . import image_build_lanes as lanes
 from . import fonts_lane_runtime
-from .gateway import fonts_lane_review
-from .gateway import graphics_catalogue_owner as fonts
 from .provision import configuration
 from .workspace import locked, save
 
@@ -29,6 +27,18 @@ FACTS_FILE = "first-fonts-verified-facts-v2.json"
 INTENT_FILE = "first-fonts-activation-intent-v1.json"
 FACTS_MAX_AGE_SECONDS = 3600
 COMPANION_REVISION = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
+
+def __getattr__(name):
+    # Historic API access stays available, but the registry's read-only
+    # migration verification does not need to import graphics cryptography.
+    if name == "fonts":
+        from .gateway import graphics_catalogue_owner
+        return graphics_catalogue_owner
+    if name == "fonts_lane_review":
+        from .gateway import fonts_lane_review
+        return fonts_lane_review
+    raise AttributeError(name)
+
 
 
 def _canonical(value):
@@ -69,6 +79,7 @@ def _binding(workspace, host):
 
 def profile():
     """Source pins and reviewed retained-lane identity, not a new lane spec."""
+    from .gateway import graphics_catalogue_owner as fonts
     if (fonts.SOURCE != lanes.FIRST_FONTS_PRODUCER_REVISION
             or lanes.expected_build_record_revision(fonts.SOURCE) != COMPANION_REVISION):
         raise RuntimeError("first Fonts producer/companion source review differs")
@@ -110,6 +121,7 @@ def _retained(root):
 
 def _approved(root, *, records=None):
     """Compare the *actual retained* specification, never produce a substitute."""
+    from .gateway import fonts_lane_review
     reviewed = profile()
     records = _retained(root) if records is None else records
     selected = [record for record in records if record["lane"] == LANE]
