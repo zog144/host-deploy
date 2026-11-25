@@ -90,6 +90,29 @@ invoke `fonts_lane_recovery.publish()` or bypass
 `first-fonts-mixed-state-recovery-v1.json` likewise never becomes
 new admission authority.
 
+## Candidate fixed native pair inventory (not yet callable on AWS)
+
+`fonts_lane_supersession_native.native_read_only_script(registry_report)`
+generates a self-contained standard-library-only `python3 -I -B -c`
+diagnostic for the **two separate Project roots**. It has **no Host or
+SSM sender**. The generated command observes the current lane-specific
+controller file and the historical destination's
+`controller-inherited-v1.json`, original manifest raw digest, each
+Project's inode/owner/mode and independently selected source Git HEAD.
+Each path is traversed without symlink following from the filesystem root,
+files have bounded no-follow descriptor reads, and Git `rev-parse` uses
+`GIT_OPTIONAL_LOCKS=0`. A controller-present historical destination is
+a diagnostic result, not a successful initializer verification.
+
+The source tests execute the command against two disposable Git Projects,
+check both controller digests and manifest evidence, verify zero file
+changes, and reject a symlinked root. The fixed script SHA-256 can be
+computed by `candidate_script_sha256(report)` for **future** protected
+root-owner review. **Do not run this candidate through generic Gateway
+SSM, a shared root-control permission, or an unapproved inspector.**
+Without authenticated native invocation/result-binding and the original
+historical SSM journals, the result must remain `supersession-unproven`.
+
 ## Outstanding phase 2 — native independent proof (HOLD)
 
 A separate source-reviewed read-only compiler inspection is needed for
