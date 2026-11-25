@@ -121,6 +121,9 @@ def test_real_pipeline_resume_completes_same_owned_operation_with_pending_origin
         operation_id / "result.json"
     )
     original_result = original_path.read_bytes()
+    pipeline_directory = project / "state/image-build/pipelines"
+    pipelines_before_resume = {item.name for item in pipeline_directory.iterdir()}
+    assert pipeline_id in pipelines_before_resume
     assert json.loads(original_result)["status"] == "pending"
     pending = observe_selected_project(str(project), operation_id,
                                        pipeline_id=pipeline_id)
@@ -145,6 +148,8 @@ def test_real_pipeline_resume_completes_same_owned_operation_with_pending_origin
     assert len(finished["evidence"]["attempt_statuses"]) == len(
         finished["attempt_ids"])
     assert original_path.read_bytes() == original_result
+    assert {item.name for item in pipeline_directory.iterdir()} == (
+        pipelines_before_resume), "resume must not allocate another pipeline"
     assert finished["request_id"] == pending["request_id"] == operation_id
     assert finished["pipeline_id"] == pending["pipeline_id"] == pipeline_id
     assert not (project / "state/image-build/remote-operations" /
