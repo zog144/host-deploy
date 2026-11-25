@@ -771,3 +771,65 @@ def test_split_host_incomplete_attempt_and_historical_failure_never_replay(
             root, REQUEST_ID, host_factory=Host)
     assert len(counters["read_only_probes"]) == 1
     assert len(counters["send"]) == 1
+
+
+
+def test_split_host_observation_denies_missing_protected_owner(forwarding, monkeypatch):
+    from zog.host_deploy.gateway import fonts_inspection_owner as owner
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _owned_project_files(binding)
+    def unavailable(_):
+        raise owner.InspectionOwnerUnavailable("no installed root owner")
+    monkeypatch.setattr(owner, "_owner_factory", unavailable)
+    with pytest.raises(simple_forward.ForwardingDenied, match="uncertain"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert counters["read_only_probes"] == []
+    assert len(counters["send"]) == 1
+    assert not list((root / "requests" / REQUEST_ID).glob("project-inspection-*.intent.json"))
+
+
+def test_split_host_inspection_lost_ack_is_never_resent(forwarding):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _owned_project_files(binding)
+    class Lost(Host):
+        def submit_command(self, script, seconds):
+            if seconds == 120:
+                counters["read_only_probes"].append(("lost-ack", script))
+                raise TimeoutError("inspection SendCommand acknowledgement lost")
+            return super().submit_command(script, seconds)
+    with pytest.raises(simple_forward.ForwardingDenied, match="uncertain"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Lost)
+    assert len(counters["read_only_probes"]) == 1
+    # The local and root-backed intents were retained before the sender
+    # failed. A second request MUST NOT create a fresh inspection SendCommand.
+    with pytest.raises(simple_forward.ForwardingDenied, match="uncertain"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert len(counters["read_only_probes"]) == 1
+    assert len(counters["send"]) == 1
+    attempts = list((root / "requests" / REQUEST_ID).glob("project-inspection-*.intent.json"))
+    assert len(attempts) == 1
+    intent = json.loads(attempts[0].read_text())
+    assert intent["original_command_id"] == "command-123"
+    assert intent["target"] == TARGET
+    assert intent["project_root"] == binding["project_root"]
+    assert len(intent["script_sha256"]) == 64
+
+
+def test_frozen_project_inspection_has_no_direct_sender_call():
+    import inspect
+    from zog.host_deploy.gateway import fonts_inspection_owner
+    code = inspect.getsource(simple_forward.reconcile_project_observation)
+    assert "host.submit_command(" not in code
+    assert "inspection_owner.submit_or_recover(" in code
+    code = inspect.getsource(fonts_inspection_owner.submit_or_recover)
+    assert "journal.submit_once(" in code
+    assert "sender=host" in code
