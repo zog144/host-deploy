@@ -49,57 +49,51 @@ def _template(request_id):
 
 
 def verify_approved_lane(root, workspace, host, record, spec):
-    """Read-only validation of either independently retained source history.
+    """Verify CURRENT selected schema-5 existing Project, not Nov14 migration.
 
-    An archived schema-4 -> schema-5 migration and the mixed active
-    certbot-seed existing-Project/never-archived initialization are *distinct
-    evidence paths*. Never synthesize the missing archived schema-4 lane.
-    The latter is eligible only after a separate explicitly source/native
-    reviewed, create-only recovery receipt exists in the owning workspace.
+    The current verified lane/Project/controller is the authority. Historical
+    schema-4 manifests, archived lanes, pending migration intents and old
+    pipelines are evidence only, never admission prerequisites. This local
+    validation does NOT claim to read the remote compiler: the exact expected
+    installed controller digest is frozen into each NEW dispatch, and the
+    protected one-use SSM operation verifies it before any producer writes.
     """
+    from .. import existing_project_runtime as existing
     from .. import image_build_lanes as lanes
+    expected_root = "/home/certbot-build-owner/certbot-seed"
     if (record.get("lane") != "gateway-first-fonts-runtime"
             or spec.get("lane") != "gateway-first-fonts-runtime"
             or record.get("schema") != lanes.INHERITED_SCHEMA
             or spec.get("schema") != lanes.INHERITED_SCHEMA
             or record.get("state") != "active"
-            or record.get("specification") != spec):
-        raise RuntimeError("first Fonts active lane identity differs")
-    if spec.get("project_selection") == "existing":
-        from .. import fonts_lane_recovery
-        fonts_lane_recovery.verify_published(
-            root, workspace, host, record, spec)
-        # The receipt proves an earlier read-only mixed-state inspection;
-        # it is deliberately NONAUTHORIZING. The existing certbot-seed
-        # controller is mutable independently of local lane/intent hashes.
-        # Until a separately protected *fresh* compiler controller attestation
-        # exists at actual admission, refuse ALL direct new build submissions.
-        raise RuntimeError(
-            "mixed-state receipt is not current compiler-controller admission authority")
-    # Archived schema-4 migration, retaining all original bytes, remains
-    # required for its distinct managed migration root. No missing archive
-    # may be converted into a certbot-seed recovery receipt.
-    from .. import fonts_lane_migration, fonts_lane_profile
-    from ..fonts_lane_runtime import CONTROLLER_FILE
-    expected_root = fonts_lane_profile.PROJECT_ROOT
-    if (spec.get("project_root") != expected_root
-            or record.get("controller_config") !=
-                str(Path(expected_root) / CONTROLLER_FILE)
-            or record.get("source_root") != str(Path(expected_root) / "source")
-            or record.get("package_dir") !=
-                str(Path(expected_root) / "source/project/package")
-            or record.get("state_dir") != str(Path(expected_root) / "state")):
-        raise RuntimeError("migrated first Fonts controller/root differs")
-    proof = fonts_lane_migration.verify_existing(root, workspace, host, record)
-    if (proof.get("corrected_project_root") != expected_root
-            or proof.get("historical_specification_sha256")
-                != fonts_lane_profile.RETAINED_SPECIFICATION_SHA256
-            or proof.get("execution_authorized") is not False
-            or proof.get("binding") != fonts_lane_profile._binding(
-                workspace, host)):
-        raise RuntimeError("first Fonts archived migration provenance differs")
-    return proof
-
+            or record.get("specification") != spec
+            or spec.get("mode") != "managed"
+            or spec.get("project_selection") != "existing"
+            or spec.get("project_root") != expected_root):
+        raise RuntimeError("first Fonts current schema-5 existing Project selection differs")
+    expected_controller = expected_root + "/" + existing.controller_file(spec)
+    if (record.get("controller_config") != expected_controller
+            or record.get("source_root") != expected_root + "/source"
+            or record.get("package_dir") != expected_root + "/source/project/package"
+            or record.get("state_dir") != expected_root + "/state"):
+        raise RuntimeError("current certbot-seed Project/controller paths differ")
+    # The prior source revision and package pin do not select the current
+    # installed controller. Preserve optional historic fields, never use
+    # them to require a matching November 14 checkout.
+    if (type(workspace) is not dict or type(host) is not dict
+            or host.get("workspace_id") != workspace.get("workspace_id")
+            or host.get("region") != workspace.get("region")):
+        raise RuntimeError("current Fonts workspace/compiler binding differs")
+    from .image_build_dispatch import _target
+    _target(host)  # validated account, region, instance (not legacy intent)
+    return {
+        "selection": "current-schema-5-existing-project",
+        "project_root": expected_root,
+        "controller_config": expected_controller,
+        "controller_sha256": hashlib.sha256(existing.expected_bytes(spec)).hexdigest(),
+        "execution_authorized": False,
+        "historical_migration_required": False,
+    }
 
 def binding(request, record, spec, host):
     if (record.get("state") != "active"
@@ -119,8 +113,10 @@ def binding(request, record, spec, host):
             or record.get("package_dir") != str(project / "source/project/package")):
         raise RuntimeError("lane does not select the stated Project/controller")
     template = _template(request["request_id"])
+    from .. import existing_project_runtime as existing
     value = {
         "schema": SCHEMA,
+        "controller_sha256": hashlib.sha256(existing.expected_bytes(spec)).hexdigest(),
         "kind": REMOTE_SCHEMA,
         "direct_forward": True,
         "request_id": request["request_id"],
@@ -142,7 +138,11 @@ def validate(value):
         "lane", "project_root", "controller_config", "python_executable",
         "target", "remote_request", "remote_request_sha256",
     }
-    if not isinstance(value, dict) or set(value) != expected:
+    # Historical frozen schema-4 dispatches have no controller digest.
+    # They remain readable and recoverable with their ORIGINAL script bytes.
+    # New bindings freeze a digest from the actual selected schema-5 spec.
+    if not isinstance(value, dict) or set(value) not in (
+            expected, expected | {"controller_sha256"}):
         raise RuntimeError("Project-current dispatch fields are invalid")
     if (value["schema"] != SCHEMA or value["kind"] != REMOTE_SCHEMA
             or value["direct_forward"] is not True
@@ -159,6 +159,12 @@ def validate(value):
                 "controller-" + value["lane"] + "-inherited-v1.json")):
         raise RuntimeError("Project-current controller is not selected by lane")
     image_build_lanes.validate_python_executable(value["python_executable"])
+    if "controller_sha256" in value and (
+            type(value["controller_sha256"]) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", value["controller_sha256"])
+            or controller.name != (
+                "controller-" + value["lane"] + "-inherited-v1.json")):
+        raise RuntimeError("current installed controller digest or filename differs")
     target = value["target"]
     if (_target({**target, "workspace_id": value["workspace_id"]}) != target):
         raise RuntimeError("Project-current SSM target is invalid")
@@ -449,11 +455,140 @@ def read_only_import_script(project_root, python_executable):
     ))
 
 
+
+# The following is injected ONLY into newly frozen current-schema-5
+# dispatches. The original _RUN string and its argv remain byte-for-byte
+# stable for saved historical schema-4 dispatch / journal readback.
+_CURRENT_CONTROLLER_PREFLIGHT = r'''
+    # Actual selected-Host verification runs in the protected, once-only
+    # build invocation, BEFORE request_path.parent.mkdir or any pipeline call.
+    # The current installed controller must equal the exact selected lane
+    # specification, not an archived November 14 controller.
+    expected_controller_sha256 = sys.argv[6]
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_controller_sha256):
+        raise RuntimeError("unreviewed current controller digest")
+    if (not project.is_absolute() or not controller.is_absolute()
+            or controller.parent != project
+            or controller.name !=
+                "controller-gateway-first-fonts-runtime-inherited-v1.json"):
+        raise RuntimeError("selected current Project/controller path differs")
+    def verified_directory(parent_fd, part):
+        info = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+        if not __import__('stat').S_ISDIR(info.st_mode):
+            raise RuntimeError("selected Project ancestor is not a directory")
+        fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY |
+                     os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+        opened = os.fstat(fd)
+        if ((info.st_dev, info.st_ino, info.st_uid, info.st_gid, info.st_mode)
+                != (opened.st_dev, opened.st_ino, opened.st_uid,
+                    opened.st_gid, opened.st_mode)):
+            os.close(fd)
+            raise RuntimeError("selected Project ancestry changed during open")
+        sticky_root = (opened.st_uid == 0 and
+                       __import__('stat').S_IMODE(opened.st_mode) == 0o1777)
+        if opened.st_mode & 0o022 and not sticky_root:
+            os.close(fd)
+            raise RuntimeError("selected Project ancestor is writable")
+        return fd, opened
+    project_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    project_ancestors = []
+    try:
+        for name in project.parts[1:]:
+            next_fd, info = verified_directory(project_fd, name)
+            os.close(project_fd)
+            project_fd = next_fd
+            project_ancestors.append(info)
+        project_info = project_ancestors[-1]
+        if (not all(x.st_uid in (0, project_info.st_uid)
+                    for x in project_ancestors)
+                or __import__('stat').S_IMODE(project_info.st_mode) & 0o077):
+            raise RuntimeError("selected Project ownership or private mode differs")
+        config_info = os.stat(controller.name, dir_fd=project_fd,
+                              follow_symlinks=False)
+        if (not __import__('stat').S_ISREG(config_info.st_mode)
+                or config_info.st_nlink != 1
+                or config_info.st_uid not in (0, project_info.st_uid)
+                or config_info.st_mode & 0o022
+                or not 0 < config_info.st_size <= 65536):
+            raise RuntimeError("installed current controller file is unsafe")
+        config_fd = os.open(controller.name, os.O_RDONLY | os.O_NOFOLLOW |
+                            os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=project_fd)
+        try:
+            before = os.fstat(config_fd)
+            if ((before.st_dev, before.st_ino, before.st_mode,
+                 before.st_uid, before.st_gid, before.st_nlink,
+                 before.st_size) !=
+                (config_info.st_dev, config_info.st_ino, config_info.st_mode,
+                 config_info.st_uid, config_info.st_gid, config_info.st_nlink,
+                 config_info.st_size)):
+                raise RuntimeError("selected current controller inode changed")
+            installed = os.read(config_fd, 65537)
+            after = os.fstat(config_fd)
+            still = os.stat(controller.name, dir_fd=project_fd,
+                            follow_symlinks=False)
+            if (len(installed) != before.st_size or
+                    (before.st_dev, before.st_ino, before.st_size,
+                     before.st_mtime_ns, before.st_ctime_ns) !=
+                    (after.st_dev, after.st_ino, after.st_size,
+                     after.st_mtime_ns, after.st_ctime_ns) or
+                    (still.st_dev, still.st_ino, still.st_mode,
+                     still.st_uid) !=
+                    (before.st_dev, before.st_ino, before.st_mode,
+                     before.st_uid)):
+                raise RuntimeError("installed current controller changed during readback")
+            if hashlib.sha256(installed).hexdigest() != expected_controller_sha256:
+                raise RuntimeError("installed current controller differs from schema-5 selection")
+        finally:
+            os.close(config_fd)
+        # Use the *opened* selected source and cleared Git environment, not
+        # any inherited GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_COUNT override.
+        source_fd, _ = verified_directory(project_fd, "source")
+        try:
+            git_dir, _ = verified_directory(source_fd, ".git")
+            os.close(git_dir)
+            git_env = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent",
+                       "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0",
+                       "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_CONFIG_GLOBAL": "/dev/null"}
+            command = subprocess.run(
+                ["/usr/bin/git", "-C", "/proc/self/fd/" + str(source_fd),
+                 "rev-parse", "--verify", "HEAD"],
+                pass_fds=(source_fd,), env=git_env,
+                capture_output=True, text=True, timeout=30, check=True)
+            revision = command.stdout.strip()
+            if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+                raise RuntimeError("selected Project has no current Git checkout")
+        finally:
+            os.close(source_fd)
+        # Existing controller and Project path must remain the same immediately
+        # before any producer-owned file changes occur.
+        if (os.fstat(project_fd).st_dev, os.fstat(project_fd).st_ino) != (
+                project_info.st_dev, project_info.st_ino):
+            raise RuntimeError("selected Project changed before producer")
+    finally:
+        os.close(project_fd)
+'''
+# Keep the original _RUN unchanged for immutable historical bindings.
+_CURRENT_RUN_MARKER = '''    command = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    revision = command.stdout.strip()'''
+if _RUN.count(_CURRENT_RUN_MARKER) != 1:
+    raise RuntimeError("Project-current preflight source insertion point differs")
+_RUN_CURRENT = _RUN.replace(_CURRENT_RUN_MARKER, _CURRENT_CONTROLLER_PREFLIGHT)
+
+
 def remote_script(value):
     value = validate(value)
-    return " ".join(shlex.quote(item) for item in (
-        value["python_executable"], "-c", _RUN,
+    newer = "controller_sha256" in value
+    script = _RUN_CURRENT if newer else _RUN
+    arguments = (
+        value["python_executable"], "-c", script,
         value["project_root"], value["controller_config"],
         value["python_executable"], value["request_id"],
         value["remote_request_sha256"],
-    ))
+    )
+    if newer:
+        arguments += (value["controller_sha256"],)
+    return " ".join(shlex.quote(item) for item in arguments)
