@@ -159,6 +159,29 @@ with no second send. The gateway's reconciliation API rejects a caller's
 terminal JSON entirely; it reopens and verifies the actual local Project. The same test suite retains the queue, root-owner,
 admission and acknowledgement-loss invariants.
 
+**Independent source-supported continuation regression:** the source CI also
+checks out actual image-build
+`bce80b258e445191248d9998620884a79f029013` in a separate
+disposable companion directory. It runs the real `RemoteOperations.execute`
+default Project `pipeline.submit` against a synthetic generic package
+set with the reviewed three target names, deliberately stops the first
+controller call after the pipeline is durably prepared, then invokes the
+**real** `ImageBuild.resume(original_pipeline_id)` in a fresh isolated
+Python process. Image-build itself writes the completed attempt statuses
+and the terminal pipeline record. The Gateway's read-only observer then
+confirms terminal success **without** changing the original pending
+`remote-operations/<original_operation_id>/result.json`, fabricating
+a terminal producer result, allocating a new pipeline, or calling another
+SSM sender. The test compares the complete pipeline ID inventory before
+and after resume. Its recipes are explicitly separate from the real
+Fonts catalogue and do not claim the real Fonts stage-pin approval gate
+was exercised.
+
+This is a source-only integration fixture, **not** evidence that the
+native compiler job has completed or that the failed historical request
+can safely be replayed. The native protected controller and versioned
+issuer guards retain their own approval requirements.
+
 **Native Work gate:** review/install/attest exact PR #57 on top of PR #54
 without dropping PR #51 root-owned SendCommand or PR #53 incomplete-request
 reconciliation. Revalidate the installed root journal's 14,700-second
