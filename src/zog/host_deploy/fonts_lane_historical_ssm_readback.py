@@ -312,6 +312,7 @@ def _ssm_readback(client, row, target):
             or type(p) is not dict or set(p) != {"commands", "executionTimeout"}
             or type(p["commands"]) is not list or len(p["commands"]) != 1
             or type(p["commands"][0]) is not str
+            or not 0 < len(p["commands"][0].encode("utf-8")) <= 32768
             or _sha(p["commands"][0].encode("utf-8")) != row["script_sha256"]
             or p["executionTimeout"] != [
                 str(row["execution_timeout_seconds"])]):
@@ -329,8 +330,9 @@ def _ssm_readback(client, row, target):
             or type(invocation.get("ResponseCode")) is not int):
         _fail("SSM invocation result incomplete, pending or foreign")
     status = invocation["Status"]
-    if command.get("Status") != status:
-        _fail("SSM command/invocation terminal status differs")
+    if (command.get("Status") != status or
+            (status == "Success" and invocation["ResponseCode"] != 0)):
+        _fail("SSM command/invocation terminal status or response code differs")
     stdout, stderr = (invocation.get("StandardOutputContent"),
                       invocation.get("StandardErrorContent"))
     if (type(stdout) is not str or type(stderr) is not str
@@ -369,8 +371,11 @@ def inspect(workspace, *, approvals, expected_evidence_sha256,
     original = _original_journal_rows(journal_directory, evidence)
     target = current["compiler_target"]
     identity = sts_client.get_caller_identity()
+    selected_region = getattr(getattr(ssm_client, "meta", None),
+                              "region_name", None)
     if (type(identity) is not dict or
             type(aws_region) is not str or aws_region != target["region"]
+            or selected_region != target["region"]
             or type(identity.get("Account")) is not str
             or identity["Account"] != target["account_id"]):
         _fail("AWS credential account/region does not match admitted compiler")
@@ -382,6 +387,8 @@ def inspect(workspace, *, approvals, expected_evidence_sha256,
         _fail("Gateway lane or original migration intent changed during AWS readback")
     if _original_journal_rows(journal_directory, evidence) != original:
         _fail("protected original command journal changed during AWS readback")
+    if _evidence(workspace, current, expected_evidence_sha256)[0] != evidence:
+        _fail("reviewed original command witness changed during AWS readback")
     return {
         "schema": REPORT,
         "status": "supersession-unproven",
