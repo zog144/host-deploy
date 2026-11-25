@@ -94,6 +94,9 @@ def forwarding(tmp_path, monkeypatch):
     value = approved()
     admit(root, value)
     binding = direct_binding(value)
+    # This is the same selected Project on the Gateway Host. Recovery
+    # must read its actual files; it may not consume an external dict.
+    binding["project_root"] = str(tmp_path / "selected-project")
     counters = {"send": [], "inspect": [], "new_host": []}
     def prepared(gateway, request_id, *, direct_forward):
         assert gateway == root and request_id == value["request_id"]
@@ -484,51 +487,118 @@ def test_project_current_ssm_timeout_is_recovery_blocked_not_pipeline_terminal(
     assert len(counters["send"]) == 1
 
 
+def _owned_project_files(binding):
+    """Actual local Project evidence; NOT a supplied Gateway status object."""
+    project = Path(binding["project_root"])
+    operation_id = binding["request_id"]
+    request = binding["remote_request"]
+    request_dir = project / "gateway-requests" / operation_id
+    request_dir.mkdir(parents=True, exist_ok=True)
+    (request_dir / "request.json").write_text(json.dumps(request))
+    operation_dir = project / "state/image-build/remote-operations" / operation_id
+    operation_dir.mkdir(parents=True, exist_ok=True)
+    (operation_dir / "request.json").write_text(json.dumps(request))
+    (operation_dir / "binding.json").write_text(
+        json.dumps({"pipeline_id": "c" * 32}))
+    pipeline_path = (project / "state/image-build/pipelines" /
+                     ("c" * 32) / "pipeline.json")
+    pipeline_path.parent.mkdir(parents=True, exist_ok=True)
+    pipeline = {
+        "schema": 1,
+        "pipeline_id": "c" * 32,
+        "status": "running",
+        "operation": "image",
+        "arguments": {"targets": [
+            "libpng-final", "freetype-final", "fontconfig-final",
+        ]},
+        "attempts": {
+            "fontconfig-final": "image-63dcd6a137f040bc9224dce166a916ed",
+        },
+        "owner": {
+            "contract": "image-build-remote-operation-v1",
+            "operation_id": operation_id,
+            "source_repository": "zog144/image-build",
+            "source_revision": SOURCE["revision"],
+        },
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    return project, operation_dir, pipeline_path
+
+
+def _complete_owned_pipeline(project, pipeline_path):
+    pipeline = json.loads(pipeline_path.read_text())
+    generation = "a" * 64
+    for attempt_id in pipeline["attempts"].values():
+        path = (project / "state/image-build/attempts" /
+                attempt_id / "status.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "status": "complete", "generation": generation,
+        }))
+    pipeline["generation"] = generation
+    pipeline["status"] = "complete"
+    pipeline_path.write_text(json.dumps(pipeline))
+
+
 def test_project_current_observation_is_same_pipeline_and_never_resubmits(forwarding):
     root, value, binding, Host, counters = forwarding
     simple_forward.advance(root, REQUEST_ID, host_factory=Host)
     simple_forward.advance(root, REQUEST_ID, host_factory=Host)
     assert simple_forward.advance(root, REQUEST_ID, host_factory=Host)["phase"] == "running"
-    previous = load_request(root, REQUEST_ID)
-    assert previous["states"]["completion"] == "running"
-    unchanged = {
-        "schema": simple_forward.PROJECT_OBSERVATION_SCHEMA,
-        "project_root": binding["project_root"],
-        "request_id": REQUEST_ID, "operation_id": REQUEST_ID,
+    assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
+    project, operation_dir, pipeline_path = _owned_project_files(binding)
+    # A hostile caller can no longer inject terminal status as a JSON dict.
+    with pytest.raises(TypeError):
+        simple_forward.reconcile_project_observation(root, REQUEST_ID, {
+            "terminal_confirmed": True, "producer_status": "completed",
+        })
+    assert simple_forward.reconcile_project_observation(
+        root, REQUEST_ID)["phase"] == "running"
+    assert len(counters["send"]) == 1
+
+    for mutation in ("foreign-owner", "changed-source", "foreign-pipeline"):
+        path = (pipeline_path if mutation != "foreign-pipeline"
+                else operation_dir / "binding.json")
+        original = path.read_bytes()
+        altered = json.loads(original)
+        if mutation == "foreign-owner":
+            altered["owner"]["operation_id"] = "e" * 32
+        elif mutation == "changed-source":
+            altered["owner"]["source_revision"] = "f" * 40
+        else:
+            altered["pipeline_id"] = "f" * 32
+        path.write_text(json.dumps(altered))
+        with pytest.raises(simple_forward.ForwardingDenied):
+            simple_forward.reconcile_project_observation(root, REQUEST_ID)
+        path.write_bytes(original)
+    # Forged terminal producer output cannot replace the *running*
+    # pipeline evidence, even when the original request/result IDs match.
+    (operation_dir / "result.json").write_text(json.dumps({
+        "schema": "image-build-remote-result-v1",
+        "operation_id": REQUEST_ID, "operation_type": "pipeline.submit",
+        "source_repository": "zog144/image-build",
         "source_revision": SOURCE["revision"],
         "pipeline_id": "c" * 32,
-        "pipeline_status": "running",
-        "attempt_ids": ["image-63dcd6a137f040bc9224dce166a916ed"],
-        "producer_status": "unreconciled", "terminal_outcome": None,
-        "terminal_confirmed": False, "uncertainty": True,
-        "mutation": False, "execution_authorized": False,
-    }
-    result = simple_forward.reconcile_project_observation(root, REQUEST_ID, unchanged)
-    assert result["phase"] == "running"
-    assert result["pipeline_id"] == "c" * 32
-    assert len(counters["send"]) == 1
-    for bad in (
-        {"pipeline_id": "f" * 32},
-        {"source_revision": "f" * 40},
-        {"operation_id": "e" * 32},
-        {"mutation": True},
-        {"execution_authorized": True},
-        {"terminal_confirmed": True, "uncertainty": False,
-         "producer_status": "pending", "terminal_outcome": "success"},
-    ):
-        with pytest.raises(simple_forward.ForwardingDenied):
-            simple_forward.reconcile_project_observation(root, REQUEST_ID,
-                    {**unchanged, **bad})
-    # Read-only observation targets the SAME original request+pipeline, and
-    # only original image-build's durable terminal result can finish it.
-    terminal = {**unchanged, "pipeline_status": "complete",
-                "producer_status": "completed", "terminal_outcome": "success",
-                "terminal_confirmed": True, "uncertainty": False}
-    complete = simple_forward.reconcile_project_observation(root, REQUEST_ID, terminal)
+        "status": "completed", "terminal_outcome": "success",
+        "uncertainty": False,
+    }))
+    assert simple_forward.reconcile_project_observation(
+        root, REQUEST_ID)["phase"] == "running"
+    (operation_dir / "result.json").unlink()
+
+    # Only actual completion in image-build's pipeline and attempt records
+    # can create the terminal Gateway receipt; original SSM output and
+    # original submit result are not modified or replayed.
+    _complete_owned_pipeline(project, pipeline_path)
+    complete = simple_forward.reconcile_project_observation(root, REQUEST_ID)
     assert complete["phase"] == "completed"
     assert len(counters["send"]) == 1
     assert load_request(root, REQUEST_ID)["states"]["completion"] == "completed"
-    assert (root / "requests" / REQUEST_ID / "remote-result.json").is_file()
+    receipt = json.loads((root / "requests" / REQUEST_ID /
+                          "remote-result.json").read_text())
+    assert receipt["result"]["pipeline_status"] == "complete"
+    assert receipt["result"]["evidence"]["attempt_statuses"]
+    assert receipt["result"]["terminal_confirmed"] is True
 
 
 def test_legacy_schema_timeout_still_uses_original_control_window(forwarding):
@@ -552,19 +622,9 @@ def test_ssm_outer_timeout_then_read_only_reconcile_recovers_same_pipeline_witho
         "phase"] == "recovery_blocked"
     from zog.host_deploy.gateway.ledger import reconcile_dispatch
     reconcile_dispatch(root, REQUEST_ID)
-    observation = {
-        "schema": simple_forward.PROJECT_OBSERVATION_SCHEMA,
-        "project_root": binding["project_root"],
-        "request_id": REQUEST_ID, "operation_id": REQUEST_ID,
-        "source_revision": SOURCE["revision"], "pipeline_id": "c" * 32,
-        "pipeline_status": "running",
-        "attempt_ids": ["image-63dcd6a137f040bc9224dce166a916ed"],
-        "producer_status": "unreconciled", "terminal_outcome": None,
-        "terminal_confirmed": False, "uncertainty": True,
-        "mutation": False, "execution_authorized": False,
-    }
+    _owned_project_files(binding)
     resumed = simple_forward.reconcile_project_observation(
-        root, REQUEST_ID, observation)
+        root, REQUEST_ID)
     assert resumed["phase"] == "running"
     assert resumed["pipeline_id"] == "c" * 32
     assert load_dispatch(root, REQUEST_ID)["command_id"] == "command-123"
