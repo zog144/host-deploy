@@ -38,7 +38,7 @@ def digest(value):
 
 
 def _checked_directory(parent_fd, name):
-    """Open one named directory, binding no-follow lstat to the opened inode."""
+    '''Open one named directory, binding no-follow lstat to the opened inode.'''
     info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     if not stat.S_ISDIR(info.st_mode):
         raise ValueError("selected Project ancestor is not a directory")
@@ -54,7 +54,7 @@ def _checked_directory(parent_fd, name):
 
 
 def _opened_project(project):
-    """Anchor the complete absolute ancestry at the filesystem root."""
+    '''Anchor the complete absolute ancestry at the filesystem root.'''
     fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY |
                  os.O_NOFOLLOW | os.O_CLOEXEC)
     ancestors = [os.fstat(fd)]
