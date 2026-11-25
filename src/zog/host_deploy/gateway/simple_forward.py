@@ -235,6 +235,14 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
     if record["phase"] != "submitted" or binding.get("schema") != 4:
         raise ForwardingDenied(
             "observation requires submitted Project-current request")
+    # The historical 240/300-second request has an immutable terminal
+    # failure record. A new read-only inspection cannot silently rewrite it.
+    state = load_request(root, request_id)["states"]["completion"]
+    if (state not in {"pending", "running", "recovery_blocked"}
+            or (Path(root) / "requests" / request_id /
+                "remote-result.json").exists()):
+        raise ForwardingDenied(
+            "terminal historical Gateway result must not be reclassified")
     config = verify_current_target(root, binding)
     from .project_current import REVISION, IDENTITY
     from .project_current_observation import read_only_observation_script
