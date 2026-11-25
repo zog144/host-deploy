@@ -972,6 +972,7 @@ def test_current_selected_certbot_seed_does_not_require_nov14_migration_records(
 
 @pytest.mark.parametrize("damage", ["different-content", "symlink", "absent",
                                     "writable", "foreign-hardlink",
+                                    "writable-project", "linked-ancestor",
                                     "redirected-git", "git-env-overrides"])
 def test_current_protected_script_fails_before_pipeline_or_request_write(
         tmp_path, monkeypatch, damage):
@@ -992,6 +993,13 @@ def test_current_protected_script_fails_before_pipeline_or_request_write(
         controller.chmod(0o666)
     elif damage == "foreign-hardlink":
         os.link(controller, root / "another-name.json")
+    elif damage == "writable-project":
+        root.chmod(0o777)
+    elif damage == "linked-ancestor":
+        # The Project component itself must never be followed as a symlink.
+        redirected = tmp_path / "foreign-project"
+        root.rename(redirected)
+        root.symlink_to(redirected, target_is_directory=True)
     elif damage == "redirected-git":
         external = tmp_path / "other-source"
         external.mkdir()
@@ -1025,7 +1033,7 @@ def test_current_protected_script_fails_before_pipeline_or_request_write(
         assert result.returncode != 0
         assert not (root / "gateway-requests").exists()
     if damage in ("git-env-overrides", "foreign-hardlink", "redirected-git",
-                  "writable"):
+                  "writable", "writable-project", "linked-ancestor"):
         assert controller.read_bytes() == original_controller
 
 
@@ -1041,3 +1049,51 @@ def test_historical_frozen_project_current_script_bytes_are_unchanged(tmp_path):
         "-c " in old_script and "controller_sha256" not in old_script)
     assert project_current.remote_script(modern) != old_script
     assert "controller_sha256" in str(modern)
+
+
+
+def test_current_dispatch_checksum_tampering_cannot_bypass_installed_controller(tmp_path):
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    prepared = project_current.binding(intent("3" * 32), record, spec, target())
+    invalid = dict(prepared, controller_sha256="f" * 64)
+    # A forged checksum can be syntactically parsed but cannot match the
+    # actual installed selected controller. The protected Gateway ledger
+    # separately freezes its original binding digest before one SendCommand.
+    script = project_current.remote_script(invalid)
+    before = controller.read_bytes()
+    result = subprocess.run(script, shell=True, capture_output=True,
+                            text=True, timeout=25)
+    assert result.returncode != 0
+    assert "installed current controller differs" in result.stderr
+    assert controller.read_bytes() == before
+    assert not (root / "gateway-requests").exists()
+
+
+def test_current_lane_never_invokes_obsolete_migration_verifier(monkeypatch):
+    from zog.host_deploy import fonts_lane_recovery, fonts_lane_migration
+    from zog.host_deploy import existing_project_runtime as runtime
+    selected_project = "/home/certbot-build-owner/certbot-seed"
+    spec = lanes.specification(
+        "gateway-first-fonts-runtime", existing_project=True,
+        project_root=selected_project, python_executable="/usr/bin/python3.12",
+        memory_maximum_bytes=2**30, thread_count_maximum=16,
+        cpu_weight=100, disk_reservation_bytes=2**30,
+    )
+    record = {
+        "schema": 5, "lane": spec["lane"], "state": "active",
+        "specification": spec,
+        "controller_config": selected_project + "/" + runtime.controller_file(spec),
+        "source_root": selected_project + "/source",
+        "package_dir": selected_project + "/source/project/package",
+        "state_dir": selected_project + "/state",
+    }
+    def prohibited(*args, **kwargs):
+        pytest.fail("current schema-5 admission called a superseded migration source")
+    monkeypatch.setattr(fonts_lane_recovery, "verify_published", prohibited)
+    monkeypatch.setattr(fonts_lane_migration, "verify_existing", prohibited)
+    out = project_current.verify_approved_lane(
+        "/not-a-migration-workspace",
+        {"workspace_id": "1" * 32, "region": "us-east-1"},
+        target(), record, spec)
+    assert out["historical_migration_required"] is False
