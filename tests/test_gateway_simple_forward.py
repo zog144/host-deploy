@@ -153,11 +153,17 @@ def forwarding(tmp_path, monkeypatch):
                         target, seconds, sender):
             assert operation_id not in self.intents
             self.intents[operation_id] = {
-                "request_sha256": request_sha256,
+                "schema": "zog-task-c-trusted-host-local-intent-v1",
+                "operation_id": operation_id, "request_sha256": request_sha256,
                 "script_sha256": __import__("hashlib").sha256(
-                    script.encode("utf-8")).hexdigest(), "target": target}
+                    script.encode("utf-8")).hexdigest(), "target": target,
+                "document": "AWS-RunShellScript",
+                "execution_timeout_seconds": seconds}
             command_id = sender.submit_command(script, seconds=seconds)
-            self.commands[operation_id] = {"command_id": command_id}
+            self.commands[operation_id] = {
+                "schema": "zog-task-c-trusted-host-command-v1",
+                "operation_id": operation_id, "request_sha256": request_sha256,
+                "command_id": command_id}
             return command_id
 
         def close(self):
