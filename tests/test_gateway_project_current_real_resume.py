@@ -21,7 +21,7 @@ IMAGE_BUILD = Path(__file__).resolve().parents[1] / "companions/image-build"
 # This is deliberately a separate, isolated source process. The Project
 # image-build namespace must not be shadowed by site-installed zog modules.
 _REAL_IMAGE_BUILD_WORKER = r"""
-import json, sys
+import json, sys, shutil
 from pathlib import Path
 sys.path[:0] = [sys.argv[1], sys.argv[2]]
 project = Path(sys.argv[3])
@@ -36,6 +36,14 @@ targets = ["libpng-final", "freetype-final", "fontconfig-final"]
 if phase == "submit":
     from test_remote_operations import setup_repo, recipe, request, adapter
     repository, packages, builder, toolchain = setup_repo(project)
+    # The production Fonts route intentionally requires separately
+    # reviewed executable stage metadata. This disposable test exercises
+    # the *generic* default Project pipeline, with identical Fonts targets,
+    # through actual image-build prepare/resume. It is not source approval
+    # of the real fonts catalogue or a compilation on any Host.
+    packages = repository / "project" / "synthetic-package"
+    shutil.copytree(builder.package_dir, packages)
+    builder.package_dir = packages
     recipe(packages, "libpng-final")
     recipe(packages, "freetype-final", build=("libpng-final",))
     recipe(packages, "fontconfig-final", build=("freetype-final",))
@@ -68,7 +76,7 @@ elif phase == "resume":
         return BuildExecutionResult("fixture-runtime", "fixture-invocation",
                                     0, True, "journal:disposable-fixture")
     builder = ImageBuild(
-        package_dir=project / "repository/project/package",
+        package_dir=project / "repository/project/synthetic-package",
         state_dir=project / "state",
         runner=BoxControlRunner(execute=completed),
     )
