@@ -859,3 +859,52 @@ def test_selected_project_rejects_symlinked_absolute_ancestor(tmp_path):
         shell=True, capture_output=True, text=True, timeout=8)
     assert result.returncode != 0
     assert not (root / "gateway-requests").exists()
+
+
+
+@pytest.mark.parametrize("replace", ["file", "parent"])
+def test_project_observer_no_follow_descriptor_rejects_inode_swap(
+        tmp_path, monkeypatch, replace):
+    """Simulate a name swap precisely between lstat and openat."""
+    from zog.host_deploy.gateway.project_current_observation import _OBSERVER
+    selected_root = tmp_path / "compiler-project"
+    request_id = "a" * 32
+    parent = selected_root / "gateway-requests"
+    child = parent / request_id
+    child.mkdir(parents=True)
+    request_file = child / "request.json"
+    request_file.write_text(json.dumps({
+        "schema": "image-build-remote-operation-v1",
+        "operation_id": request_id,
+        "operation": "pipeline.submit",
+        "arguments": {
+            "mode": "image",
+            "targets": ["libpng-final", "freetype-final", "fontconfig-final"]},
+        "source": {"repository": "zog144/image-build",
+                   "revision": "b" * 40},
+    }))
+    namespace = {"__builtins__": __builtins__}
+    exec(_OBSERVER, namespace)
+    original_open = os.open
+    swapped = False
+
+    def racing_open(name, flags, *args, **kwargs):
+        nonlocal swapped
+        trigger = ("request.json" if replace == "file" else "gateway-requests")
+        if not swapped and name == trigger and kwargs.get("dir_fd") is not None:
+            swapped = True
+            if replace == "file":
+                original = request_file.read_bytes()
+                request_file.rename(child / "retained-original.json")
+                request_file.write_bytes(original)
+            else:
+                parent.rename(selected_root / "retained-original-parent")
+                # A newly created parent must not be treated as the lstat'ed
+                # directory even if it contains identically named evidence.
+                parent.mkdir()
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", racing_open)
+    with pytest.raises(ValueError, match="inode changed|ancestor changed"):
+        namespace["observe"](str(selected_root), request_id)
+    assert swapped is True
