@@ -217,23 +217,59 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
             "command_id": command_id}
 
 
-def reconcile_project_observation(root, request_id, observation):
-    """Explicitly reconcile a trusted read-only Host observation, never send.
+def reconcile_project_observation(root, request_id):
+    """Reconcile by READBACK on the selected Host, never a supplied JSON dict.
 
-    The caller must obtain this JSON from the reviewed Project-current
-    read_only_observation_script on the already selected Host. No SQS field
-    or untrusted issue body may supply this evidence. The original request,
-    SSM CommandId and Project binding remain immutable.
+    This method is deliberately local to the trusted Gateway instance
+    installed on the compiler Host. It does not accept a caller-supplied
+    terminal status, pipeline, or evidence object. Caller authentication
+    and explicit administrative invocation remain outside this function.
+    The selected Project is taken only from the frozen admitted dispatch;
+    the observer reads its original request, pipeline owner and attempt
+    records *again* before any terminal ledger write.
     """
     record, binding = _frozen_binding(root, request_id)
     if record["phase"] != "submitted" or binding.get("schema") != 4:
-        raise ForwardingDenied("observation requires submitted Project-current request")
+        raise ForwardingDenied(
+            "observation requires submitted Project-current request")
+    verify_current_target(root, binding)
     from .project_current import REVISION, IDENTITY
+    from .project_current_observation import observe_selected_project
+
+    previous_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
+    prior = {}
+    if previous_path.exists():
+        previous = json.loads(previous_path.read_text())
+        if (previous.get("schema") != 1
+                or previous.get("request_id") != request_id
+                or previous.get("command_id") != record["command_id"]
+                or type(previous.get("observation")) is not dict):
+            raise ForwardingDenied("retained SSM/Project observation identity differs")
+        prior = previous["observation"].get("producer", {})
+        if type(prior) is not dict:
+            raise ForwardingDenied("previous Project producer identity is invalid")
+
+    expected_pipeline = prior.get("pipeline_id")
+    if (expected_pipeline is not None and
+            (type(expected_pipeline) is not str
+             or not IDENTITY.fullmatch(expected_pipeline))):
+        raise ForwardingDenied("retained pipeline identity is invalid")
+    try:
+        observation = observe_selected_project(
+            binding["project_root"], request_id, pipeline_id=expected_pipeline
+        )
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ForwardingDenied(
+            "selected Host Project evidence cannot be authenticated: " +
+            str(error)) from error
+
     if (type(observation) is not dict
             or observation.get("schema") != PROJECT_OBSERVATION_SCHEMA
+            or observation.get("project_root") != binding["project_root"]
             or observation.get("request_id") != request_id
             or observation.get("operation_id") != request_id
-            or observation.get("project_root") != binding["project_root"]
+            or observation.get("evidence_source") != "local-selected-project"
+            or type(observation.get("evidence")) is not dict
             or observation.get("mutation") is not False
             or observation.get("execution_authorized") is not False
             or type(observation.get("source_revision")) is not str
@@ -242,42 +278,65 @@ def reconcile_project_observation(root, request_id, observation):
             or type(observation.get("uncertainty")) is not bool
             or observation["uncertainty"] is not (
                 not observation["terminal_confirmed"])):
-        raise ForwardingDenied("read-only Project observation identity or status differs")
+        raise ForwardingDenied("read-only selected-Host evidence differs")
     pipeline = observation.get("pipeline_id")
     if (pipeline is not None and
             (type(pipeline) is not str or not IDENTITY.fullmatch(pipeline))):
-        raise ForwardingDenied("read-only Project pipeline identity is invalid")
-    previous_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
-    if previous_path.exists():
-        previous = json.loads(previous_path.read_text())["observation"]
-        prior = previous.get("producer", {})
-        if prior and (prior.get("source_revision") != observation["source_revision"]
-                      or (prior.get("pipeline_id") is not None and
-                          prior.get("pipeline_id") != pipeline)):
-            raise ForwardingDenied("read-only observation differs from original producer")
+        raise ForwardingDenied("selected Project pipeline identity is invalid")
+    if prior and (
+        prior.get("source_revision") != observation["source_revision"]
+        or (prior.get("pipeline_id") is not None
+            and prior["pipeline_id"] != pipeline)
+    ):
+        raise ForwardingDenied("owned Project differs from original SSM producer")
+
+    evidence = observation["evidence"]
+    if (type(evidence.get("request_sha256")) is not str
+            or type(evidence.get("pipeline_sha256")) is not (
+                str if pipeline is not None else type(None))
+            or type(evidence.get("evidence_sha256")) is not str
+            or len(evidence["evidence_sha256"]) != 64):
+        raise ForwardingDenied("selected Host evidence has no durable digest")
     if observation["terminal_confirmed"]:
-        terminal = observation.get("producer_status")
-        if terminal == "completed" and observation.get("terminal_outcome") == "success":
+        outcome = observation.get("terminal_outcome")
+        if (observation.get("producer_status") == "completed"
+                and outcome == "success"
+                and observation.get("pipeline_status") == "complete"
+                and type(observation.get("attempt_ids")) is list
+                and observation["attempt_ids"]
+                and len(evidence.get("attempt_statuses", {}))
+                    == len(observation["attempt_ids"])):
             completion = "completed"
-        elif terminal == "failed" and observation.get("terminal_outcome"):
+        elif (observation.get("producer_status") == "failed"
+              and type(outcome) is str and outcome
+              and observation.get("pipeline_status") == "pending"
+              and type(evidence.get("result_sha256")) is str):
             completion = "failed"
         else:
-            raise ForwardingDenied("producer terminal outcome is not authenticated")
+            raise ForwardingDenied(
+                "pipeline terminal outcome is not verified by selected Host")
     else:
         completion = "running" if pipeline is not None else "recovery_blocked"
-    snapshot = {"schema": PROJECT_OBSERVATION_SCHEMA,
-                "command_id": record["command_id"],
-                "source_revision": observation["source_revision"],
-                "pipeline_id": pipeline,
-                "status": observation.get("producer_status"),
-                "pipeline_status": observation.get("pipeline_status"),
-                "attempt_ids": observation.get("attempt_ids", []),
-                "terminal_confirmed": observation["terminal_confirmed"]}
+
+    # The readback result and exact source/pipeline/attempt evidence digests
+    # remain recorded under the original SSM CommandId. No sender is used.
+    snapshot = {
+        "schema": PROJECT_OBSERVATION_SCHEMA,
+        "command_id": record["command_id"],
+        "project_root": binding["project_root"],
+        "source_revision": observation["source_revision"],
+        "pipeline_id": pipeline,
+        "pipeline_status": observation.get("pipeline_status"),
+        "attempt_ids": observation.get("attempt_ids", []),
+        "producer_status": observation.get("producer_status"),
+        "terminal_outcome": observation.get("terminal_outcome"),
+        "terminal_confirmed": observation["terminal_confirmed"],
+        "evidence": evidence,
+    }
     if completion in ("completed", "failed"):
         record_remote_result(root, request_id, snapshot, completion)
     else:
         mark_completion(root, request_id, completion)
-    # Observations are append/replace evidence, never a new SSM SendCommand.
     record_dispatch_observation(root, request_id, {
         "schema": "host-deploy-direct-ssm-observation-v1",
         "command_id": record["command_id"],
@@ -288,6 +347,7 @@ def reconcile_project_observation(root, request_id, observation):
             "pipeline_id": pipeline,
             "status": observation.get("producer_status"),
             "uncertainty": not observation["terminal_confirmed"],
+            "evidence_sha256": evidence["evidence_sha256"],
         },
     })
     return {"request_id": request_id, "command_id": record["command_id"],
