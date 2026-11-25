@@ -100,6 +100,7 @@ def _open_dir(path, *, root_owner=True):
                  before.st_mode) !=
                 (after.st_dev, after.st_ino, after.st_uid,
                  after.st_mode) or
+                (after.st_uid != 0 and not sticky_root) or
                 (after.st_mode & 0o022 and not sticky_root)):
                 os.close(new)
                 _fail("untrusted journal ancestor owner/mode/inode")
