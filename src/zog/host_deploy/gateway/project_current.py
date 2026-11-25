@@ -67,8 +67,15 @@ def verify_approved_lane(root, workspace, host, record, spec):
         raise RuntimeError("first Fonts active lane identity differs")
     if spec.get("project_selection") == "existing":
         from .. import fonts_lane_recovery
-        return fonts_lane_recovery.verify_published(
+        fonts_lane_recovery.verify_published(
             root, workspace, host, record, spec)
+        # The receipt proves an earlier read-only mixed-state inspection;
+        # it is deliberately NONAUTHORIZING. The existing certbot-seed
+        # controller is mutable independently of local lane/intent hashes.
+        # Until a separately protected *fresh* compiler controller attestation
+        # exists at actual admission, refuse ALL direct new build submissions.
+        raise RuntimeError(
+            "mixed-state receipt is not current compiler-controller admission authority")
     # Archived schema-4 migration, retaining all original bytes, remains
     # required for its distinct managed migration root. No missing archive
     # may be converted into a certbot-seed recovery receipt.
