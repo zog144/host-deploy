@@ -14,7 +14,7 @@ import pytest
 from zog.host_deploy import image_build_lanes
 from zog.host_deploy.gateway import (
     github_dispatch, simple_forward, image_build_dispatch, fonts_owner_sender,
-    image_build_execution,
+    fonts_inspection_owner, image_build_execution,
 )
 from zog.host_deploy.gateway.consumer import GatewayConsumer
 from zog.host_deploy.gateway.ledger import (
@@ -124,6 +124,46 @@ def forwarding(tmp_path, monkeypatch):
                         lambda root, operation_id, **kwargs:
                         kwargs["host"].submit_command(
                             kwargs["script"], seconds=kwargs["seconds"]))
+    # The transport fixture's old incomplete binding is intentionally not a
+    # Project-current admission fixture. Stub only that upstream selection;
+    # exercise the real durable inspection-owner journal and recovery path.
+    monkeypatch.setattr(
+        fonts_inspection_owner, "_validation",
+        lambda root, request_id, binding, target, original_command_id,
+               pipeline_id, script, host: {
+            "schema": fonts_inspection_owner.SCHEMA,
+            "request_id": request_id, "original_command_id": original_command_id,
+            "target": target, "project_root": binding["project_root"],
+            "python_executable": binding["python_executable"],
+            "pipeline_id": pipeline_id,
+            "frozen_binding_sha256": "d" * 64,
+            "script_sha256": __import__("hashlib").sha256(
+                script.encode("utf-8")).hexdigest(),
+            "timeout_seconds": 120,
+        })
+    class InspectionJournal:
+        intents = {}
+        commands = {}
+
+        def inspect(self, operation_id):
+            return (self.intents.get(operation_id),
+                    self.commands.get(operation_id), None)
+
+        def submit_once(self, *, operation_id, request_sha256, script,
+                        target, seconds, sender):
+            assert operation_id not in self.intents
+            self.intents[operation_id] = {
+                "request_sha256": request_sha256,
+                "script_sha256": __import__("hashlib").sha256(
+                    script.encode("utf-8")).hexdigest(), "target": target}
+            command_id = sender.submit_command(script, seconds=seconds)
+            self.commands[operation_id] = {"command_id": command_id}
+            return command_id
+
+        def close(self):
+            pass
+    monkeypatch.setattr(fonts_inspection_owner, "_owner_factory",
+                        lambda factory: InspectionJournal)
     class Host:
         def __init__(self, config):
             assert config == TARGET
