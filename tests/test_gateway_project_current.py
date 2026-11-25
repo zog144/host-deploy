@@ -979,6 +979,7 @@ def test_current_protected_script_fails_before_pipeline_or_request_write(
     spec, record = selected(root, controller, historic=False)
     request = project_current.binding(intent("e" * 32), record, spec, target())
     original_controller = controller.read_bytes()
+    selected_revision = git(source, "rev-parse", "HEAD")
     if damage == "different-content":
         controller.write_text('{"foreign":"controller"}')
     elif damage == "symlink":
@@ -1014,17 +1015,18 @@ def test_current_protected_script_fails_before_pipeline_or_request_write(
     if damage == "git-env-overrides":
         assert result.returncode == 0, result.stderr
         assert '"source_revision":"' in result.stdout
-        assert git(source, "rev-parse", "HEAD") != git(
-            other, "rev-parse", "HEAD")
-        # The printed source revision is authenticated by the controller
-        # preflight's minimal Git env, not by inherited GIT_DIR overrides.
+        assert selected_revision in result.stdout
+        assert selected_revision != subprocess.check_output(
+            ["/usr/bin/git", "-C", str(other), "rev-parse", "HEAD"],
+            text=True, env={"PATH": "/usr/bin:/bin"}).strip()
+        # The printed source revision is selected from the actual Project
+        # despite inherited GIT_DIR/GIT_WORK_TREE overrides.
     else:
         assert result.returncode != 0
         assert not (root / "gateway-requests").exists()
-    assert controller.read_bytes() == (
-        original_controller if damage in ("git-env-overrides", "foreign-hardlink",
-                                          "redirected-git", "writable") else
-        controller.read_bytes())
+    if damage in ("git-env-overrides", "foreign-hardlink", "redirected-git",
+                  "writable"):
+        assert controller.read_bytes() == original_controller
 
 
 def test_historical_frozen_project_current_script_bytes_are_unchanged(tmp_path):
