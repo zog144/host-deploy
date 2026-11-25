@@ -1,6 +1,7 @@
 """No-replay historical CommandId inspection, bound to existing root journal."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ def sha(value):
 class FakeSSM:
     def __init__(self, entries):
         self.entries = entries
+        self.meta = SimpleNamespace(region_name="us-east-1")
         self.calls = []
         self.status_override = None
         self.script_override = None
@@ -293,3 +295,33 @@ def test_missing_original_root_journal_is_hold_without_creating_it(tmp_path):
         with historic._journal(journal):
             pass
     assert not journal.exists()
+
+
+
+def test_real_ssm_client_region_cannot_be_spoofed_by_caller(tmp_path, monkeypatch):
+    data = prepared(tmp_path, monkeypatch)
+    root, approvals, journal, witness, proof, digest, ssm, sts = data
+    ssm.meta.region_name = "us-west-2"
+    with pytest.raises(historic.HistoricalHold, match="credential account/region"):
+        observe(data)
+    assert not ssm.calls
+
+
+def test_protected_original_witness_change_during_aws_readback_is_hold(
+        tmp_path, monkeypatch):
+    data = prepared(tmp_path, monkeypatch)
+    root, approvals, journal, witness, proof, digest, ssm, sts = data
+    original = ssm.get_command_invocation
+
+    def mutate_after_first_existing_read(**kwargs):
+        result = original(**kwargs)
+        # Intentional test fixture mutation, never performed by the auditor.
+        altered = json.loads(proof.read_bytes())
+        altered["commands"][0]["script_sha256"] = "f"*64
+        proof.write_bytes(historic._canonical(altered) + b"\n")
+        return result
+
+    ssm.get_command_invocation = mutate_after_first_existing_read
+    with pytest.raises(historic.HistoricalHold, match="evidence digest"):
+        observe(data)
+    assert "send_command" not in [name for name, _ in ssm.calls]
