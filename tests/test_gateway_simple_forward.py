@@ -668,3 +668,66 @@ def test_ssm_outer_timeout_then_read_only_reconcile_recovers_same_pipeline_witho
     assert again["pipeline_id"] == "c" * 32
     assert load_request(root, REQUEST_ID)["states"]["completion"] == "running"
     assert len(counters["send"]) == 1
+
+
+@pytest.mark.parametrize("failure", [
+    "wrong-command", "wrong-compiler", "forged-terminal", "tampered-digest",
+    "wrong-project-owner",
+])
+def test_split_host_rejects_forged_ssm_and_observation(forwarding, failure):
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _owned_project_files(binding)
+    class Altered(Host):
+        def inspect_command(self, command_id):
+            result = dict(super().inspect_command(command_id))
+            if not command_id.startswith("inspection-"):
+                return result
+            if failure == "wrong-command":
+                result["CommandId"] = "other-command"
+            elif failure == "wrong-compiler":
+                result["InstanceId"] = "i-aaaaaaaaaaaaaaaaa"
+            else:
+                observation = json.loads(result["StandardOutputContent"])
+                if failure == "forged-terminal":
+                    observation.update(
+                        terminal_confirmed=True, uncertainty=False,
+                        producer_status="completed", terminal_outcome="success")
+                elif failure == "tampered-digest":
+                    observation["evidence"]["pipeline_sha256"] = "0" * 64
+                else:
+                    observation["project_owner_uid"] += 123
+                result["StandardOutputContent"] = json.dumps(observation)
+            return result
+    with pytest.raises(simple_forward.ForwardingDenied):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Altered)
+    assert len(counters["send"]) == 1
+    assert load_dispatch(root, REQUEST_ID)["command_id"] == "command-123"
+    assert not (root / "requests" / REQUEST_ID / "remote-result.json").exists()
+
+
+def test_split_host_incomplete_attempt_and_historical_failure_never_replay(
+        forwarding):
+    from zog.host_deploy.gateway.ledger import mark_completion
+    root, value, binding, Host, counters = forwarding
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    simple_forward.advance(root, REQUEST_ID, host_factory=Host)
+    _, _, pipeline_path = _owned_project_files(binding)
+    state = json.loads(pipeline_path.read_text())
+    state.update(status="complete", generation="a" * 64)
+    pipeline_path.write_text(json.dumps(state))
+    with pytest.raises(simple_forward.ForwardingDenied):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert len(counters["read_only_probes"]) == 1
+    assert len(counters["send"]) == 1
+    mark_completion(root, REQUEST_ID, "failed")
+    with pytest.raises(simple_forward.ForwardingDenied, match="historical"):
+        simple_forward.reconcile_project_observation(
+            root, REQUEST_ID, host_factory=Host)
+    assert len(counters["read_only_probes"]) == 1
+    assert len(counters["send"]) == 1
