@@ -4,7 +4,10 @@ Mock only AWS and the actual installed workspace/SSM remote executor; the
 authorization/parser, SQS dedup, durable ledger and recovery are real.
 """
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -72,7 +75,8 @@ def direct_binding(value):
         "schema": 4, "direct_forward": True,
         "request_id": value["request_id"],
         "workspace_id": WORKSPACE, "lane": "gateway-first-fonts-runtime",
-        "project_root": "/var/lib/zog/image-build-lanes/gateway-first-fonts-runtime",
+        "project_root": "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime",
+        "python_executable": sys.executable,
         "target": TARGET, "source": SOURCE,
         "remote_request": {
             "schema": "image-build-remote-operation-v1",
@@ -94,10 +98,12 @@ def forwarding(tmp_path, monkeypatch):
     value = approved()
     admit(root, value)
     binding = direct_binding(value)
-    # This is the same selected Project on the Gateway Host. Recovery
-    # must read its actual files; it may not consume an external dict.
-    binding["project_root"] = str(tmp_path / "selected-project")
-    counters = {"send": [], "inspect": [], "new_host": []}
+    # The synthetic compiler Project is only inspected through FakeHost SSM.
+    binding["project_root"] = str(tmp_path / "remote-compiler-project")
+    monkeypatch.setattr(simple_forward, "FIRST_FONTS_COMPILER_PROJECT_UID",
+                        os.geteuid())
+    counters = {"send": [], "inspect": [], "new_host": [],
+                "read_only_probes": [], "probe_results": {}}
     def prepared(gateway, request_id, *, direct_forward):
         assert gateway == root and request_id == value["request_id"]
         assert direct_forward is True
