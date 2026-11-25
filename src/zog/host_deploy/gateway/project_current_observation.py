@@ -28,6 +28,14 @@ REV = re.compile(r"[0-9a-f]{40}")
 RESULT_SCHEMA = "image-build-remote-result-v1"
 OBSERVATION_SCHEMA = "host-deploy-project-current-observation-v1"
 FIXED_TARGETS = ["libpng-final", "freetype-final", "fontconfig-final"]
+GENERATION = re.compile(r"[0-9a-f]{64}")
+ATTEMPT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+
+def digest(value):
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("ascii")).hexdigest()
+
 
 def read_json(path, maximum=1048576):
     try:
@@ -62,7 +70,32 @@ def observe(project, operation_id, expected_pipeline_id=None):
                 and (type(expected_pipeline_id) is not str
                      or not OP.fullmatch(expected_pipeline_id)))):
         raise ValueError("invalid selected Project or operation identity")
-    request = read_json(project / "gateway-requests" / operation_id / "request.json")
+    # Read only the selected Project: reject symlinked, foreign-owned or
+    # writable-by-other directory components and data files. The Gateway
+    # must run this on the actual selected Host; an arbitrary JSON object
+    # supplied over SQS/HTTP is never accepted as evidence.
+    def read(path, maximum=1048576):
+        try:
+            relative = path.relative_to(project)
+        except ValueError as error:
+            raise ValueError("observation escaped selected Project") from error
+        current = project
+        for part in (None, *relative.parts):
+            if part is not None:
+                current = current / part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                return None
+            if (stat.S_ISLNK(info.st_mode)
+                    or info.st_uid != os.geteuid()
+                    or (info.st_mode & 0o022)
+                    or (not stat.S_ISDIR(info.st_mode) if current != path
+                        else not stat.S_ISREG(info.st_mode))):
+                raise ValueError("unsafe selected Project evidence custody")
+        return read_json(path, maximum)
+
+    request = read(project / "gateway-requests" / operation_id / "request.json")
     if (request is None or request.get("schema") != "image-build-remote-operation-v1"
             or request.get("operation_id") != operation_id
             or request.get("operation") != "pipeline.submit"
@@ -75,10 +108,10 @@ def observe(project, operation_id, expected_pipeline_id=None):
         raise ValueError("retained Project-current original request differs")
     revision = request["source"]["revision"]
     op_dir = project / "state/image-build/remote-operations" / operation_id
-    producer_request = read_json(op_dir / "request.json")
+    producer_request = read(op_dir / "request.json")
     if producer_request is not None and producer_request != request:
         raise ValueError("producer request differs from retained operation")
-    binding = read_json(op_dir / "binding.json")
+    binding = read(op_dir / "binding.json")
     pipeline_id = None
     if binding is not None:
         pipeline_id = binding.get("pipeline_id")
@@ -99,7 +132,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
             count += 1
             if count > 4096:
                 raise ValueError("Project pipeline observation scan exceeds limit")
-            record = read_json(path)
+            record = read(path)
             owner = record.get("owner") if record is not None else None
             if (type(owner) is dict
                     and owner.get("contract") == request["schema"]
@@ -115,7 +148,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
             pipeline_id = matches[0]
     if expected_pipeline_id is not None and pipeline_id != expected_pipeline_id:
         raise ValueError("original operation does not own expected pipeline")
-    pipeline = (read_json(pipelines / pipeline_id / "pipeline.json")
+    pipeline = (read(pipelines / pipeline_id / "pipeline.json")
                 if pipeline_id is not None else None)
     if pipeline_id is not None:
         if pipeline is None:
@@ -128,7 +161,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
                 or owner.get("source_repository") != "zog144/image-build"
                 or owner.get("source_revision") != revision):
             raise ValueError("pipeline owner differs from immutable operation")
-    result = read_json(op_dir / "result.json", 131072)
+    result = read(op_dir / "result.json", 131072)
     if result is not None:
         if (result.get("schema") != RESULT_SCHEMA
                 or result.get("operation_id") != operation_id
@@ -137,17 +170,66 @@ def observe(project, operation_id, expected_pipeline_id=None):
                 or result.get("source_repository") != "zog144/image-build"
                 or result.get("pipeline_id") != pipeline_id):
             raise ValueError("producer result differs from original pipeline")
-    status = result.get("status") if result is not None else "unreconciled"
-    terminal = bool(
-        result is not None and result.get("uncertainty") is False
-        and ((status == "completed" and result.get("terminal_outcome") == "success"
-              and pipeline is not None and pipeline.get("status") == "complete")
-             or (status == "failed" and result.get("terminal_outcome") is not None))
-    )
-    attempts = (pipeline.get("attempts") if pipeline is not None else None)
-    attempt_ids = sorted(attempts.values())[:24] if type(attempts) is dict else []
-    if any(type(x) is not str or len(x) > 128 for x in attempt_ids):
+    # image-build's only source-supported terminal success publication
+    # is its owned pipeline.json status=complete *after* all attempt status
+    # files are durably written complete for the same generation. Its
+    # original remote-operations/result.json may be absent or stale
+    # "pending" after an interrupted/timeout submit, so it is NOT a
+    # required success precondition and must never override pipeline state.
+    attempts = pipeline.get("attempts") if pipeline is not None else None
+    if pipeline is not None:
+        if (pipeline.get("schema") != 1
+                or pipeline.get("operation") != "image"
+                or pipeline.get("arguments", {}).get("targets") != FIXED_TARGETS
+                or type(attempts) is not dict or len(attempts) > 128):
+            raise ValueError("owned Fonts pipeline structure differs")
+    attempt_ids = sorted(attempts.values()) if type(attempts) is dict else []
+    if any(type(x) is not str or not ATTEMPT.fullmatch(x) for x in attempt_ids):
         raise ValueError("invalid retained pipeline attempt identity")
+    evidence = {
+        "request_sha256": digest(request),
+        "producer_request_sha256": digest(producer_request)
+            if producer_request is not None else None,
+        "binding_sha256": digest(binding) if binding is not None else None,
+        "pipeline_sha256": digest(pipeline) if pipeline is not None else None,
+        "result_sha256": digest(result) if result is not None else None,
+        "attempt_statuses": {},
+    }
+    complete = False
+    if pipeline is not None and pipeline.get("status") == "complete":
+        generation = pipeline.get("generation")
+        if (type(generation) is not str or not GENERATION.fullmatch(generation)
+                or not attempt_ids or len(set(attempt_ids)) != len(attempt_ids)):
+            raise ValueError("completed pipeline lacks unique bounded generation/attempts")
+        for attempt_id in attempt_ids:
+            observed = read(project / "state/image-build/attempts" / attempt_id
+                            / "status.json", 131072)
+            if (observed is None or observed.get("status") != "complete"
+                    or observed.get("generation") != generation):
+                raise ValueError("completed pipeline attempt evidence missing or differs")
+            evidence["attempt_statuses"][attempt_id] = digest(observed)
+        complete = True
+    # An image-build-owned terminal command failure is confirmed only when
+    # its original producer result exists and the pipeline is *not running*.
+    # Pending/unknown executions must not become terminal Gateway failure.
+    failure = bool(
+        result is not None and result.get("status") == "failed"
+        and result.get("uncertainty") is False
+        and type(result.get("terminal_outcome")) is str
+        and bool(result["terminal_outcome"])
+        and type(result.get("failure")) is dict
+        and result["failure"].get("kind") == "command-exit"
+        and pipeline is not None and pipeline.get("status") == "pending"
+    )
+    terminal = complete or failure
+    status = ("completed" if complete else
+              "failed" if failure else
+              result.get("status") if result is not None else "unreconciled")
+    if not terminal and status in ("completed", "failed"):
+        status = "pending"
+    outcome = ("success" if complete else
+               result["terminal_outcome"] if failure else None)
+    evidence["evidence_sha256"] = digest(evidence)
     return {
         "schema": OBSERVATION_SCHEMA,
         "project_root": str(project),
@@ -157,8 +239,10 @@ def observe(project, operation_id, expected_pipeline_id=None):
         "pipeline_id": pipeline_id,
         "pipeline_status": pipeline.get("status") if pipeline is not None else None,
         "attempt_ids": attempt_ids,
+        "evidence": evidence,
+        "evidence_source": "local-selected-project",
         "producer_status": status,
-        "terminal_outcome": result.get("terminal_outcome") if terminal else None,
+        "terminal_outcome": outcome,
         "terminal_confirmed": terminal,
         "uncertainty": not terminal,
         "mutation": False,
@@ -189,3 +273,25 @@ def read_only_observation_script(project_root, python_executable, request_id,
         python, "-I", "-B", "-c", code, str(project), request_id,
         pipeline_id if pipeline_id is not None else "-",
     ))
+
+
+def observe_selected_project(project_root, request_id, *, pipeline_id=None):
+    """Read actual local selected-Host evidence; never accept supplied status.
+
+    Invoke this only from the trusted Gateway administrator running on the
+    selected Host. A different Host lacks the selected Project root and
+    cannot satisfy the retained ownership/source/attempt checks. The
+    embedded, reviewed standard-library observer executes *only* local
+    read-only filesystem calls; no producer/module import, subprocess,
+    SendCommand or controller action is made.
+    """
+    from .project_current import _path, IDENTITY
+    project = _path(project_root)
+    if (type(request_id) is not str or not IDENTITY.fullmatch(request_id)
+            or (pipeline_id is not None and
+                (type(pipeline_id) is not str or
+                 not IDENTITY.fullmatch(pipeline_id)))):
+        raise ValueError("invalid original Project-current observation identity")
+    namespace = {"__builtins__": __builtins__}
+    exec(_OBSERVER, namespace)
+    return namespace["observe"](str(project), request_id, pipeline_id)
