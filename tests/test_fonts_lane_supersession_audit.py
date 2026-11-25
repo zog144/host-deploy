@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from test_fonts_lane_mixed_recovery import fixture
+from test_fonts_lane_mixed_recovery import fixture as _mixed_state_fixture
 from zog.host_deploy import (
     fonts_lane_supersession_audit as audit,
     fonts_lane_recovery as recovery,
@@ -15,6 +15,15 @@ from zog.host_deploy import (
     image_build_lanes as lanes,
 )
 from zog.host_deploy.workspace import save
+
+
+def fixture(tmp_path):
+    root, workspace, host, record, spec, approvals = _mixed_state_fixture(tmp_path)
+    path = root / migration.INTENT
+    intent = json.loads(path.read_text())
+    intent["initialization_manifest_sha256"] = audit.EXPECTED_INITIALIZATION_MANIFEST
+    save(path, intent)
+    return root, workspace, host, record, spec, approvals
 
 
 def _expect(root, approvals):
