@@ -7,6 +7,11 @@ on:
       - src/zog/host_deploy/image_build_lanes.py
       - src/zog/host_deploy/existing_project_runtime.py
       - src/zog/host_deploy/gateway/project_current.py
+      - src/zog/host_deploy/fonts_lane_recovery.py
+      - src/zog/host_deploy/fonts_lane_migration.py
+      - src/zog/host_deploy/fonts_lane_profile.py
+      - src/zog/host_deploy/cli.py
+      - tests/test_fonts_lane_mixed_recovery.py
       - src/zog/host_deploy/gateway/project_current_observation.py
       - src/zog/host_deploy/gateway/simple_forward.py
       - src/zog/host_deploy/gateway/fonts_owner_sender.py
@@ -47,6 +52,7 @@ jobs:
           python -m compileall -q src/zog/host_deploy tests/test_gateway_project_current.py
           python -m pytest -q tests/test_gateway_fonts_protected_sender.py \
             tests/test_gateway_project_current.py \
+            tests/test_fonts_lane_mixed_recovery.py \
             tests/test_gateway_project_current_real_resume.py \
             tests/test_existing_project_lane.py tests/test_image_build_lanes.py \
             tests/test_gateway_simple_forward.py tests/test_gateway_first_fonts_issue_event.py \
