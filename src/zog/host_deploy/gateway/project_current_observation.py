@@ -209,6 +209,17 @@ def observe(project, operation_id, expected_pipeline_id=None):
                 raise ValueError("completed pipeline attempt evidence missing or differs")
             evidence["attempt_statuses"][attempt_id] = digest(observed)
         complete = True
+    # Bound cross-file observation: a resumed producer must not race this
+    # readback by changing the pipeline or binding while attempt status
+    # records are being inspected. Refuse the mixed snapshot rather than
+    # claiming a terminal outcome from different moments in time.
+    if pipeline_id is not None:
+        refreshed = read(pipelines / pipeline_id / "pipeline.json")
+        if refreshed != pipeline:
+            raise ValueError("owned pipeline changed during observation")
+    if read(op_dir / "binding.json") != binding:
+        raise ValueError("original producer pipeline binding changed")
+
     # An image-build-owned terminal command failure is confirmed only when
     # its original producer result exists and the pipeline is *not running*.
     # Pending/unknown executions must not become terminal Gateway failure.
