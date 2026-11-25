@@ -207,3 +207,85 @@ def test_cli_supersession_inspect_is_nonauthorizing(tmp_path, monkeypatch, capsy
     assert report["mutation"] is False
     assert report["ssm_send_authorized"] is False
     assert _snapshot(root) == before
+
+
+
+def test_native_pair_inventory_command_is_only_a_candidate(tmp_path):
+    from zog.host_deploy import fonts_lane_supersession_native as native
+    root, ws, host, record, spec, approvals = fixture(tmp_path)
+    report = _expect(root, approvals)
+    script = native.native_read_only_script(report)
+    assert "python3 -I -B -c " in script
+    assert "source" in script
+    assert "controller-inherited-v1.json" in script
+    assert "pipeline.submit" not in script
+    assert "pipeline.resume" not in script
+    assert "send_command" not in script
+    assert "subprocess.run(command" in script  # fixed Git rev-parse only
+    assert native.candidate_script_sha256(report) == hashlib.sha256(
+        script.encode("utf-8")).hexdigest()
+    changed = dict(report, selected_controller_path="/tmp/injected.py")
+    with pytest.raises(ValueError):
+        native.native_read_only_script(changed)
+    changed = dict(report, execution_authorized=True)
+    with pytest.raises(ValueError):
+        native.native_read_only_script(changed)
+
+
+def test_native_pair_observer_runs_on_disposable_projects_without_any_write(tmp_path):
+    """The separate native source inspection returns conflicts as diagnostics."""
+    import shlex
+    import subprocess
+    from zog.host_deploy import fonts_lane_supersession_native as native
+    current = tmp_path / "certbot-seed"
+    prior = tmp_path / "initialized-original"
+    for project in (current, prior):
+        source = project / "source"
+        source.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "-c", "user.name=Test",
+                        "-c", "user.email=example@example.org",
+                        "commit", "--allow-empty", "-qm", "fixture"], check=True)
+    (current / "controller-gateway-first-fonts-runtime-inherited-v1.json").write_bytes(
+        b'{"selected":"certbot-seed"}\n')
+    (prior / "controller-inherited-v1.json").write_bytes(
+        b'{"historical":"different-controller"}\n')
+    (prior / ".first-fonts-initialization-v1.json").write_bytes(
+        b'{"manifest":"prior-revision"}\n')
+    initial = _snapshot(tmp_path)
+    values = (
+        "ACTIVE=" + repr(str(current)) + "\n"
+        "DESTINATION=" + repr(str(prior)) + "\n"
+        "ACTIVE_CONTROLLER=" +
+        repr("controller-gateway-first-fonts-runtime-inherited-v1.json") + "\n"
+        "EXPECTED_ACTIVE_CONTROLLER=" + repr("a" * 64) + "\n"
+        "EXPECTED_MANIFEST=" + repr("b" * 64) + "\n"
+        "COMPILER_INSTANCE=" + repr(recovery.COMPILER_INSTANCE) + "\n"
+        "WORKSPACE_ID=" + repr("e"*32) + "\n"
+    )
+    command = "python3 -I -B -c " + shlex.quote(values + native._OBSERVER)
+    done = subprocess.run(command, shell=True, capture_output=True,
+                          text=True, timeout=15)
+    assert done.returncode == 0, done.stderr
+    observed = json.loads(done.stdout)
+    assert observed["status"] == "diagnostic-only"
+    assert observed["active"]["project_root"] == str(current)
+    assert observed["active"]["controller_present"] is True
+    assert observed["initialized_destination"]["controller_present"] is True
+    assert observed["active"]["controller_sha256"] != (
+        observed["initialized_destination"]["controller_sha256"])
+    assert observed["initialized_destination"]["manifest_sha256"] == hashlib.sha256(
+        (prior / ".first-fonts-initialization-v1.json").read_bytes()).hexdigest()
+    assert len(observed["active"]["source_head"]) == 40
+    assert observed["compilation_authorized"] is False
+    assert observed["ssm_send_authorized"] is False
+    assert _snapshot(tmp_path) == initial
+
+    parent = tmp_path / "redirect"
+    parent.symlink_to(current, target_is_directory=True)
+    altered = values.replace(repr(str(current)), repr(str(parent)))
+    nofollow = subprocess.run("python3 -I -B -c " +
+                              shlex.quote(altered + native._OBSERVER),
+                              shell=True, capture_output=True, text=True, timeout=15)
+    assert nofollow.returncode != 0
+    assert "symlink or foreign Project ancestry" in nofollow.stderr
