@@ -9,6 +9,8 @@ on:
       - src/zog/host_deploy/gateway/project_current.py
       - src/zog/host_deploy/fonts_lane_recovery.py
       - src/zog/host_deploy/fonts_lane_supersession_audit.py
+      - src/zog/host_deploy/fonts_lane_historical_ssm_readback.py
+      - tests/test_fonts_lane_historical_ssm_readback.py
       - tests/test_fonts_lane_supersession_audit.py
       - src/zog/host_deploy/fonts_lane_migration.py
       - src/zog/host_deploy/fonts_lane_profile.py
@@ -56,6 +58,7 @@ jobs:
             tests/test_gateway_project_current.py \
             tests/test_fonts_lane_mixed_recovery.py \
             tests/test_fonts_lane_supersession_audit.py \
+            tests/test_fonts_lane_historical_ssm_readback.py \
             tests/test_gateway_project_current_real_resume.py \
             tests/test_existing_project_lane.py tests/test_image_build_lanes.py \
             tests/test_gateway_simple_forward.py tests/test_gateway_first_fonts_issue_event.py \
