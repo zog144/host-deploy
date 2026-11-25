@@ -129,12 +129,33 @@ def forwarding(tmp_path, monkeypatch):
             assert config == TARGET
             counters["new_host"].append(config)
         def submit_command(self, script, seconds):
+            if seconds == 120:
+                # Simulated read-only SSM execution on a different Host.
+                assert script.startswith(sys.executable + " -I -B -c ")
+                assert "gateway-requests" in script
+                assert "subprocess" not in script
+                assert "pipeline.resume" not in script
+                assert "send_command" not in script
+                observed = subprocess.run(script, shell=True,
+                                          capture_output=True, text=True, timeout=10)
+                identity = "inspection-" + str(
+                    len(counters["read_only_probes"]) + 1)
+                counters["read_only_probes"].append((identity, script))
+                counters["probe_results"][identity] = {
+                    "CommandId": identity, "InstanceId": TARGET["instance_id"],
+                    "Status": "Success" if observed.returncode == 0 else "Failed",
+                    "StandardOutputContent": observed.stdout,
+                    "StandardErrorContent": observed.stderr,
+                }
+                return identity
             assert script == "fixed-reviewed-remote-script"
             assert seconds == simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS
             counters["send"].append(script)
             return "command-123"
         def inspect_command(self, command_id):
             counters["inspect"].append(command_id)
+            if command_id in counters["probe_results"]:
+                return counters["probe_results"][command_id]
             return {"CommandId": command_id,
                     "InstanceId": TARGET["instance_id"],
                     "Status": "Success",
@@ -559,7 +580,7 @@ def test_project_current_observation_is_same_pipeline_and_never_resubmits(forwar
             "terminal_confirmed": True, "producer_status": "completed",
         })
     assert simple_forward.reconcile_project_observation(
-        root, REQUEST_ID)["phase"] == "running"
+        root, REQUEST_ID, host_factory=Host)["phase"] == "running"
     assert len(counters["send"]) == 1
 
     for mutation in ("foreign-owner", "changed-source", "foreign-pipeline"):
@@ -575,7 +596,7 @@ def test_project_current_observation_is_same_pipeline_and_never_resubmits(forwar
             altered["pipeline_id"] = "f" * 32
         path.write_text(json.dumps(altered))
         with pytest.raises(simple_forward.ForwardingDenied):
-            simple_forward.reconcile_project_observation(root, REQUEST_ID)
+            simple_forward.reconcile_project_observation(root, REQUEST_ID, host_factory=Host)
         path.write_bytes(original)
     # Forged terminal producer output cannot replace the *running*
     # pipeline evidence, even when the original request/result IDs match.
@@ -589,14 +610,14 @@ def test_project_current_observation_is_same_pipeline_and_never_resubmits(forwar
         "uncertainty": False,
     }))
     assert simple_forward.reconcile_project_observation(
-        root, REQUEST_ID)["phase"] == "running"
+        root, REQUEST_ID, host_factory=Host)["phase"] == "running"
     (operation_dir / "result.json").unlink()
 
     # Only actual completion in image-build's pipeline and attempt records
     # can create the terminal Gateway receipt; original SSM output and
     # original submit result are not modified or replayed.
     _complete_owned_pipeline(project, pipeline_path)
-    complete = simple_forward.reconcile_project_observation(root, REQUEST_ID)
+    complete = simple_forward.reconcile_project_observation(root, REQUEST_ID, host_factory=Host)
     assert complete["phase"] == "completed"
     assert len(counters["send"]) == 1
     assert load_request(root, REQUEST_ID)["states"]["completion"] == "completed"
@@ -630,7 +651,7 @@ def test_ssm_outer_timeout_then_read_only_reconcile_recovers_same_pipeline_witho
     reconcile_dispatch(root, REQUEST_ID)
     _owned_project_files(binding)
     resumed = simple_forward.reconcile_project_observation(
-        root, REQUEST_ID)
+        root, REQUEST_ID, host_factory=Host)
     assert resumed["phase"] == "running"
     assert resumed["pipeline_id"] == "c" * 32
     assert load_dispatch(root, REQUEST_ID)["command_id"] == "command-123"
