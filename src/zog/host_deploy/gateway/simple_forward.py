@@ -257,13 +257,42 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
             (type(expected_pipeline) is not str
              or not IDENTITY.fullmatch(expected_pipeline))):
         raise ForwardingDenied("retained pipeline identity is invalid")
+    # This new, fixed SSM command only inspects the frozen compiler Host.
+    # Its identity is distinct from the protected original Task C build send.
+    script = read_only_observation_script(
+        binding["project_root"], binding["python_executable"], request_id,
+        pipeline_id=expected_pipeline)
     try:
-        observation = observe_selected_project(
-            binding["project_root"], request_id, pipeline_id=expected_pipeline
-        )
-    except (OSError, ValueError, KeyError, TypeError) as error:
+        host = host_factory(config)
+        inspection_id = host.submit_command(script, seconds=120)
+        if (type(inspection_id) is not str or not inspection_id
+                or len(inspection_id) > 128):
+            raise ValueError("invalid read-only SSM inspection CommandId")
+        deadline = time.monotonic() + 210
+        observed_ssm = None
+        while time.monotonic() < deadline:
+            observed_ssm = host.inspect_command(inspection_id)
+            if observed_ssm is not None:
+                if (type(observed_ssm) is not dict
+                        or observed_ssm.get("CommandId") != inspection_id
+                        or observed_ssm.get("InstanceId") != config["instance_id"]
+                        or observed_ssm.get("Status") not in
+                            (_RUNNING | set(_TERMINAL))):
+                    raise ValueError("read-only SSM command/Host identity differs")
+                if observed_ssm["Status"] in _TERMINAL:
+                    break
+            time.sleep(2)
+        if observed_ssm is None or observed_ssm.get("Status") != "Success":
+            raise ValueError("read-only SSM inspection not confirmed successful")
+        raw = observed_ssm.get("StandardOutputContent")
+        if (type(raw) is not str or not raw.strip()
+                or len(raw.encode("utf-8")) > 131072):
+            raise ValueError("read-only SSM output missing or oversized")
+        observation = json.loads(raw.strip())
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+            TimeoutError) as error:
         raise ForwardingDenied(
-            "selected Host Project evidence cannot be authenticated: " +
+            "selected compiler SSM read-only inspection is uncertain: " +
             str(error)) from error
 
     if (type(observation) is not dict
