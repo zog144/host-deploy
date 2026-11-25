@@ -113,7 +113,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
                     return None
                 if info.st_uid not in allowed_evidence_uids or info.st_mode & 0o022:
                     os.close(next_fd)
-                    raise ValueError("unsafe selected Project evidence directory")
+                    raise ValueError("unsafe selected Project evidence custody: directory")
                 os.close(current_fd)
                 current_fd = next_fd
             name = relative.parts[-1]
@@ -125,7 +125,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
                     or expected.st_uid not in allowed_evidence_uids
                     or expected.st_mode & 0o022 or expected.st_nlink != 1
                     or not 0 < expected.st_size <= maximum):
-                raise ValueError("unsafe selected Project evidence file")
+                raise ValueError("unsafe selected Project evidence custody: file")
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW |
                          os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=current_fd)
             try:
