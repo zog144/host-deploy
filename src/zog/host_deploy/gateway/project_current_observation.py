@@ -75,9 +75,16 @@ def observe(project, operation_id, expected_pipeline_id=None):
     # custody by the PROJECT owner, never by the observer's effective UID.
     root_metadata = project.lstat()
     project_owner_uid = root_metadata.st_uid
+    observer_uid = os.geteuid()
     if (not stat.S_ISDIR(root_metadata.st_mode)
-            or root_metadata.st_mode & 0o022):
+            or root_metadata.st_mode & 0o022
+            or observer_uid not in (0, project_owner_uid)):
         raise ValueError("selected compiler Project root custody is unsafe")
+    # A kernel-authenticated root producer can write root-owned state under
+    # the UID24201-owned Project. Reject third-party evidence owners.
+    allowed_evidence_uids = {project_owner_uid}
+    if observer_uid == 0:
+        allowed_evidence_uids.add(0)
     def read(path, maximum=1048576):
         try:
             relative = path.relative_to(project)
@@ -92,7 +99,9 @@ def observe(project, operation_id, expected_pipeline_id=None):
             except FileNotFoundError:
                 return None
             if (stat.S_ISLNK(info.st_mode)
-                    or info.st_uid != project_owner_uid
+                    or (info.st_uid not in
+                        ({project_owner_uid} if current == project
+                         else allowed_evidence_uids))
                     or (info.st_mode & 0o022)
                     or (not stat.S_ISDIR(info.st_mode) if current != path
                         else not stat.S_ISREG(info.st_mode))):
