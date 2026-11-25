@@ -116,7 +116,9 @@ def binding(request, record, spec, host):
     from .. import existing_project_runtime as existing
     value = {
         "schema": SCHEMA,
-        "controller_sha256": hashlib.sha256(existing.expected_bytes(spec)).hexdigest(),
+        **({"controller_sha256":
+                hashlib.sha256(existing.expected_bytes(spec)).hexdigest()}
+           if spec.get("project_selection") == "existing" else {}),
         "kind": REMOTE_SCHEMA,
         "direct_forward": True,
         "request_id": request["request_id"],
@@ -576,13 +578,19 @@ _CURRENT_RUN_MARKER = '''    command = subprocess.run(
     revision = command.stdout.strip()'''
 if _RUN.count(_CURRENT_RUN_MARKER) != 1:
     raise RuntimeError("Project-current preflight source insertion point differs")
-_RUN_CURRENT = _RUN.replace(_CURRENT_RUN_MARKER, _CURRENT_CONTROLLER_PREFLIGHT)
+def _current_runtime_script():
+    # The original _RUN may be patched in a disposable timeout fixture.
+    # Compose from the active original script without changing its bytes
+    # for already frozen historical dispatches.
+    if _RUN.count(_CURRENT_RUN_MARKER) != 1:
+        raise RuntimeError("Project-current selected controller preflight cannot be injected")
+    return _RUN.replace(_CURRENT_RUN_MARKER, _CURRENT_CONTROLLER_PREFLIGHT)
 
 
 def remote_script(value):
     value = validate(value)
     newer = "controller_sha256" in value
-    script = _RUN_CURRENT if newer else _RUN
+    script = _current_runtime_script() if newer else _RUN
     arguments = (
         value["python_executable"], "-c", script,
         value["project_root"], value["controller_config"],
