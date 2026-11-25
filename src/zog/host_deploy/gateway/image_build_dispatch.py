@@ -223,7 +223,7 @@ def binding_for_request(
         raise RuntimeError("gateway does not own the request workspace")
 
     with locked_workspace(workspace) as locked:
-        _, host = configuration(locked)
+        workspace_record, host = configuration(locked)
         if host["workspace_id"] != request["workspace_id"]:
             raise RuntimeError("workspace host identity changed before dispatch")
         lane_record, lane_spec = _load_lane_locked(locked, lane)
@@ -235,7 +235,11 @@ def binding_for_request(
         if direct_forward:
             # The lane chooses Project + controller only. The installed
             # checkout and package pins are used at SSM execution time.
-            from .project_current import binding as project_binding
+            from .project_current import (
+                binding as project_binding, verify_approved_lane,
+            )
+            verify_approved_lane(locked, workspace_record, host,
+                                 lane_record, lane_spec)
             return project_binding(request, lane_record, lane_spec, host)
         companion = lane_record.get("runtime_companion")
         if companion is None:
@@ -379,8 +383,12 @@ def verify_current_target(gateway_root, binding):
     if workspace is None:
         raise RuntimeError("gateway no longer owns the bound workspace")
     with locked_workspace(workspace) as locked:
-        _, host = configuration(locked)
+        workspace_record, host = configuration(locked)
         lane_record, lane_spec = _load_lane_locked(locked, binding["lane"])
+        if binding.get("schema") == 4:
+            from .project_current import verify_approved_lane
+            verify_approved_lane(locked, workspace_record, host,
+                                 lane_record, lane_spec)
     if _target(host) != binding["target"]:
         raise RuntimeError("workspace host differs from prepared dispatch target")
     if binding.get("schema") == 4:
