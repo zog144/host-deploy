@@ -21,6 +21,8 @@ from . import image_build_lanes as lanes
 
 SCHEMA = "host-deploy-first-fonts-supersession-audit-v1"
 EXPECTED_ORIGINAL = recovery.RETAINED_OLD_SPEC_SHA
+# Read-only native Work's exact November 14 retained initializer record.
+EXPECTED_INITIALIZATION_MANIFEST = "535c0c283599c8ad3e256d4cdf8db5bb4b16bf1350dfec59de10ebde52d79cb7"
 DESTINATION = str(lanes.FIRST_FONTS_MIGRATED_ROOT)
 CURRENT = recovery.EXISTING_EXECUTION_PROJECT
 LANE = recovery.LANE
@@ -258,9 +260,8 @@ def _intent(value, binding, expected_corrected):
             value.get("historical_project_materialized") is not False or
             value.get("copy_performed") is not False or
             value.get("compiler_authorized") is not False or
-            type(value.get("initialization_manifest_sha256")) is not str or
-            not re.fullmatch("[0-9a-f]{64}",
-                             value["initialization_manifest_sha256"]) or
+            value.get("initialization_manifest_sha256") !=
+                EXPECTED_INITIALIZATION_MANIFEST or
             type(value.get("initialized_source_tree_sha256")) is not dict or
             set(value["initialized_source_tree_sha256"]) !=
                 {"source", "companions/box-control", "companions/build-record"} or
