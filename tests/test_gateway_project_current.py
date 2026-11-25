@@ -550,7 +550,11 @@ def main():
     if CREATE_PIPELINE:
         pipeline_id = "d" * 32
         record = {
-            "pipeline_id": pipeline_id, "status": "running",
+            "schema": 1, "pipeline_id": pipeline_id, "status": "running",
+            "operation": "image",
+            "arguments": {
+                "targets": ["libpng-final", "freetype-final", "fontconfig-final"],
+            },
             "owner": {
                 "contract": request["schema"],
                 "operation_id": operation,
@@ -622,18 +626,19 @@ def test_project_current_producer_timeout_keeps_original_pipeline_and_attempt(
     pipeline_file = (root / "state/image-build/pipelines" /
                      ("d" * 32) / "pipeline.json")
     pipeline_record = json.loads(pipeline_file.read_text())
-    pipeline_record["status"] = "complete"
+    generation = "9" * 64
+    attempt = "image-63dcd6a137f040bc9224dce166a916ed"
+    attempt_file = (root / "state/image-build/attempts" / attempt / "status.json")
+    attempt_file.parent.mkdir(parents=True)
+    attempt_file.write_text(json.dumps(
+        {"status": "complete", "generation": generation}))
+    pipeline_record.update({"status": "complete", "generation": generation})
     pipeline_file.write_text(json.dumps(pipeline_record))
-    producer_result = {
-        "schema": "image-build-remote-result-v1",
-        "operation_id": request_id, "operation_type": "pipeline.submit",
-        "source_repository": "zog144/image-build",
-        "source_revision": git(source, "rev-parse", "HEAD"),
-        "pipeline_id": "d" * 32, "status": "completed",
-        "terminal_outcome": "success", "uncertainty": False,
-    }
-    (root / "state/image-build/remote-operations" / request_id /
-     "result.json").write_text(json.dumps(producer_result))
+    # No result.json is written here. This is exactly the production case:
+    # image-build's durable pipeline/attempt reaches completion after
+    # submit had already timed out (or left a stale pending result).
+    assert not (root / "state/image-build/remote-operations" / request_id /
+                "result.json").exists()
     second = subprocess.run(
         read_only_observation_script(str(root), sys.executable, request_id,
                                      pipeline_id="d" * 32),
@@ -642,6 +647,9 @@ def test_project_current_producer_timeout_keeps_original_pipeline_and_attempt(
     complete = json.loads(second.stdout.strip())
     assert complete["terminal_confirmed"] is True
     assert complete["producer_status"] == "completed"
+    assert complete["terminal_outcome"] == "success"
+    assert complete["evidence"]["pipeline_sha256"]
+    assert complete["evidence"]["attempt_statuses"][attempt]
     assert complete["pipeline_id"] == observed["pipeline_id"]
     assert (root / "state/image-build/remote-operations" / request_id /
             "binding.json").read_bytes() == before
@@ -747,3 +755,46 @@ def test_producer_completion_not_terminal_if_pipeline_still_running(
     assert evidence["pipeline_status"] == "running"
     assert evidence["terminal_confirmed"] is False
     assert evidence["uncertainty"] is True
+
+
+def test_owned_completed_pipeline_without_attempt_completion_is_not_terminal(
+        tmp_path, monkeypatch):
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    root, source, controller = project(tmp_path)
+    _slow_durable_producer(root, source)
+    spec, record = selected(root, controller)
+    request_id = "4" * 32
+    binding = project_current.binding(intent(request_id), record, spec, target())
+    monkeypatch.setattr(project_current, "_RUN",
+                        project_current._RUN.replace("timeout=14400", "timeout=0.75"))
+    run = subprocess.run(project_current.remote_script(binding), shell=True,
+                         capture_output=True, text=True, timeout=12)
+    assert run.returncode == 0, run.stderr
+    pipeline = root / "state/image-build/pipelines" / ("d" * 32) / "pipeline.json"
+    payload = json.loads(pipeline.read_text())
+    payload.update({"status": "complete", "generation": "a" * 64})
+    pipeline.write_text(json.dumps(payload))
+    inspect = read_only_observation_script(str(root), sys.executable, request_id,
+                                           pipeline_id="d" * 32)
+    refused = subprocess.run(inspect, shell=True, capture_output=True,
+                             text=True, timeout=8)
+    assert refused.returncode != 0
+    assert "attempt evidence missing" in refused.stderr
+    # Even a counterfeit terminal producer result cannot replace the
+    # actual attempt and pipeline generation readback.
+    (root / "state/image-build/remote-operations" / request_id /
+     "result.json").write_text(json.dumps({
+         "schema": "image-build-remote-result-v1",
+         "operation_id": request_id, "operation_type": "pipeline.submit",
+         "source_repository": "zog144/image-build",
+         "source_revision": git(source, "rev-parse", "HEAD"),
+         "pipeline_id": "d" * 32,
+         "status": "completed", "uncertainty": False,
+         "terminal_outcome": "success",
+    }))
+    refused_again = subprocess.run(inspect, shell=True, capture_output=True,
+                                   text=True, timeout=8)
+    assert refused_again.returncode != 0
+    assert "attempt evidence missing" in refused_again.stderr
