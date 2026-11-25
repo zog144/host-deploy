@@ -54,6 +54,12 @@ def _read(root, name):
     fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         before = os.fstat(fd)
+        if (before.st_dev != info.st_dev or before.st_ino != info.st_ino
+                or not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1 or before.st_uid != os.geteuid()
+                or before.st_mode & 0o022 or before.st_size <= 0
+                or before.st_size > 1048576):
+            raise RuntimeError("mixed-state evidence inode or custody differs: " + name)
         raw = os.read(fd, 1048577)
         after = os.fstat(fd)
         if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
@@ -129,7 +135,13 @@ def _facts(root, *, original_sha, corrected_sha, selected_sha):
             if spec.get("source_revision") is not None and (
                     verified.get("producer_revision") != spec["source_revision"]):
                 raise RuntimeError("active Project companion differs from selected source")
-    old_path = root / ARCHIVE / (original_sha[7:] + ".json")
+    archive_dir = root / ARCHIVE
+    if archive_dir.exists() or archive_dir.is_symlink():
+        info = archive_dir.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o022 or any(archive_dir.iterdir())):
+            raise RuntimeError("mixed-state archive contains unreviewed contents or foreign custody")
+    old_path = archive_dir / (original_sha[7:] + ".json")
     if old_path.exists() or old_path.is_symlink():
         raise RuntimeError("mixed-state without-archive recovery cannot relabel retained history")
     intent, intent_sha = _read(root, INTENT)
