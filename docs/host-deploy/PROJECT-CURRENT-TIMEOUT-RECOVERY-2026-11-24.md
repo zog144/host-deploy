@@ -92,19 +92,57 @@ state (when present), `mutation=false` and
 `execution_authorized=false`. Missing or changed owned evidence fails
 closed. The helper does not call the pipeline or controller.
 
-After independently confirming the exact Host/Project provenance, a trusted
-administrative caller can pass that JSON to
-`simple_forward.reconcile_project_observation(gateway_root, request_id,
-observation)`. The function checks the original admitted dispatch, protected
-SSM CommandId and previously recorded source/pipeline identity. Provisional
-observations remain `running` or `recovery_blocked`. Only matching
-producer `result.json` containing an unambiguous `completed/success`
-or explicit terminal failure may generate an immutable Gateway terminal
-receipt. This is **not** exposed as an arbitrary SQS message or requester
-field; ordinary Gateway polling never resubmits the operation. Once an
-operator has reconciled that same Project/pipeline, a later Gateway polling
-iteration will **not** let the original SSM control-window `TimedOut`
-observation overwrite the newer trusted pipeline observation.
+After independently confirming the exact Host/Project provenance,
+the trusted **Gateway administrator running on the selected compiler Host**
+may invoke:
+
+```python
+from zog.host_deploy.gateway.simple_forward import reconcile_project_observation
+result = reconcile_project_observation(gateway_root, original_request_id)
+```
+
+There is **no caller-supplied observation parameter**. The function itself
+checks the original admitted dispatch, unchanged selected Workspace/Host/Project,
+protected SSM CommandId and prior pipeline/revision evidence, then runs the
+reviewed standard-library-only observer against the *actual local* Project
+files. Gateway input cannot supply `terminal_confirmed`, `producer_status`,
+`pipeline_status`, `source_revision`, or any status-bearing evidence
+dictionary. A different Host without the selected local Project cannot
+reconcile it. The observer requires unsymlinked, process-owned, non-writable-
+by-others Project directories and evidence files, with matching request,
+producer binding, source revision and pipeline owner. Missing or tampered
+evidence produces a HOLD, not a terminal result.
+
+**Success now derives from image-build's documented durable publication order.**
+Image-build writes each retained attempt's `status.json` as `complete`
+for the selected generation, then records the owned `pipeline.json` with
+`status=complete` and the *same* 64-hex generation. Once those statuses
+and the operation's exact source/pipeline owner are independently read back,
+the observer confirms completion even when the **original**
+`remote-operations/<operation_id>/result.json` is still pending or absent
+because its synchronous producer already timed out. A stale or forged
+`result.json` alone is never sufficient to mark a running or incompletely
+published pipeline successful. Missing, duplicated or incomplete attempt
+status, foreign owner/source, and unsafe evidence custody all HOLD. A
+confirmed terminal command failure must likewise retain original
+source/pipeline binding, an explicit nonuncertain producer failure result and
+a pending (not running) owned pipeline. Unknown or pending outcomes remain
+recoverable.
+
+The Gateway persists the new read-only evidence digests and unchanged
+original SSM CommandId; provisional observations remain `running` or
+`recovery_blocked`. Only independently verified terminal evidence creates
+the immutable `remote-result.json`. This is **not** exposed as a new SQS
+message or requester-supplied JSON. Ordinary Gateway polling never replays
+the original producer. A later poll cannot replace a newer reconciled Project
+status with the original SSM control-window `TimedOut` result.
+
+**Native dependency:** this direct-readback API works only when the installed
+trusted Gateway process has read-only access to the *actual selected compiler
+Host Project* under the reviewed service identity. Work must verify that
+co-location, canonical path, source/attempt ownership and modes on the
+Host; never use a copied Project directory or a supplied JSON blob as a
+substitute for the selected machine's evidence.
 
 ## Source acceptance and native HOLD
 
@@ -112,9 +150,13 @@ Regression checks use a synthetic Project producer that durably writes a
 pipeline plus attempt before sleeping past a deliberately reduced test wait.
 They assert the original ID/attempt survives, Gateway never records a false
 terminal failure, and later read-only observation on exactly that
-operation/pipeline can see completion without another submit. Separate tests
-cover missing pipeline binding, changed/foreign owner and SSM command timeout
-with no second send. The same test suite retains the queue, root-owner,
+operation/pipeline can see completion **solely after the actual image-build
+pipeline and attempts are updated**, without any fabricated terminal
+producer result or new submit. Other tests reject forged completed
+`result.json` while pipeline is still running, completed pipeline missing
+attempt status, a foreign operation/source/pipeline owner, and SSM timeout
+with no second send. The gateway's reconciliation API rejects a caller's
+terminal JSON entirely; it reopens and verifies the actual local Project. The same test suite retains the queue, root-owner,
 admission and acknowledgement-loss invariants.
 
 **Native Work gate:** review/install/attest exact PR #57 on top of PR #54
