@@ -6,7 +6,10 @@ document and installed image-build executable. The producer selects the active
 toolchain and immutable recipe snapshot from its own Project. One fsynced intent = one SendCommand
 attempt, even if the CommandId acknowledgement is lost.
 """
+import hashlib
 import json
+import re
+import time
 from pathlib import Path
 
 from ..runner import Host
@@ -217,24 +220,24 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
             "command_id": command_id}
 
 
-def reconcile_project_observation(root, request_id):
-    """Reconcile by READBACK on the selected Host, never a supplied JSON dict.
+FIRST_FONTS_COMPILER_PROJECT_UID = 24201  # Reviewed compiler Project owner, not Gateway root.
 
-    This method is deliberately local to the trusted Gateway instance
-    installed on the compiler Host. It does not accept a caller-supplied
-    terminal status, pipeline, or evidence object. Caller authentication
-    and explicit administrative invocation remain outside this function.
-    The selected Project is taken only from the frozen admitted dispatch;
-    the observer reads its original request, pipeline owner and attempt
-    records *again* before any terminal ledger write.
+
+def reconcile_project_observation(root, request_id, *, host_factory=Host):
+    """Explicit read-only SSM probe on the selected compiler Host.
+
+    The registry/Gateway never mounts the compiler Project. This method
+    accepts no caller-supplied status or script, and is never called by
+    automatic SQS polling. Its inspection CommandId is independent of the
+    protected, once-only original build submission.
     """
     record, binding = _frozen_binding(root, request_id)
     if record["phase"] != "submitted" or binding.get("schema") != 4:
         raise ForwardingDenied(
             "observation requires submitted Project-current request")
-    verify_current_target(root, binding)
+    config = verify_current_target(root, binding)
     from .project_current import REVISION, IDENTITY
-    from .project_current_observation import observe_selected_project
+    from .project_current_observation import read_only_observation_script
 
     previous_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
     prior = {}
