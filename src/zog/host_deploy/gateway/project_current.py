@@ -48,6 +48,44 @@ def _template(request_id):
     }
 
 
+def verify_approved_lane(root, workspace, host, record, spec):
+    """Read-only bridge from historical first Fonts approval to active lane.
+
+    The registry/Gateway retains the lane *record* and its archived history.
+    The compiler Host owns the remote Project bytes. Never substitute a
+    syntactically valid schema-5 Project at the default lane root or infer
+    migration provenance from the compiler's visible files.
+    """
+    from .. import fonts_lane_migration, fonts_lane_profile
+    from .. import image_build_lanes as lanes
+    from ..fonts_lane_runtime import CONTROLLER_FILE
+
+    expected_root = fonts_lane_profile.PROJECT_ROOT
+    if (record.get("lane") != "gateway-first-fonts-runtime"
+            or spec.get("lane") != "gateway-first-fonts-runtime"
+            or record.get("schema") != lanes.INHERITED_SCHEMA
+            or spec.get("schema") != lanes.INHERITED_SCHEMA
+            or spec.get("project_root") != expected_root
+            or record.get("specification") != spec
+            or record.get("controller_config") !=
+                str(Path(expected_root) / CONTROLLER_FILE)
+            or record.get("source_root") != str(Path(expected_root) / "source")
+            or record.get("package_dir") !=
+                str(Path(expected_root) / "source/project/package")
+            or record.get("state_dir") != str(Path(expected_root) / "state")):
+        raise RuntimeError(
+            "first Fonts lane root/controller differs from reviewed migration")
+    proof = fonts_lane_migration.verify_existing(root, workspace, host, record)
+    if (proof.get("corrected_project_root") != expected_root
+            or proof.get("historical_specification_sha256")
+                != fonts_lane_profile.RETAINED_SPECIFICATION_SHA256
+            or proof.get("execution_authorized") is not False
+            or proof.get("binding") != fonts_lane_profile._binding(
+                workspace, host)):
+        raise RuntimeError("first Fonts migration provenance differs")
+    return proof
+
+
 def binding(request, record, spec, host):
     if (record.get("state") != "active"
             or spec["schema"] != image_build_lanes.INHERITED_SCHEMA
