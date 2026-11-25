@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from zog.host_deploy import image_build_lanes as lanes
+from zog.host_deploy import existing_project_runtime as existing
 from zog.host_deploy.gateway import project_current
 
 
@@ -48,6 +49,7 @@ def project(tmp_path):
     git(source, "config", "user.name", "Test")
     git(source, "add", ".")
     git(source, "commit", "-qm", "initial selected Project checkout")
+    root.chmod(0o700)
     return root, source, controller
 
 
@@ -69,6 +71,9 @@ def selected(root, controller, *, historic=True):
         disk_reservation_bytes=1,
         **extra,
     )
+    # Real Project-current dispatch now verifies these exact installed
+    # controller bytes BEFORE creating producer request/pipeline evidence.
+    controller.write_bytes(existing.expected_bytes(spec))
     record = {
         "schema": lanes.INHERITED_SCHEMA,
         "lane": spec["lane"],
@@ -153,7 +158,7 @@ def test_next_build_uses_current_checkout_and_pin_not_lane_metadata(tmp_path, hi
     receipt = json.loads(output.stdout.strip().splitlines()[-1])
     assert receipt["result"]["source_revision"] == revision
     assert receipt["result"]["recipe_identity"] == "second-pin"
-    assert controller.read_text() == '{"controller":"unchanged"}'
+    assert controller.read_bytes() == existing.expected_bytes(spec)
     assert record["specification"] == spec
 
 
@@ -908,3 +913,129 @@ def test_project_observer_no_follow_descriptor_rejects_inode_swap(
     with pytest.raises(ValueError, match="inode changed|ancestor changed"):
         namespace["observe"](str(selected_root), request_id)
     assert swapped is True
+
+
+
+def test_current_selected_certbot_seed_does_not_require_nov14_migration_records():
+    project = "/home/certbot-build-owner/certbot-seed"
+    spec = lanes.specification(
+        "gateway-first-fonts-runtime", existing_project=True,
+        project_root=project, python_executable="/usr/bin/python3.12",
+        memory_maximum_bytes=2**30, thread_count_maximum=16,
+        cpu_weight=100, disk_reservation_bytes=2**30,
+    )
+    record = {
+        "schema": 5, "lane": spec["lane"], "state": "active",
+        "specification": spec,
+        "controller_config": project + "/" + existing.controller_file(spec),
+        "source_root": project + "/source",
+        "package_dir": project + "/source/project/package",
+        "state_dir": project + "/state",
+    }
+    workspace = {"workspace_id": "1" * 32, "region": "us-east-1"}
+    selected_host = target()
+    result = project_current.verify_approved_lane(
+        "/historical-files-are-not-a-dependency", workspace, selected_host,
+        record, spec)
+    assert result["selection"] == "current-schema-5-existing-project"
+    assert result["historical_migration_required"] is False
+    assert result["execution_authorized"] is False
+    assert result["controller_config"] == record["controller_config"]
+    assert result["controller_sha256"] == __import__("hashlib").sha256(
+        existing.expected_bytes(spec)).hexdigest()
+    request = project_current.binding(
+        intent("d" * 32), record, spec, selected_host)
+    assert request["controller_sha256"] == result["controller_sha256"]
+    assert request["schema"] == 4
+    assert "source_revision" not in request
+    assert "monthly_pin_identity" not in request
+    assert project_current.validate(request) == request
+    assert request["controller_sha256"] in project_current.remote_script(request)
+
+    # Missing or mismatched historical archive, overwritten Nov14 manifest
+    # and unresolved legacy pipeline cannot affect CURRENT lane selection.
+    # An attempted choice of the old migration destination or controller
+    # never becomes a new valid dispatch.
+    old = dict(spec, project_root="/var/lib/zog/image-build/projects/gateway-first-fonts-runtime")
+    with pytest.raises(RuntimeError, match="current schema-5"):
+        project_current.verify_approved_lane(
+            "not-used", workspace, selected_host, record, old)
+    wrong = dict(record, controller_config=project + "/controller.json")
+    with pytest.raises(RuntimeError, match="controller"):
+        project_current.verify_approved_lane(
+            "not-used", workspace, selected_host, wrong, spec)
+    wrong = dict(record, state="prepared")
+    with pytest.raises(RuntimeError, match="schema-5"):
+        project_current.verify_approved_lane(
+            "not-used", workspace, selected_host, wrong, spec)
+
+
+@pytest.mark.parametrize("damage", ["different-content", "symlink", "absent",
+                                    "writable", "foreign-hardlink",
+                                    "redirected-git", "git-env-overrides"])
+def test_current_protected_script_fails_before_pipeline_or_request_write(
+        tmp_path, monkeypatch, damage):
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    request = project_current.binding(intent("e" * 32), record, spec, target())
+    original_controller = controller.read_bytes()
+    if damage == "different-content":
+        controller.write_text('{"foreign":"controller"}')
+    elif damage == "symlink":
+        saved = root / "saved-controller.json"
+        controller.rename(saved)
+        controller.symlink_to(saved)
+    elif damage == "absent":
+        controller.unlink()
+    elif damage == "writable":
+        controller.chmod(0o666)
+    elif damage == "foreign-hardlink":
+        os.link(controller, root / "another-name.json")
+    elif damage == "redirected-git":
+        external = tmp_path / "other-source"
+        external.mkdir()
+        git(external, "init", "-q")
+        (source / ".git").rename(source / "git-real")
+        (source / ".git").symlink_to(source / "git-real")
+    else:
+        other = tmp_path / "second-git-repo"
+        other.mkdir()
+        git(other, "init", "-q")
+        git(other, "config", "user.email", "test@example.invalid")
+        git(other, "config", "user.name", "Test")
+        (other / "a.txt").write_text("foreign")
+        git(other, "add", ".")
+        git(other, "commit", "-qm", "foreign source")
+        monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    result = subprocess.run(
+        project_current.remote_script(request), shell=True, text=True,
+        capture_output=True, timeout=30)
+    if damage == "git-env-overrides":
+        assert result.returncode == 0, result.stderr
+        assert '"source_revision":"' in result.stdout
+        assert git(source, "rev-parse", "HEAD") != git(
+            other, "rev-parse", "HEAD")
+        # The printed source revision is authenticated by the controller
+        # preflight's minimal Git env, not by inherited GIT_DIR overrides.
+    else:
+        assert result.returncode != 0
+        assert not (root / "gateway-requests").exists()
+    assert controller.read_bytes() == (
+        original_controller if damage in ("git-env-overrides", "foreign-hardlink",
+                                          "redirected-git", "writable") else
+        controller.read_bytes())
+
+
+def test_historical_frozen_project_current_script_bytes_are_unchanged(tmp_path):
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=True)
+    modern = project_current.binding(intent("a" * 32), record, spec, target())
+    legacy = dict(modern)
+    legacy.pop("controller_sha256")
+    assert project_current.validate(legacy) == legacy
+    old_script = project_current.remote_script(legacy)
+    assert project_current._RUN in old_script or (
+        "-c " in old_script and "controller_sha256" not in old_script)
+    assert project_current.remote_script(modern) != old_script
+    assert "controller_sha256" in str(modern)
