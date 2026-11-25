@@ -101,7 +101,8 @@ def main():
                  'fonts-lane-prepare', 'fonts-lane-activate', 'fonts-lane-migration-plan',
                  'fonts-lane-migration-stage', 'fonts-lane-migration-activate',
                  'fonts-lane-mixed-recovery-inspect',
-                 'fonts-lane-mixed-recovery-publish'):
+                 'fonts-lane-mixed-recovery-publish',
+                 'fonts-lane-supersession-inspect'):
         command = commands.add_parser(name)
         if name != 'fonts-lane-profile':
             command.add_argument('--workspace', required=True)
@@ -114,7 +115,7 @@ def main():
             command.add_argument('--expected-corrected-specification-sha256', required=True)
         if name == 'fonts-lane-migration-activate':
             command.add_argument('--expected-corrected-specification-sha256', required=True)
-        if name.startswith('fonts-lane-mixed-recovery-'):
+        if name.startswith('fonts-lane-mixed-recovery-') or name == 'fonts-lane-supersession-inspect':
             command.add_argument('--expected-original-specification-sha256', required=True)
             command.add_argument('--expected-corrected-specification-sha256', required=True)
             command.add_argument('--expected-selected-specification-sha256', required=True)
@@ -149,6 +150,13 @@ def main():
             result = fonts_lane_migration.activate(
                 arguments.workspace,
                 expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256)
+        elif arguments.command == 'fonts-lane-supersession-inspect':
+            from . import fonts_lane_supersession_audit
+            result = fonts_lane_supersession_audit.inspect(
+                arguments.workspace,
+                expected_original_specification_sha256=arguments.expected_original_specification_sha256,
+                expected_corrected_specification_sha256=arguments.expected_corrected_specification_sha256,
+                expected_selected_specification_sha256=arguments.expected_selected_specification_sha256)
         elif arguments.command.startswith('fonts-lane-mixed-recovery-'):
             from . import fonts_lane_recovery
             operation = (fonts_lane_recovery.inspect
