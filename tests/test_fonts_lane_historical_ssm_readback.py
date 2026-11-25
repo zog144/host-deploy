@@ -325,3 +325,142 @@ def test_protected_original_witness_change_during_aws_readback_is_hold(
     with pytest.raises(historic.HistoricalHold, match="evidence digest"):
         observe(data)
     assert "send_command" not in [name for name, _ in ssm.calls]
+
+
+
+class CandidateSSM:
+    def __init__(self, pages):
+        self.pages = pages
+        self.meta = SimpleNamespace(region_name="us-east-1")
+        self.calls = []
+
+    def list_commands(self, **kw):
+        self.calls.append(("list_commands", kw))
+        assert kw["InstanceId"] == "i-00ad300038a599044"
+        assert kw["MaxResults"] == 50
+        assert kw["Filters"] == [
+            {"key": "InvokedAfter", "value": "2026-11-13T00:00:00Z"},
+            {"key": "InvokedBefore", "value": "2026-11-17T00:00:00Z"},
+            {"key": "DocumentName", "value": "AWS-RunShellScript"},
+        ]
+        return self.pages[len(self.calls)-1]
+
+    def send_command(self, **kwargs):
+        pytest.fail("legacy candidate discovery attempted SendCommand")
+
+    def get_command_invocation(self, **kwargs):
+        pytest.fail("unapproved candidate cannot trigger invocation readback")
+
+
+def candidate(command_id, script, status="Success"):
+    return {
+        "CommandId": command_id,
+        "DocumentName": "AWS-RunShellScript",
+        "InstanceIds": ["i-00ad300038a599044"],
+        "Targets": [],
+        "RequestedDateTime": datetime(
+            2026, 11, 14, 18, tzinfo=timezone.utc),
+        "Status": status,
+        "Parameters": {"commands": [script], "executionTimeout": ["120"]},
+    }
+
+
+def test_unjournaled_legacy_commands_can_be_discovered_only_as_candidates(
+        tmp_path, monkeypatch):
+    root, approvals, journal, witness, proof, digest, existing, sts = prepared(
+        tmp_path, monkeypatch)
+    before = _snapshot(tmp_path)
+    ssm = CandidateSSM([
+        {"Commands": [
+            candidate("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                      "python3 -c 'print(\"gateway-first-fonts-runtime\")'", "Failed"),
+            candidate("cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                      "echo unrelated"),
+        ], "NextToken": "page-two"},
+        {"Commands": [
+            candidate("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                      "python3 -c 'print(\"controller-inherited-v1.json\")'", "Success"),
+        ]},
+    ])
+    result = historic.discover_unbound_candidates(
+        root, approvals=approvals, ssm_client=ssm, sts_client=sts)
+    assert result["status"] == "supersession-unproven"
+    assert result["query_complete"] is True
+    assert result["candidate_count"] == 2
+    assert [c["observed_ssm_status"] for c in result["candidates"]] == [
+        "Failed", "Success"]
+    assert not result["original_commands_authenticated"]
+    for c in result["candidates"]:
+        assert c["original_operation_authenticated"] is False
+        assert c["original_root_journal_authenticated"] is False
+        assert c["migration_witness_authenticated"] is False
+    for f in ("mutation", "ssm_send_authorized", "execution_authorized",
+              "compilation_authorized"):
+        assert result[f] is False
+    assert [call[0] for call in ssm.calls] == ["list_commands", "list_commands"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_discovery_never_claims_no_history_when_bounded_scan_is_incomplete(
+        tmp_path, monkeypatch):
+    root, approvals, journal, witness, proof, digest, existing, sts = prepared(
+        tmp_path, monkeypatch)
+    ssm = CandidateSSM([{"Commands": [], "NextToken": "page-" + str(i)}
+                        for i in range(historic._DISCOVERY_LIMIT)])
+    result = historic.discover_unbound_candidates(
+        root, approvals=approvals, ssm_client=ssm, sts_client=sts)
+    assert result["query_complete"] is False
+    assert result["candidate_count"] == 0
+    assert len(ssm.calls) == historic._DISCOVERY_LIMIT
+    assert result["status"] == "supersession-unproven"
+
+
+@pytest.mark.parametrize("damage", [
+    "duplicated-command", "cross-instance", "wrong-date", "repeated-token",
+    "wrong-region", "wrong-account", "changed-local-lane",
+])
+def test_candidate_scan_fails_closed_on_unsafe_service_or_custody(
+        tmp_path, monkeypatch, damage):
+    root, approvals, journal, witness, proof, digest, existing, sts = prepared(
+        tmp_path, monkeypatch)
+    initial = candidate("dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                        "echo gateway-first-fonts-runtime")
+    first = {"Commands": [initial]}
+    if damage == "duplicated-command":
+        first["Commands"].append(initial)
+    elif damage == "cross-instance":
+        initial["InstanceIds"] = ["i-fffffffffffffffff"]
+    elif damage == "wrong-date":
+        initial["RequestedDateTime"] = datetime(
+            2026, 10, 14, tzinfo=timezone.utc)
+    elif damage == "repeated-token":
+        first["NextToken"] = "same"
+    elif damage == "wrong-account":
+        sts.account = "000000000000"
+    ssm = CandidateSSM([first])
+    if damage == "wrong-region":
+        ssm.meta.region_name = "us-west-2"
+    if damage == "repeated-token":
+        ssm.pages.append({"Commands": [], "NextToken": "same"})
+    if damage == "changed-local-lane":
+        orig = ssm.list_commands
+        def mutate(**kw):
+            result = orig(**kw)
+            path = root / "image-build-lanes/gateway-first-fonts-runtime.json"
+            value = json.loads(path.read_text())
+            value["state"] = "retired"
+            path.write_text(json.dumps(value))
+            return result
+        ssm.list_commands = mutate
+    if damage == "cross-instance":
+        # Foreign instance commands are ignored as candidates, not proof
+        # that a valid original command existed.
+        observed = historic.discover_unbound_candidates(
+            root, approvals=approvals, ssm_client=ssm, sts_client=sts)
+        assert observed["candidate_count"] == 0
+        return
+    with pytest.raises((historic.HistoricalHold, local.AuditHold)):
+        historic.discover_unbound_candidates(
+            root, approvals=approvals, ssm_client=ssm, sts_client=sts)
+    if damage in ("wrong-account", "wrong-region"):
+        assert not ssm.calls
