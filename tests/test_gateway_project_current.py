@@ -212,6 +212,10 @@ def test_gateway_uses_project_controller_only_across_saved_revision_pin_change(
     request = approved()
     admit(gateway, request)
     host = target()
+    # The isolated Project fixture has no real archived first-Fonts lane.
+    # Production provenance is tested separately against its source owner.
+    monkeypatch.setattr(project_current, "verify_approved_lane",
+                        lambda *_: {"execution_authorized": False})
     monkeypatch.setattr(image_build_dispatch, "owned_workspace",
                         lambda directory, workspace: "owned-workspace")
     monkeypatch.setattr(image_build_dispatch, "locked_workspace",
@@ -270,6 +274,10 @@ def test_new_project_dispatch_lost_ack_does_not_send_twice(tmp_path, monkeypatch
     request = approved()
     admit(gateway, request)
     host = target()
+    # The isolated Project fixture has no real archived first-Fonts lane.
+    # Production provenance is tested separately against its source owner.
+    monkeypatch.setattr(project_current, "verify_approved_lane",
+                        lambda *_: {"execution_authorized": False})
     monkeypatch.setattr(image_build_dispatch, "owned_workspace",
                         lambda directory, workspace: "owned")
     monkeypatch.setattr(image_build_dispatch, "locked_workspace",

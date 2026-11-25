@@ -420,6 +420,9 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
         },
     }
     host = {**TARGET, "workspace_id": WORKSPACE}
+    from zog.host_deploy.gateway import project_current
+    monkeypatch.setattr(project_current, "verify_approved_lane",
+                        lambda *_: {"execution_authorized": False})
     monkeypatch.setattr(image_build_dispatch, "owned_workspace",
                         lambda directory, workspace: "selected-workspace")
     monkeypatch.setattr(image_build_dispatch, "locked_workspace",

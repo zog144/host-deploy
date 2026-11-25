@@ -28,6 +28,18 @@ INTENT_FILE = "first-fonts-activation-intent-v1.json"
 FACTS_MAX_AGE_SECONDS = 3600
 COMPANION_REVISION = "a866c9c4b0dd385045f00ce2de7d809f5b67c104"
 
+def __getattr__(name):
+    # Historic API access stays available, but the registry's read-only
+    # migration verification does not need to import graphics cryptography.
+    if name == "fonts":
+        from .gateway import graphics_catalogue_owner
+        return graphics_catalogue_owner
+    if name == "fonts_lane_review":
+        from .gateway import fonts_lane_review
+        return fonts_lane_review
+    raise AttributeError(name)
+
+
 
 def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
