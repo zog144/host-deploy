@@ -70,10 +70,14 @@ def observe(project, operation_id, expected_pipeline_id=None):
                 and (type(expected_pipeline_id) is not str
                      or not OP.fullmatch(expected_pipeline_id)))):
         raise ValueError("invalid selected Project or operation identity")
-    # Read only the selected Project: reject symlinked, foreign-owned or
-    # writable-by-other directory components and data files. The Gateway
-    # must run this on the actual selected Host; an arbitrary JSON object
-    # supplied over SQS/HTTP is never accepted as evidence.
+    # The selected compiler Project has its own UID, 24201 on the reviewed
+    # native Host. SSM may run this read-only probe as root; require source
+    # custody by the PROJECT owner, never by the observer's effective UID.
+    root_metadata = project.lstat()
+    project_owner_uid = root_metadata.st_uid
+    if (not stat.S_ISDIR(root_metadata.st_mode)
+            or root_metadata.st_mode & 0o022):
+        raise ValueError("selected compiler Project root custody is unsafe")
     def read(path, maximum=1048576):
         try:
             relative = path.relative_to(project)
@@ -88,7 +92,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
             except FileNotFoundError:
                 return None
             if (stat.S_ISLNK(info.st_mode)
-                    or info.st_uid != os.geteuid()
+                    or info.st_uid != project_owner_uid
                     or (info.st_mode & 0o022)
                     or (not stat.S_ISDIR(info.st_mode) if current != path
                         else not stat.S_ISREG(info.st_mode))):
@@ -244,6 +248,7 @@ def observe(project, operation_id, expected_pipeline_id=None):
     return {
         "schema": OBSERVATION_SCHEMA,
         "project_root": str(project),
+        "project_owner_uid": project_owner_uid,
         "request_id": operation_id,
         "operation_id": operation_id,
         "source_revision": revision,
