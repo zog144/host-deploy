@@ -404,3 +404,123 @@ def inspect(workspace, *, approvals, expected_evidence_sha256,
         "mutation": False, "ssm_send_authorized": False,
         "execution_authorized": False, "compilation_authorized": False,
     }
+
+
+
+# Legacy direct Host.command() SSM sends might not have root-control journals.
+# This separate phase discovers candidates ONLY; it never selects operation
+# identity or treats SSM metadata as a root-controlled original submission.
+_DISCOVERY_LIMIT = 8
+_CANDIDATE_LIMIT = 32
+_FIXED_MARKERS = (
+    "gateway-first-fonts-runtime",
+    "controller-inherited-v1.json",
+    "host-install-fonts-project-init",
+)
+
+
+def discover_unbound_candidates(workspace, *, approvals, ssm_client, sts_client):
+    """Bounded AWS *read-only* candidate inventory for Nov14 legacy sends.
+
+    NO caller CommandId, no SendCommand, no shell, no journal synthesis.
+    A candidate may be unrelated to the migration. Always nonauthorizing.
+    A truncated paginated result is explicitly incomplete, not proof of
+    a missing original command.
+    """
+    current = _selected_report(workspace, approvals)
+    if (current.get("status") != "supersession-unproven"
+            or current.get("execution_authorized") is not False):
+        _fail("original Gateway lane selection not admitted for diagnostic discovery")
+    target = current["compiler_target"]
+    identity = sts_client.get_caller_identity()
+    region = getattr(getattr(ssm_client, "meta", None), "region_name", None)
+    if (type(identity) is not dict
+            or identity.get("Account") != target["account_id"]
+            or region != target["region"]):
+        _fail("candidate discovery AWS principal or region differs from compiler")
+    filters = [
+        {"key": "InvokedAfter", "value": "2026-11-13T00:00:00Z"},
+        {"key": "InvokedBefore", "value": "2026-11-17T00:00:00Z"},
+        {"key": "DocumentName", "value": "AWS-RunShellScript"},
+    ]
+    candidates = []
+    token = None
+    seen_tokens = set()
+    seen_commands = set()
+    complete = False
+    for _ in range(_DISCOVERY_LIMIT):
+        query = {"InstanceId": target["instance_id"],
+                 "Filters": filters, "MaxResults": 50}
+        if token is not None:
+            query["NextToken"] = token
+        page = ssm_client.list_commands(**query)
+        if type(page) is not dict or type(page.get("Commands")) is not list:
+            _fail("SSM original command discovery page is malformed")
+        if len(page["Commands"]) > 50:
+            _fail("SSM original command discovery exceeds bounded page")
+        for row in page["Commands"]:
+            if type(row) is not dict:
+                _fail("foreign SSM historical candidate")
+            stamp = _date(row.get("RequestedDateTime"))
+            if not _WINDOW_START <= stamp < _WINDOW_END:
+                _fail("SSM returned a command outside fixed discovery date filter")
+            ident = row.get("CommandId")
+            if (type(ident) is not str or
+                    not _COMMAND_ID.fullmatch(ident) or ident in seen_commands):
+                _fail("SSM candidate ID malformed or repeated")
+            seen_commands.add(ident)
+            # Other commands in the date window may be legitimate.
+            # Only fixed compiler, document, and script markers are reported.
+            if (row.get("DocumentName") != "AWS-RunShellScript"
+                    or row.get("InstanceIds") != [target["instance_id"]]
+                    or row.get("Targets", []) not in (None, [])):
+                continue
+            parameters = row.get("Parameters")
+            if (type(parameters) is not dict or
+                    type(parameters.get("commands")) is not list or
+                    len(parameters["commands"]) != 1
+                    or type(parameters["commands"][0]) is not str):
+                continue
+            script = parameters["commands"][0]
+            if (not 0 < len(script.encode("utf-8")) <= 32768
+                    or not any(marker in script for marker in _FIXED_MARKERS)):
+                continue
+            if len(candidates) >= _CANDIDATE_LIMIT:
+                _fail("too many candidate original SSM commands")
+            candidates.append({
+                "command_id": ident,
+                "requested_at_utc": stamp.isoformat(),
+                "script_sha256": _sha(script.encode("utf-8")),
+                "observed_ssm_status": row.get("Status"),
+                "original_operation_authenticated": False,
+                "original_root_journal_authenticated": False,
+                "migration_witness_authenticated": False,
+            })
+        next_token = page.get("NextToken")
+        if next_token in (None, ""):
+            complete = True
+            break
+        if (type(next_token) is not str
+                or not 0 < len(next_token) <= 2048
+                or next_token in seen_tokens):
+            _fail("SSM command discovery pagination is unsafe")
+        seen_tokens.add(next_token)
+        token = next_token
+    # Recheck the exact registry selection after service metadata readback.
+    if _selected_report(workspace, approvals) != current:
+        _fail("Gateway selection drifted during historical candidate discovery")
+    return {
+        "schema": "host-deploy-first-fonts-unbound-ssm-candidates-v1",
+        "status": "supersession-unproven",
+        "binding": target,
+        "selected_lane_record_sha256": current["selected_lane_record_sha256"],
+        "original_commands_authenticated": False,
+        "query_complete": complete,
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "superseding_writer": None,
+        "mutation": False,
+        "ssm_send_authorized": False,
+        "execution_authorized": False,
+        "compilation_authorized": False,
+    }
