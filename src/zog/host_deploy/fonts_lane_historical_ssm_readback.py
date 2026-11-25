@@ -115,7 +115,9 @@ def _open_dir(path, *, root_owner=True):
         raise
 
 
-def _file(fd, name, *, owner=0, newline=False, optional=False):
+def _file(fd, name, *, owner=None, newline=False, optional=False):
+    if owner is None:
+        owner = os.geteuid()  # Only trusted root may open the native journal.
     if (type(name) is not str or not re.fullmatch(
             r"[a-z0-9][A-Za-z0-9_.-]{0,127}", name)):
         _fail("untrusted historical record basename")
@@ -366,9 +368,11 @@ def inspect(workspace, *, approvals, expected_evidence_sha256,
     evidence, digest = _evidence(workspace, current, expected_evidence_sha256)
     original = _original_journal_rows(journal_directory, evidence)
     target = current["compiler_target"]
-    if (type(aws_region) is not str or aws_region != target["region"]
-            or type(sts_client.get_caller_identity().get("Account")) is not str
-            or sts_client.get_caller_identity()["Account"] != target["account_id"]):
+    identity = sts_client.get_caller_identity()
+    if (type(identity) is not dict or
+            type(aws_region) is not str or aws_region != target["region"]
+            or type(identity.get("Account")) is not str
+            or identity["Account"] != target["account_id"]):
         _fail("AWS credential account/region does not match admitted compiler")
     results = []
     for record in evidence["commands"]:
