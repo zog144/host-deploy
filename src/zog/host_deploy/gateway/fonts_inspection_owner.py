@@ -187,11 +187,26 @@ def submit_or_recover(root, request_id, *, binding, target,
                             or command.get("command_id") is None):
                         raise InspectionOwnerUnavailable(
                             "inspection SSM acknowledgement uncertain; no replay")
-                    if (retained.get("request_sha256") != _sha(row)
-                            or retained.get("script_sha256") != row["script_sha256"]
-                            or retained.get("target") != row["target"]):
+                    expected_intent = {
+                        "schema": "zog-task-c-trusted-host-local-intent-v1",
+                        "operation_id": inspection_operation_id,
+                        "request_sha256": _sha(row),
+                        "script_sha256": row["script_sha256"],
+                        "target": row["target"], "document": "AWS-RunShellScript",
+                        "execution_timeout_seconds": TIMEOUT,
+                    }
+                    if retained != expected_intent:
                         raise InspectionOwnerUnavailable("protected inspection journal differs")
                     command_id = command["command_id"]
+                    if (command != {
+                            "schema": "zog-task-c-trusted-host-command-v1",
+                            "operation_id": inspection_operation_id,
+                            "request_sha256": _sha(row),
+                            "command_id": command_id}
+                            or not isinstance(command_id, str)
+                            or not _COMMAND.fullmatch(command_id)
+                            or command_id == original_command_id):
+                        raise InspectionOwnerUnavailable("protected inspection CommandId differs")
                     local = _read(fd, f"project-inspection-{n:04d}.command.json")
                     if local is not None and local != {
                             "schema": RECEIPT, "inspection_operation_id": inspection_operation_id,
@@ -215,8 +230,11 @@ def submit_or_recover(root, request_id, *, binding, target,
                     operation_id=row["inspection_operation_id"],
                     request_sha256=_sha(row), script=script,
                     target=reviewed["target"], seconds=TIMEOUT, sender=host)
-                if type(command_id) is not str or not _COMMAND.fullmatch(command_id):
-                    raise InspectionOwnerUnavailable("invalid protected inspection CommandId")
+                if (type(command_id) is not str
+                        or not _COMMAND.fullmatch(command_id)
+                        or command_id == original_command_id):
+                    raise InspectionOwnerUnavailable(
+                        "inspection CommandId must differ from original protected build")
                 _write_once(fd, f"project-inspection-{n:04d}.command.json", {
                     "schema": RECEIPT, "inspection_operation_id": row["inspection_operation_id"],
                     "command_id": command_id})
