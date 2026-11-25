@@ -841,3 +841,21 @@ def test_selected_project_observer_rejects_unprotected_or_symlinked_evidence(
                                 text=True, timeout=8)
     assert redirected.returncode != 0
     assert "unsafe selected Project evidence custody" in redirected.stderr
+
+
+
+def test_selected_project_rejects_symlinked_absolute_ancestor(tmp_path):
+    from zog.host_deploy.gateway.project_current_observation import (
+        read_only_observation_script,
+    )
+    root, source, controller = project(tmp_path)
+    alias = tmp_path / "redirected-parent"
+    alias.symlink_to(root.parent, target_is_directory=True)
+    redirected = alias / root.name
+    assert redirected.is_dir() and not redirected.is_symlink()
+    result = subprocess.run(
+        read_only_observation_script(
+            str(redirected), sys.executable, "e" * 32),
+        shell=True, capture_output=True, text=True, timeout=8)
+    assert result.returncode != 0
+    assert not (root / "gateway-requests").exists()
