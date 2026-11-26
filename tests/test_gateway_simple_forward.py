@@ -115,6 +115,12 @@ def forwarding(tmp_path, monkeypatch):
     monkeypatch.setattr(simple_forward, "prepare_image_build_dispatch", prepared)
     monkeypatch.setattr(simple_forward, "_binding",
                         lambda record: record["binding"])
+    # This transport-only fixture intentionally carries a synthetic
+    # incomplete binding. Parser integrity is tested independently with
+    # the REAL Project-current binding in test_gateway_project_current;
+    # only the upstream parser boundary is simulated here.
+    monkeypatch.setattr(simple_forward, "parse_receipt",
+                        lambda raw, selected: json.loads(raw.strip().splitlines()[-1]))
     monkeypatch.setattr(simple_forward, "verify_current_target",
                         lambda gateway, selected: TARGET)
     monkeypatch.setattr(simple_forward, "remote_script",
@@ -213,6 +219,7 @@ def forwarding(tmp_path, monkeypatch):
                         "schema": image_build_execution.RECEIPT_SCHEMA,
                         "request_id": REQUEST_ID,
                         "remote_request_sha256": "0" * 64,
+                        "result_representation": "normalized-summary-v1",
                         "result": {"status": "pending", "uncertainty": False,
                                    "source_revision": SOURCE["revision"],
                                    "pipeline_id": "c" * 32},
