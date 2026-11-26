@@ -69,6 +69,27 @@ request and pipeline; neither schema-4 installation migration nor a
 new original SSM send is performed. New original commands must have
 new request identities: the once-only journal forbids replay of old ones.
 
+**Root-control independent review follow-up (November 26):** A retained
+`prepared` Project-current binding without `controller_sha256` is no
+longer eligible for its **first** SSM send. Both the queue-facing
+`simple_forward.advance()` path and the protected
+`fonts_owner_sender.submit_once()` independently deny it *before* creating
+a root-control journal intent, opening a sender, or submitting a command.
+Previously `submitted` historical bindings remain read-only inspectable
+under their original CommandId. Never upgrade those frozen records by
+injecting a checksum or replaying their old request.
+
+The compiler preflight's Git execution now explicitly pins
+`-c safe.directory=<validated-current-Project/source>`, where the
+canonical selected Project and source directories have already been
+opened via no-follow file descriptors. Its subprocess environment
+is minimal and does **not** inherit `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_CONFIG_COUNT` or other ambient Git settings. This permits the
+protected root SSM command to inspect the genuine application-owned
+UID-24201 checkout while preventing another repository's Git identity
+from becoming the source revision. Root-runner tests use a real
+cross-UID disposable checkout and malicious Git environment.
+
 The new controller verification is composed from reviewed source into the
 same fixed SSM script. Comment-only and blank lines (not multiline string
 contents) are removed **only for new current-schema-5 scripts** to keep the
