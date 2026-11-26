@@ -516,3 +516,82 @@ def test_protected_reconcile_requires_original_ssm_receipt_pipeline_and_source(
             assert checked == [(binding["project_root"],
                                 request["request_id"], "a" * 32)]
     assert load_dispatch(gateway, request["request_id"]) == frozen
+
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+def test_same_original_command_cannot_change_source_pipeline_or_terminal_claim(
+        tmp_path, monkeypatch, observer):
+    request = approved()
+    compiler, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    assert _observe_original(gateway, request, binding, receipt,
+                             observer, monkeypatch) == "running"
+    obs_path = gateway / "requests" / request["request_id"] / "dispatch-observation.json"
+    before = obs_path.read_bytes()
+
+    # The original SSM command cannot change from a pending producer to an
+    # apparently completed one on a later read; even a self-consistently
+    # rehashed new receipt for the same CommandId is not new evidence.
+    later = copy.deepcopy(receipt)
+    later["result"].update(status="completed", terminal_outcome="success",
+                           uncertainty=False, reconciliation_required=False)
+    later = _rehash(later)
+    assert execution.parse_receipt(json.dumps(later), binding) == later
+    assert execution.project_current_completion(later) == "completed"
+    with pytest.raises(RuntimeError, match="original SSM receipt"):
+        _observe_original(gateway, request, binding, later, observer, monkeypatch)
+    assert obs_path.read_bytes() == before
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+    assert not (obs_path.parent / "remote-result.json").exists()
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+def test_failed_pre_pipeline_request_is_consistently_non_successful(
+        tmp_path, monkeypatch, observer):
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    receipt["result"].update(
+        status="failed", pipeline_id=None, terminal_outcome=None,
+        uncertainty=False, reconciliation_required=False,
+        failure={"type": "request-invalid", "reason": "validated request rejected"})
+    receipt = _rehash(receipt)
+    assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
+    assert execution.project_current_completion(receipt) == "failed"
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    assert _observe_original(gateway, request, binding, receipt,
+                             observer, monkeypatch) == "failed"
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+    result = json.loads((gateway / "requests" / request["request_id"] /
+                        "remote-result.json").read_text())
+    assert result["completion"] == "failed"
+    assert result["result"]["result"]["failure"]["type"] == "request-invalid"
+
+
+@pytest.mark.parametrize("producer_uncertainty", ["none", "string", "missing"])
+def test_project_wrapper_rejects_invalid_uncertainty_instead_of_coercing_false(
+        tmp_path, producer_uncertainty):
+    root, source, controller = project(tmp_path)
+    module = source / "src/zog/image_build/remote_operations.py"
+    old = module.read_text()
+    if producer_uncertainty == "none":
+        new = old.replace("'uncertainty':False", "'uncertainty':None")
+    elif producer_uncertainty == "string":
+        new = old.replace("'uncertainty':False", "'uncertainty':'false'")
+    else:
+        new = old.replace("'uncertainty':False,", "")
+    assert new != old
+    module.write_text(new)
+    git(source, "add", ".")
+    git(source, "commit", "-qm", "malformed synthetic producer")
+    spec, lane = selected(root, controller, historic=False)
+    original = project_current.binding(intent("7" * 32), lane, spec, target())
+    actual = subprocess.run(project_current.remote_script(original), shell=True,
+                            capture_output=True, text=True, timeout=25)
+    assert actual.returncode != 0
+    assert "producer status invalid" in actual.stderr
+    assert '"result_representation"' not in actual.stdout
