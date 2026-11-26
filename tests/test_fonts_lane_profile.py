@@ -257,3 +257,127 @@ def test_new_schema_rejects_injected_execution_identity_selection():
         bad["controller"][key] = 24202
         with pytest.raises(ValueError, match="controller"):
             lanes.validate(bad)
+
+
+def current_workspace(tmp_path):
+    """A fresh current selection: NO schema-4 provenance or prior migration."""
+    from zog.host_deploy import existing_project_runtime as existing
+    root = tmp_path / "current-owner"
+    workspace = initialize(root, "compiler", "zog-development", "us-east-1")
+    host = {
+        "region": workspace["region"], "profile": workspace["profile"],
+        "instance_id": fonts.COMPILER_INSTANCE,
+        "workspace_id": workspace["workspace_id"],
+        "account_id": "123456789012",
+    }
+    save(root / "host.json", host)
+    spec = lanes.specification(
+        fonts.LANE, existing_project=True,
+        project_root="/home/certbot-build-owner/certbot-seed",
+        python_executable="/usr/bin/python3.12",
+        memory_maximum_bytes=2**30, thread_count_maximum=16,
+        cpu_weight=100, disk_reservation_bytes=2**30,
+    )
+    record = {
+        "schema": lanes.INHERITED_SCHEMA, "lane": fonts.LANE,
+        "state": "active", "specification": spec,
+        "source_root": spec["project_root"] + "/source",
+        "package_dir": spec["project_root"] + "/source/project/package",
+        "state_dir": spec["project_root"] + "/state",
+        "controller_config": (
+            spec["project_root"] + "/" + existing.controller_file(spec)),
+    }
+    lane_path = root / "image-build-lanes" / (fonts.LANE + ".json")
+    save(lane_path, record)
+    return root, workspace, host, lane_path, record, spec
+
+
+def test_current_fonts_profile_verify_uses_only_schema5_selection(
+        tmp_path, monkeypatch):
+    from zog.host_deploy import fonts_lane_migration, fonts_lane_recovery
+    from zog.host_deploy import existing_project_runtime as existing
+    import hashlib
+    root, workspace, host, path, record, spec = current_workspace(tmp_path)
+    def obsolete(*args, **kwargs):
+        pytest.fail("current schema-5 selection must not depend on old migration")
+    monkeypatch.setattr(fonts_lane_migration, "verify_existing", obsolete)
+    monkeypatch.setattr(fonts_lane_recovery, "verify_published", obsolete)
+    deny_remote(monkeypatch)
+
+    original = path.read_bytes()
+    assert not (root / "first-fonts-inherited-migration-v1.json").exists()
+    assert not (root / "first-fonts-original-evidence").exists()
+    assert not (root / "first-fonts-mixed-state-recovery-v1.json").exists()
+    assert not (root / "first-fonts-activation-intent-v1.json").exists()
+    selected = fonts.verify(root)
+    assert selected == fonts.verify(root)
+    assert selected["schema"] == "host-deploy-first-fonts-current-project-selection-v1"
+    assert selected["binding"] == fonts._binding(workspace, host)
+    assert selected["project_selection"] == "existing"
+    assert selected["project_root"] == spec["project_root"]
+    assert selected["controller_config"] == record["controller_config"]
+    assert selected["expected_controller_sha256"] == hashlib.sha256(
+        existing.expected_bytes(spec)).hexdigest()
+    assert selected["specification_sha256"] == lanes.specification_sha256(spec)
+    assert selected["migration_required"] is False
+    assert selected["installed_controller_verified"] is False
+    assert selected["native_readback_required"] is True
+    assert selected["execution_authorized"] is False
+    assert path.read_bytes() == original
+    assert not (root / "first-fonts-inherited-migration-v1.json").exists()
+    assert not (root / "first-fonts-original-evidence").exists()
+    assert not (root / "first-fonts-mixed-state-recovery-v1.json").exists()
+
+
+@pytest.mark.parametrize("changed", [
+    "controller", "foreign-root", "inactive", "wrong-schema",
+    "wrong-project-selection", "source-path", "wrong-workspace",
+    "wrong-host", "wrong-region", "wrong-account", "bad-controller-policy",
+])
+def test_current_profile_rejects_foreign_selection_or_host_without_old_migration(
+        tmp_path, monkeypatch, changed):
+    root, workspace, host, path, record, spec = current_workspace(tmp_path)
+    if changed == "controller":
+        record["controller_config"] = record["controller_config"].replace(
+            "controller-gateway-first-fonts-runtime-inherited-v1.json",
+            "controller.json")
+    elif changed == "foreign-root":
+        spec["project_root"] = "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime"
+    elif changed == "inactive":
+        record["state"] = "prepared"
+    elif changed == "wrong-schema":
+        spec["schema"] = 4
+    elif changed == "wrong-project-selection":
+        spec["project_selection"] = "unchecked"
+    elif changed == "source-path":
+        record["source_root"] = "/tmp/wrong-project/source"
+    elif changed == "wrong-workspace":
+        host["workspace_id"] = "f" * 32
+    elif changed == "wrong-host":
+        host["instance_id"] = "i-fffffffffffffffff"
+    elif changed == "wrong-region":
+        host["region"] = "eu-west-1"
+    elif changed == "wrong-account":
+        host["account_id"] = "not-an-account"
+    else:
+        spec["controller"]["execution_user_id"] = 24202
+    save(path, record)
+    save(root / "host.json", host)
+    before = path.read_bytes()
+    deny_remote(monkeypatch)
+    with pytest.raises((RuntimeError, ValueError, KeyError)):
+        fonts.verify(root)
+    assert path.read_bytes() == before
+    assert not (root / "first-fonts-mixed-state-recovery-v1.json").exists()
+
+
+def test_schema5_nonexisting_project_is_not_recast_as_legacy_migration(
+        tmp_path, monkeypatch):
+    root, _, host, path, record, spec = current_workspace(tmp_path)
+    record["specification"]["project_selection"] = "new"
+    save(path, record)
+    deny_remote(monkeypatch)
+    with pytest.raises((RuntimeError, ValueError)):
+        fonts.verify(root)
+    assert record["state"] == "active"
+    assert not (root / "first-fonts-mixed-state-recovery-v1.json").exists()

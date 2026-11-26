@@ -8,6 +8,8 @@ import sys
 import pytest
 
 from zog.host_deploy import image_build_lanes as lanes
+from zog.host_deploy import existing_project_runtime as existing
+from zog.host_deploy import fonts_lane_profile as fonts_profile
 from zog.host_deploy.gateway import project_current
 
 
@@ -48,6 +50,7 @@ def project(tmp_path):
     git(source, "config", "user.name", "Test")
     git(source, "add", ".")
     git(source, "commit", "-qm", "initial selected Project checkout")
+    root.chmod(0o700)
     return root, source, controller
 
 
@@ -69,6 +72,9 @@ def selected(root, controller, *, historic=True):
         disk_reservation_bytes=1,
         **extra,
     )
+    # Real Project-current dispatch now verifies these exact installed
+    # controller bytes BEFORE creating producer request/pipeline evidence.
+    controller.write_bytes(existing.expected_bytes(spec))
     record = {
         "schema": lanes.INHERITED_SCHEMA,
         "lane": spec["lane"],
@@ -153,7 +159,7 @@ def test_next_build_uses_current_checkout_and_pin_not_lane_metadata(tmp_path, hi
     receipt = json.loads(output.stdout.strip().splitlines()[-1])
     assert receipt["result"]["source_revision"] == revision
     assert receipt["result"]["recipe_identity"] == "second-pin"
-    assert controller.read_text() == '{"controller":"unchanged"}'
+    assert controller.read_bytes() == existing.expected_bytes(spec)
     assert record["specification"] == spec
 
 
@@ -908,3 +914,224 @@ def test_project_observer_no_follow_descriptor_rejects_inode_swap(
     with pytest.raises(ValueError, match="inode changed|ancestor changed"):
         namespace["observe"](str(selected_root), request_id)
     assert swapped is True
+
+
+
+def test_current_selected_certbot_seed_does_not_require_nov14_migration_records():
+    project = "/home/certbot-build-owner/certbot-seed"
+    spec = lanes.specification(
+        "gateway-first-fonts-runtime", existing_project=True,
+        project_root=project, python_executable="/usr/bin/python3.12",
+        memory_maximum_bytes=2**30, thread_count_maximum=16,
+        cpu_weight=100, disk_reservation_bytes=2**30,
+    )
+    record = {
+        "schema": 5, "lane": spec["lane"], "state": "active",
+        "specification": spec,
+        "controller_config": project + "/" + existing.controller_file(spec),
+        "source_root": project + "/source",
+        "package_dir": project + "/source/project/package",
+        "state_dir": project + "/state",
+    }
+    workspace = {"schema": 1, "workspace_id": "1" * 32, "region": "us-east-1"}
+    selected_host = {**target(), "instance_id": fonts_profile.COMPILER_INSTANCE}
+    result = project_current.verify_approved_lane(
+        "/historical-files-are-not-a-dependency", workspace, selected_host,
+        record, spec)
+    assert result["selection"] == "current-schema-5-existing-project"
+    assert result["historical_migration_required"] is False
+    assert result["execution_authorized"] is False
+    assert result["controller_config"] == record["controller_config"]
+    assert result["controller_sha256"] == __import__("hashlib").sha256(
+        existing.expected_bytes(spec)).hexdigest()
+    request = project_current.binding(
+        intent("d" * 32), record, spec, selected_host)
+    assert request["controller_sha256"] == result["controller_sha256"]
+    assert request["schema"] == 4
+    assert "source_revision" not in request
+    assert "monthly_pin_identity" not in request
+    assert project_current.validate(request) == request
+    assert request["controller_sha256"] in project_current.remote_script(request)
+
+    # Missing or mismatched historical archive, overwritten Nov14 manifest
+    # and unresolved legacy pipeline cannot affect CURRENT lane selection.
+    # An attempted choice of the old migration destination or controller
+    # never becomes a new valid dispatch.
+    old = dict(spec, project_root="/var/lib/zog/image-build/projects/gateway-first-fonts-runtime")
+    with pytest.raises(RuntimeError, match="current schema-5"):
+        project_current.verify_approved_lane(
+            "not-used", workspace, selected_host, record, old)
+    wrong = dict(record, controller_config=project + "/controller.json")
+    with pytest.raises(RuntimeError, match="controller"):
+        project_current.verify_approved_lane(
+            "not-used", workspace, selected_host, wrong, spec)
+    wrong = dict(record, state="prepared")
+    with pytest.raises(RuntimeError, match="schema-5"):
+        project_current.verify_approved_lane(
+            "not-used", workspace, selected_host, wrong, spec)
+
+
+    for bad_host in (
+        {**selected_host, "instance_id": "i-fffffffffffffffff"},
+        {**selected_host, "workspace_id": "a" * 32},
+        {**selected_host, "region": "eu-west-1"},
+        {**selected_host, "account_id": "bad-account"},
+    ):
+        with pytest.raises(RuntimeError, match="binding|Host|account|identity"):
+            project_current.verify_approved_lane(
+                "not-used", workspace, bad_host, record, spec)
+    for bad_workspace in (
+        {**workspace, "schema": 4},
+        {**workspace, "workspace_id": "broken"},
+        {**workspace, "region": "us-west-2"},
+    ):
+        with pytest.raises(RuntimeError, match="binding"):
+            project_current.verify_approved_lane(
+                "not-used", bad_workspace, selected_host, record, spec)
+
+
+@pytest.mark.parametrize("damage", ["different-content", "symlink", "absent",
+                                    "writable", "foreign-hardlink",
+                                    "writable-project", "linked-ancestor",
+                                    "redirected-git", "git-env-overrides"])
+def test_current_protected_script_fails_before_pipeline_or_request_write(
+        tmp_path, monkeypatch, damage):
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    request = project_current.binding(intent("e" * 32), record, spec, target())
+    original_controller = controller.read_bytes()
+    selected_revision = git(source, "rev-parse", "HEAD")
+    if damage == "different-content":
+        controller.write_text('{"foreign":"controller"}')
+    elif damage == "symlink":
+        saved = root / "saved-controller.json"
+        controller.rename(saved)
+        controller.symlink_to(saved)
+    elif damage == "absent":
+        controller.unlink()
+    elif damage == "writable":
+        controller.chmod(0o666)
+    elif damage == "foreign-hardlink":
+        os.link(controller, root / "another-name.json")
+    elif damage == "writable-project":
+        root.chmod(0o777)
+    elif damage == "linked-ancestor":
+        # The Project component itself must never be followed as a symlink.
+        redirected = tmp_path / "foreign-project"
+        root.rename(redirected)
+        root.symlink_to(redirected, target_is_directory=True)
+    elif damage == "redirected-git":
+        external = tmp_path / "other-source"
+        external.mkdir()
+        git(external, "init", "-q")
+        (source / ".git").rename(source / "git-real")
+        (source / ".git").symlink_to(source / "git-real")
+    else:
+        other = tmp_path / "second-git-repo"
+        other.mkdir()
+        git(other, "init", "-q")
+        git(other, "config", "user.email", "test@example.invalid")
+        git(other, "config", "user.name", "Test")
+        (other / "a.txt").write_text("foreign")
+        git(other, "add", ".")
+        git(other, "commit", "-qm", "foreign source")
+        monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    result = subprocess.run(
+        project_current.remote_script(request), shell=True, text=True,
+        capture_output=True, timeout=30)
+    if damage == "git-env-overrides":
+        assert result.returncode == 0, result.stderr
+        assert '"source_revision":"' in result.stdout
+        assert selected_revision in result.stdout
+        assert selected_revision != subprocess.check_output(
+            ["/usr/bin/git", "-C", str(other), "rev-parse", "HEAD"],
+            text=True, env={"PATH": "/usr/bin:/bin"}).strip()
+        # The printed source revision is selected from the actual Project
+        # despite inherited GIT_DIR/GIT_WORK_TREE overrides.
+    else:
+        assert result.returncode != 0
+        assert not (root / "gateway-requests").exists()
+    if damage in ("git-env-overrides", "foreign-hardlink", "redirected-git",
+                  "writable", "writable-project", "linked-ancestor"):
+        assert controller.read_bytes() == original_controller
+
+
+def test_historical_frozen_project_current_script_bytes_are_unchanged(tmp_path):
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=True)
+    modern = project_current.binding(intent("a" * 32), record, spec, target())
+    legacy = dict(modern)
+    legacy.pop("controller_sha256")
+    assert project_current.validate(legacy) == legacy
+    old_script = project_current.remote_script(legacy)
+    assert project_current._RUN in old_script or (
+        "-c " in old_script and "controller_sha256" not in old_script)
+    assert project_current.remote_script(modern) != old_script
+    assert "controller_sha256" in str(modern)
+
+
+
+def test_current_dispatch_checksum_tampering_cannot_bypass_installed_controller(tmp_path):
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    prepared = project_current.binding(intent("3" * 32), record, spec, target())
+    invalid = dict(prepared, controller_sha256="f" * 64)
+    # A forged checksum can be syntactically parsed but cannot match the
+    # actual installed selected controller. The protected Gateway ledger
+    # separately freezes its original binding digest before one SendCommand.
+    script = project_current.remote_script(invalid)
+    before = controller.read_bytes()
+    result = subprocess.run(script, shell=True, capture_output=True,
+                            text=True, timeout=25)
+    assert result.returncode != 0
+    assert "installed current controller differs" in result.stderr
+    assert controller.read_bytes() == before
+    assert not (root / "gateway-requests").exists()
+
+
+def test_current_lane_never_invokes_obsolete_migration_verifier(monkeypatch):
+    from zog.host_deploy import fonts_lane_recovery, fonts_lane_migration
+    from zog.host_deploy import existing_project_runtime as runtime
+    selected_project = "/home/certbot-build-owner/certbot-seed"
+    spec = lanes.specification(
+        "gateway-first-fonts-runtime", existing_project=True,
+        project_root=selected_project, python_executable="/usr/bin/python3.12",
+        memory_maximum_bytes=2**30, thread_count_maximum=16,
+        cpu_weight=100, disk_reservation_bytes=2**30,
+    )
+    record = {
+        "schema": 5, "lane": spec["lane"], "state": "active",
+        "specification": spec,
+        "controller_config": selected_project + "/" + runtime.controller_file(spec),
+        "source_root": selected_project + "/source",
+        "package_dir": selected_project + "/source/project/package",
+        "state_dir": selected_project + "/state",
+    }
+    def prohibited(*args, **kwargs):
+        pytest.fail("current schema-5 admission called a superseded migration source")
+    monkeypatch.setattr(fonts_lane_recovery, "verify_published", prohibited)
+    monkeypatch.setattr(fonts_lane_migration, "verify_existing", prohibited)
+    out = project_current.verify_approved_lane(
+        "/not-a-migration-workspace",
+        {"schema": 1, "workspace_id": "1" * 32, "region": "us-east-1"},
+        {**target(), "instance_id": fonts_profile.COMPILER_INSTANCE},
+        record, spec)
+    assert out["historical_migration_required"] is False
+
+
+
+def test_new_schema5_script_respects_original_root_control_ssm_32k_limit(tmp_path):
+    # Root-control's 32-KiB input bound is a security property, not a
+    # configurable workaround. It is enforced against the actual quoted
+    # full command rather than only the inner Python module source.
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    selected_request = project_current.binding(
+        intent("6" * 32), record, spec, target())
+    assert selected_request["controller_sha256"]
+    script = project_current.remote_script(selected_request)
+    assert 0 < len(script.encode("utf-8")) <= 32768
+    assert "controller_sha256" in str(selected_request)
+    assert "controller-gateway-first-fonts-runtime-inherited-v1.json" in script
+    assert not (root / "gateway-requests").exists()

@@ -123,8 +123,12 @@ def test_mixed_active_certbot_seed_needs_no_schema4_and_never_restores_lane(tmp_
     lane = root / "image-build-lanes" / (recovery.LANE + ".json")
     intent = root / migration.INTENT
     originals = (lane.read_bytes(), intent.read_bytes())
-    with pytest.raises(RuntimeError, match="evidence missing"):
-        verify_approved_lane(root, ws, host, record, spec)
+    # Current schema-5 selection is independent of archived schema-4
+    # receipts and the unresolved November 14 initializer.
+    current = verify_approved_lane(root, ws, host, record, spec)
+    assert current["selection"] == "current-schema-5-existing-project"
+    assert current["historical_migration_required"] is False
+    assert current["execution_authorized"] is False
     viewed = recovery.inspect(root, **approvals, host_factory=Host)
     assert viewed["selected_project_root"] == recovery.EXISTING_EXECUTION_PROJECT
     assert viewed["initialized_project_root"] != viewed["selected_project_root"]
@@ -136,9 +140,9 @@ def test_mixed_active_certbot_seed_needs_no_schema4_and_never_restores_lane(tmp_
     assert viewed == published
     assert (root / recovery.RECEIPT).stat().st_mode & 0o777 == 0o600
     assert recovery.verify_published(root, ws, host, record, spec) == viewed
-    # Read-only provenance is NOT fresh compiler-controller admission authority.
-    with pytest.raises(RuntimeError, match="not current compiler-controller admission"):
-        verify_approved_lane(root, ws, host, record, spec)
+    # The optional old receipt remains historical and cannot change the
+    # current selected Project/controller or authorize a stale build.
+    assert verify_approved_lane(root, ws, host, record, spec) == current
     assert originals == (lane.read_bytes(), intent.read_bytes())
     assert not (root / migration.HISTORY).exists()
 
@@ -239,5 +243,8 @@ def test_published_mixed_receipt_cannot_authorize_later_controller_drift(tmp_pat
         report.update(controller_sha256="f" * 64)
         if "controller_sha256" in report else None)
     assert recovery.verify_published(root, ws, host, record, spec)["execution_authorized"] is False
-    with pytest.raises(RuntimeError, match="not current compiler-controller admission"):
-        verify_approved_lane(root, ws, host, record, spec)
+    # Local current selection remains valid even if obsolete native history
+    # changes. The actual installed controller SHA is checked in the new
+    # protected compiler invocation before *any* producer work.
+    assert verify_approved_lane(root, ws, host, record, spec)[
+        "selection"] == "current-schema-5-existing-project"
