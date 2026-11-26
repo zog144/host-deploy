@@ -75,6 +75,13 @@ def submit_once(gateway_root, request_id, *, binding, configuration,
             or selected != binding):
         raise ProtectedOwnerUnavailable("protected owner requires frozen Project-current Fonts operation")
     validate_current(selected)
+    if "controller_sha256" not in selected:
+        # Independent defense in depth: no direct caller can drive the root
+        # owner with an unchecked historical prepared binding, even if it
+        # bypasses simple_forward.advance(). Readback of already-submitted
+        # historical CommandIds uses a separate non-sending path.
+        raise ProtectedOwnerUnavailable(
+            "digestless historical Fonts dispatch has no new send authority")
     if (state["request"]["operation"] != "build.submit"
             or state["request"]["parameters"] != {
                 "lane": "gateway-first-fonts-runtime",
