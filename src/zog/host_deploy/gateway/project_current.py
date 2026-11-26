@@ -424,17 +424,46 @@ try:
             or produced.get("operation_type") != "pipeline.submit"
             or produced.get("source_revision") != revision):
         raise RuntimeError("Project producer result identity differs")
+    # The wire receipt is a NORMALIZED summary. Its declared length and
+    # digest cover these exact transmitted bytes, never a hidden producer
+    # result that a recovering Gateway cannot read or reconstruct.
     summary = {k: produced.get(k) for k in (
-        "status", "pipeline_id", "source_revision",
-        "recipe_identity", "selected_generation", "terminal_outcome",
-        "failure", "allowed_next_operations", "uncertainty",
-        "attempt_ids", "reconciliation_required",
+        "schema", "operation_id", "operation_type", "source_repository",
+        "source_revision", "status", "pipeline_id", "terminal_outcome",
+        "recipe_identity", "selected_generation", "failure", "uncertainty",
+        "allowed_next_operations", "attempt_ids", "controller_jobs",
+        "predecessor", "reconciliation_required",
     )}
-    raw = json.dumps(produced, sort_keys=True, separators=(",", ":")).encode()
+    summary["uncertainty"] = bool(summary["uncertainty"])
+    summary["missing_evidence_count"] = len(produced.get("missing_evidence") or [])
+    for field, limit in (("allowed_next_operations", 32),
+                         ("attempt_ids", 24), ("controller_jobs", 24)):
+        summary[field] = list(summary[field] or [])[:limit]
+    if isinstance(summary["failure"], dict):
+        failure = summary["failure"]
+        summary["failure"] = {
+            "type": str(failure.get("type", ""))[:128],
+            "reason": str(failure.get("reason", ""))[:2000],
+            **({"job_id": str(failure["job_id"])[:128]}
+               if failure.get("job_id") is not None else {}),
+        }
+    elif summary["failure"] is not None:
+        summary["failure"] = {"type": "unstructured",
+                              "reason": str(summary["failure"])[:2000]}
+    names = ("remote_capabilities", "recipe_snapshot", "contract",
+             "pin_date", "monthly_identity", "inventory_digest",
+             "toolchain_specification", "toolchain_execution")
+    artifacts = produced.get("artifacts")
+    summary["artifacts"] = ({name: artifacts[name] for name in names
+                            if name in artifacts}
+                           if isinstance(artifacts, dict) else {})
+    raw = json.dumps(summary, sort_keys=True, separators=(",", ":"),
+                     allow_nan=False).encode("ascii")
     print(json.dumps({
         "schema": "host-deploy-image-build-receipt-v1",
         "request_id": operation_id,
         "remote_request_sha256": template_digest,
+        "result_representation": "normalized-summary-v1",
         "result_sha256": hashlib.sha256(raw).hexdigest(),
         "result_bytes": len(raw),
         "result": summary,
