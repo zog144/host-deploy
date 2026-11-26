@@ -17,7 +17,8 @@ from .github_dispatch import FIRST_FONTS_TASK
 from .image_build_dispatch import prepare_image_build_dispatch, verify_current_target
 from .image_build_execution import (
     CONTROL_TIMEOUT_SECONDS, RECEIPT_SCHEMA, _binding, remote_script,
-    parse_receipt,
+    parse_receipt, project_current_completion, project_receipt_observation,
+    PROJECT_RECEIPT_OBSERVATIONS,
 )
 from .project_current_observation import (
     CONTROL_TIMEOUT_SECONDS as PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
@@ -152,7 +153,16 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
     status = observation["Status"]
     summary = {"schema": "host-deploy-direct-ssm-observation-v1",
                "command_id": command_id, "status": status}
-    record_dispatch_observation(root, request_id, summary)
+    # A status-only re-poll must not erase the original retained receipt
+    # source/pipeline claim needed for a later protected same-pipeline read.
+    old_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
+    previous = json.loads(old_path.read_text()) if old_path.is_file() else None
+    retained_claim = (
+        type(previous) is dict and previous.get("command_id") == command_id
+        and type(previous.get("observation")) is dict
+        and previous["observation"].get("schema") in PROJECT_RECEIPT_OBSERVATIONS)
+    if not retained_claim:
+        record_dispatch_observation(root, request_id, summary)
     if status in _RUNNING:
         return {"request_id": request_id, "phase": "submitted",
                 "command_id": command_id, "status": status}
@@ -197,52 +207,15 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
                 or result.get("status") not in
                     ("pending", "running", "completed", "failed", "released")):
             raise ForwardingDenied("producer status or identity is invalid")
-        if "result_representation" not in receipt:
-            # An already-sent pre-fix wrapper's SHA covers a producer object
-            # omitted from SSM stdout. The checksum cannot be verified from
-            # the reduced summary, even if the SSM invocation succeeded.
-            # Preserve the original operation for same-pipeline readback.
-            record_dispatch_observation(root, request_id, {
-                **summary,
-                "schema": "host-deploy-project-current-legacy-receipt-v1",
-                "source_repository": binding["remote_request"]["source"]["repository"],
-                "source_revision": source_revision,
-                "pipeline_id": pipeline,
-                "reported_status": result["status"],
-                "declared_result_sha256": receipt["result_sha256"],
-                "declared_result_bytes": receipt["result_bytes"],
-                "raw_result_digest_verified": False,
-                "selected_project_observation_required": True,
-            })
-            mark_completion(root, request_id, "recovery_blocked")
-            return {"request_id": request_id, "phase": "recovery_blocked",
-                    "command_id": command_id, "pipeline_id": pipeline,
-                    "observation_required": True}
-        # Do not store a provisional result as the immutable terminal
-        # remote-result.json: later read-only observation may reconcile it.
-        report = {**summary,
-                  "producer": {
-                      "request_id": request_id,
-                      "source_revision": source_revision,
-                      "pipeline_id": pipeline,
-                      "status": result["status"],
-                      "uncertainty": result.get("uncertainty") is True}}
-        record_dispatch_observation(root, request_id, report)
-        if (result["status"] == "completed"
-                and result.get("terminal_outcome") == "success"
-                and result.get("uncertainty") is False):
-            completion = "completed"
-        elif (result["status"] == "failed"
-              and result.get("terminal_outcome") is not None
-              and result.get("uncertainty") is False):
-            completion = "failed"
-        elif pipeline is not None:
-            completion = "running"
-        else:
-            completion = "recovery_blocked"
-        if completion in ("completed", "failed"):
+        claim = project_receipt_observation(
+            receipt, binding, command_id, configuration["instance_id"])
+        if retained_claim and previous["observation"] != claim:
+            raise ForwardingDenied("original SSM receipt source/pipeline claim changed")
+        completion = project_current_completion(receipt)
+        if completion in ("completed", "failed", "cancelled"):
             record_remote_result(root, request_id, receipt, completion)
         else:
+            record_dispatch_observation(root, request_id, claim)
             mark_completion(root, request_id, completion)
         return {"request_id": request_id, "phase": completion,
                 "command_id": command_id, "pipeline_id": pipeline,
@@ -288,9 +261,54 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
                 or previous.get("command_id") != record["command_id"]
                 or type(previous.get("observation")) is not dict):
             raise ForwardingDenied("retained SSM/Project observation identity differs")
-        prior = previous["observation"].get("producer", {})
-        if type(prior) is not dict:
-            raise ForwardingDenied("previous Project producer identity is invalid")
+        retained = previous["observation"]
+        if retained.get("schema") in PROJECT_RECEIPT_OBSERVATIONS:
+            # Bind any new protected read-only SSM command to the original
+            # recorded CommandId's source/pipeline claim, *not* whichever
+            # Project revision or pipeline happens to be present later.
+            from .project_current import IDENTITY, REVISION
+            expected_schema = retained["schema"]
+            raw_verified = (
+                expected_schema ==
+                "host-deploy-project-current-normalized-receipt-v1")
+            producer = retained.get("producer")
+            if (type(producer) is not dict
+                    or set(producer) != {
+                        "request_id", "source_revision", "pipeline_id",
+                        "status", "uncertainty"}
+                    or retained.get("request_id") != request_id
+                    or retained.get("command_id") != record["command_id"]
+                    or retained.get("compiler_instance_id") != config["instance_id"]
+                    or retained.get("remote_request_sha256")
+                        != binding["remote_request_sha256"]
+                    or retained.get("source_repository")
+                        != binding["remote_request"]["source"]["repository"]
+                    or type(retained.get("source_revision")) is not str
+                    or not REVISION.fullmatch(retained["source_revision"])
+                    or retained.get("pipeline_id") is not None and (
+                        type(retained["pipeline_id"]) is not str
+                        or not IDENTITY.fullmatch(retained["pipeline_id"]))
+                    or type(retained.get("result_sha256")) is not str
+                    or not re.fullmatch(r"[0-9a-f]{64}", retained["result_sha256"])
+                    or type(retained.get("result_bytes")) is not int
+                    or not 1 <= retained["result_bytes"] <= 131072
+                    or retained.get("raw_result_digest_verified") is not raw_verified
+                    or retained.get("selected_project_observation_required") is not True
+                    or producer["request_id"] != request_id
+                    or producer["source_revision"] != retained["source_revision"]
+                    or producer["pipeline_id"] != retained["pipeline_id"]
+                    or producer["status"] != retained.get("producer_status")
+                    or type(producer["uncertainty"]) is not bool):
+                raise ForwardingDenied(
+                    "provisional SSM producer binding differs from original")
+            prior = producer
+        elif retained.get("schema") in (
+                "host-deploy-direct-ssm-observation-v1", None):
+            prior = retained.get("producer", {})
+            if type(prior) is not dict:
+                raise ForwardingDenied("previous Project producer identity is invalid")
+        else:
+            raise ForwardingDenied("unrecognized retained Project observation schema")
 
     expected_pipeline = prior.get("pipeline_id")
     if (expected_pipeline is not None and
