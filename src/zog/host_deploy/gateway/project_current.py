@@ -451,7 +451,7 @@ try:
                      or re.fullmatch(r"[a-f0-9]{32}", produced["pipeline_id"]) is None))
             or (produced.get("reconciliation_required") is not None
                 and type(produced["reconciliation_required"]) is not bool)):
-        raise RuntimeError("Project producer status/uncertainty evidence invalid")
+        raise RuntimeError("producer status invalid")
     summary["missing_evidence_count"] = len(produced.get("missing_evidence") or [])
     # Compiler-created, fsynced request bytes bind the real selected Git
     # revision to the frozen repository/task without claiming a lane pin.
