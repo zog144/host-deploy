@@ -73,6 +73,10 @@ def admit(root, value):
 def direct_binding(value):
     return {
         "schema": 4, "direct_forward": True,
+        # This transport-only fixture fakes the upstream verified current
+        # schema-5 selection. A separate retained digestless prepared fixture
+        # proves historical first sends are rejected without owner intent.
+        "controller_sha256": "a" * 64,
         "request_id": value["request_id"],
         "workspace_id": WORKSPACE, "lane": "gateway-first-fonts-runtime",
         "project_root": "/var/lib/zog/image-build/projects/gateway-first-fonts-runtime",
@@ -510,11 +514,18 @@ def test_real_lane_binding_and_remote_script_need_no_compiler_catalogue(
                 kwargs["script"], seconds=kwargs["seconds"])
         def close(self):
             pass
-    result = simple_forward.advance(
-        root, value["request_id"], host_factory=Host, owner_factory=OwnerJournal)
-    assert result["phase"] == "submitted"
-    assert sent == [(script, simple_forward.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS)]
-    assert load_dispatch(root, value["request_id"])["command_id"] == "fixed-command-1"
+    # This fixture describes the original pre-current-Project schema-5
+    # migration-root controller (controller.json), NOT certbot-seed.
+    # It remains inspectable, but a digestless prepared operation cannot
+    # first-send via the now protected current schema-5 path.
+    assert "controller_sha256" not in frozen
+    snapshot = load_dispatch(root, value["request_id"])
+    with pytest.raises(simple_forward.ForwardingDenied, match="digestless historical prepared"):
+        simple_forward.advance(
+            root, value["request_id"], host_factory=Host,
+            owner_factory=OwnerJournal)
+    assert load_dispatch(root, value["request_id"]) == snapshot
+    assert sent == []
 
 
 def test_source_successor_has_same_approved_runtime_companion_and_original_pin():
