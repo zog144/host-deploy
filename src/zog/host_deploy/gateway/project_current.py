@@ -80,12 +80,17 @@ def verify_approved_lane(root, workspace, host, record, spec):
     # The prior source revision and package pin do not select the current
     # installed controller. Preserve optional historic fields, never use
     # them to require a matching November 14 checkout.
+    from .. import fonts_lane_profile as profile
     if (type(workspace) is not dict or type(host) is not dict
-            or host.get("workspace_id") != workspace.get("workspace_id")
-            or host.get("region") != workspace.get("region")):
+            or workspace.get("schema") != 1
+            or type(workspace.get("workspace_id")) is not str
+            or not IDENTITY.fullmatch(workspace["workspace_id"])
+            or host.get("workspace_id") != workspace["workspace_id"]
+            or host.get("region") != workspace.get("region")
+            or host.get("instance_id") != profile.COMPILER_INSTANCE):
         raise RuntimeError("current Fonts workspace/compiler binding differs")
     from .image_build_dispatch import _target
-    _target(host)  # validated account, region, instance (not legacy intent)
+    _target(host)  # validated account, region, exact selected compiler instance
     return {
         "selection": "current-schema-5-existing-project",
         "project_root": expected_root,
