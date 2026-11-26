@@ -277,6 +277,9 @@ def test_protected_inspection_owner_rejects_forged_script_target_and_original_id
 def test_retained_digestless_prepared_dispatch_cannot_create_new_owner_intent(
         tmp_path, monkeypatch):
     """Old frozen prepared != authority for a first unguarded SSM send."""
+    # The current schema-5 producer route itself stays enabled. This test
+    # prohibits only a first unverified send from a frozen OLD binding.
+    assert ("build.submit", "graphics-fonts-image-v1") in simple_forward.SUPPORTED
     project_root, source, controller = project(tmp_path)
     spec, record = selected(project_root, controller, historic=True)
     root = tmp_path / "gateway"
