@@ -41,6 +41,7 @@ def project(tmp_path):
         "    print(json.dumps({'schema':'image-build-remote-result-v1',"
         "'operation_id':request['operation_id'],"
         "'operation_type':request['operation'],"
+        "'source_repository':request['source']['repository'],"
         "'source_revision':request['source']['revision'],"
         "'status':'pending','pipeline_id':'a'*32,'recipe_identity':pin}))\n"
         "if __name__ == '__main__': main()\n"
