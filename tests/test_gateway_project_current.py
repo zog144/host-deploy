@@ -9,6 +9,7 @@ import pytest
 
 from zog.host_deploy import image_build_lanes as lanes
 from zog.host_deploy import existing_project_runtime as existing
+from zog.host_deploy import fonts_lane_profile as fonts_profile
 from zog.host_deploy.gateway import project_current
 
 
@@ -932,8 +933,8 @@ def test_current_selected_certbot_seed_does_not_require_nov14_migration_records(
         "package_dir": project + "/source/project/package",
         "state_dir": project + "/state",
     }
-    workspace = {"workspace_id": "1" * 32, "region": "us-east-1"}
-    selected_host = target()
+    workspace = {"schema": 1, "workspace_id": "1" * 32, "region": "us-east-1"}
+    selected_host = {**target(), "instance_id": fonts_profile.COMPILER_INSTANCE}
     result = project_current.verify_approved_lane(
         "/historical-files-are-not-a-dependency", workspace, selected_host,
         record, spec)
@@ -968,6 +969,25 @@ def test_current_selected_certbot_seed_does_not_require_nov14_migration_records(
     with pytest.raises(RuntimeError, match="schema-5"):
         project_current.verify_approved_lane(
             "not-used", workspace, selected_host, wrong, spec)
+
+
+    for bad_host in (
+        {**selected_host, "instance_id": "i-fffffffffffffffff"},
+        {**selected_host, "workspace_id": "a" * 32},
+        {**selected_host, "region": "eu-west-1"},
+        {**selected_host, "account_id": "bad-account"},
+    ):
+        with pytest.raises(RuntimeError, match="binding|Host|account"):
+            project_current.verify_approved_lane(
+                "not-used", workspace, bad_host, record, spec)
+    for bad_workspace in (
+        {**workspace, "schema": 4},
+        {**workspace, "workspace_id": "broken"},
+        {**workspace, "region": "us-west-2"},
+    ):
+        with pytest.raises(RuntimeError, match="binding"):
+            project_current.verify_approved_lane(
+                "not-used", bad_workspace, selected_host, record, spec)
 
 
 @pytest.mark.parametrize("damage", ["different-content", "symlink", "absent",
@@ -1094,6 +1114,7 @@ def test_current_lane_never_invokes_obsolete_migration_verifier(monkeypatch):
     monkeypatch.setattr(fonts_lane_migration, "verify_existing", prohibited)
     out = project_current.verify_approved_lane(
         "/not-a-migration-workspace",
-        {"workspace_id": "1" * 32, "region": "us-east-1"},
-        target(), record, spec)
+        {"schema": 1, "workspace_id": "1" * 32, "region": "us-east-1"},
+        {**target(), "instance_id": fonts_profile.COMPILER_INSTANCE},
+        record, spec)
     assert out["historical_migration_required"] is False
