@@ -1118,3 +1118,20 @@ def test_current_lane_never_invokes_obsolete_migration_verifier(monkeypatch):
         {**target(), "instance_id": fonts_profile.COMPILER_INSTANCE},
         record, spec)
     assert out["historical_migration_required"] is False
+
+
+
+def test_new_schema5_script_respects_original_root_control_ssm_32k_limit(tmp_path):
+    # Root-control's 32-KiB input bound is a security property, not a
+    # configurable workaround. It is enforced against the actual quoted
+    # full command rather than only the inner Python module source.
+    root, source, controller = project(tmp_path)
+    spec, record = selected(root, controller, historic=False)
+    selected_request = project_current.binding(
+        intent("6" * 32), record, spec, target())
+    assert selected_request["controller_sha256"]
+    script = project_current.remote_script(selected_request)
+    assert 0 < len(script.encode("utf-8")) <= 32768
+    assert "controller_sha256" in str(selected_request)
+    assert "controller-gateway-first-fonts-runtime-inherited-v1.json" in script
+    assert not (root / "gateway-requests").exists()
