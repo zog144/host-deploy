@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -37,6 +38,45 @@ def receipt_fixture(tmp_path, *, request_id="a" * 32):
     assert result.returncode == 0, result.stderr
     receipt = json.loads(result.stdout.strip().splitlines()[-1])
     return root, binding, receipt, result.stdout
+
+
+def _gateway_with_frozen_original(root, request, binding):
+    admit(root, request)
+    prepare_dispatch(root, request["request_id"], binding)
+    mark_dispatch_submitting(root, request["request_id"])
+    mark_dispatch_submitted(root, request["request_id"], "original-fonts-ssm-command")
+    return load_dispatch(root, request["request_id"])
+
+
+def _observe_original(root, request, binding, receipt, path, monkeypatch):
+    from zog.host_deploy.gateway import image_build_execution
+    monkeypatch.setattr(simple_forward, "verify_current_target",
+                        lambda *_: target())
+    monkeypatch.setattr(image_build_execution, "verify_current_target",
+                        lambda *_: target())
+    seen = []
+    class Host:
+        def __init__(self, configuration):
+            assert configuration == target()
+        def inspect_command(self, command_id):
+            seen.append(command_id)
+            return {
+                "CommandId": "original-fonts-ssm-command",
+                "InstanceId": target()["instance_id"],
+                "Status": "Success",
+                "StandardOutputContent": json.dumps(receipt),
+            }
+        def submit_command(self, *args, **kwargs):
+            pytest.fail("original Fonts request was replayed")
+    if path == "forward":
+        actual = simple_forward.advance(root, request["request_id"], host_factory=Host)
+        phase = actual["phase"]
+    else:
+        state, obs, retained = image_build_execution.observe_submitted(
+            root, request["request_id"], host_factory=Host)
+        phase = state["states"]["completion"]
+    assert seen == ["original-fonts-ssm-command"]
+    return phase
 
 
 def _rehash(receipt):
@@ -255,3 +295,182 @@ def test_legacy_readback_never_trusts_foreign_identity_or_creates_terminal(
     assert load_dispatch(gateway, request["request_id"]) == frozen
     assert not (gateway / "requests" / request["request_id"] /
                 "remote-result.json").exists()
+
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+def test_rehashed_contradictory_completed_receipt_cannot_be_terminal(
+        tmp_path, monkeypatch, observer):
+    request = approved()
+    compiler, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    receipt["result"].update(
+        status="completed", pipeline_id=None, terminal_outcome=None,
+        uncertainty=False, reconciliation_required=True)
+    receipt = _rehash(receipt)
+    assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
+    assert execution.project_current_completion(receipt) == "recovery_blocked"
+    gateway = tmp_path / ("gateway-" + observer)
+    original = _gateway_with_frozen_original(gateway, request, binding)
+    phase = _observe_original(gateway, request, binding, receipt,
+                              observer, monkeypatch)
+    assert phase == "recovery_blocked"
+    assert load_dispatch(gateway, request["request_id"]) == original
+    path = gateway / "requests" / request["request_id"]
+    claim = json.loads((path / "dispatch-observation.json").read_text())["observation"]
+    assert claim["schema"] == "host-deploy-project-current-normalized-receipt-v1"
+    assert claim["raw_result_digest_verified"] is True
+    assert claim["pipeline_id"] is None
+    assert claim["source_revision"] == receipt["result"]["source_revision"]
+    assert not (path / "remote-result.json").exists()
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+def test_valid_terminal_pipeline_classification_agrees_across_observers(
+        tmp_path, monkeypatch, observer):
+    request = approved()
+    compiler, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    # The selected synthetic producer reports exactly the same pipeline,
+    # source revision, request digest and terminal evidence in this case.
+    receipt["result"].update(
+        status="completed", terminal_outcome="success",
+        uncertainty=False, reconciliation_required=False,
+        pipeline_id="a" * 32, failure=None)
+    receipt = _rehash(receipt)
+    assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
+    assert execution.project_current_completion(receipt) == "completed"
+    gateway = tmp_path / ("gateway-" + observer)
+    original = _gateway_with_frozen_original(gateway, request, binding)
+    phase = _observe_original(gateway, request, binding, receipt,
+                              observer, monkeypatch)
+    assert phase == "completed"
+    assert load_dispatch(gateway, request["request_id"]) == original
+    saved = json.loads((gateway / "requests" / request["request_id"] /
+                       "remote-result.json").read_text())
+    assert saved["completion"] == "completed"
+    assert saved["result"]["result_sha256"] == receipt["result_sha256"]
+
+
+def _project_readback_report(binding, *, revision=None, pipeline=None):
+    from zog.host_deploy.gateway.project_current_observation import (
+        OBSERVATION_SCHEMA,
+    )
+    revision = revision or git(Path(binding["project_root"]) / "source",
+                               "rev-parse", "HEAD")
+    pipeline = pipeline or "a" * 32
+    attempt = "image-original-fonts-final"
+    evidence = {
+        "request_sha256": "a" * 64,
+        "pipeline_sha256": "b" * 64,
+        "attempt_statuses": {attempt: "c" * 64},
+    }
+    evidence["evidence_sha256"] = hashlib.sha256(
+        _canonical(evidence)).hexdigest()
+    return {
+        "schema": OBSERVATION_SCHEMA,
+        "project_root": binding["project_root"],
+        "project_owner_uid": os.geteuid(),
+        "request_id": binding["request_id"],
+        "operation_id": binding["request_id"],
+        "source_revision": revision,
+        "pipeline_id": pipeline,
+        "pipeline_status": "complete",
+        "attempt_ids": [attempt],
+        "evidence": evidence,
+        "evidence_source": "local-selected-project",
+        "producer_status": "completed",
+        "terminal_outcome": "success",
+        "terminal_confirmed": True,
+        "uncertainty": False,
+        "mutation": False,
+        "execution_authorized": False,
+    }
+
+
+@pytest.mark.parametrize("format", ["legacy", "normalized"])
+@pytest.mark.parametrize("difference", ["same", "foreign-source",
+                                          "foreign-pipeline", "changed-target",
+                                          "changed-request-digest"])
+def test_protected_reconcile_requires_original_ssm_receipt_pipeline_and_source(
+        tmp_path, monkeypatch, format, difference):
+    request = approved()
+    compiler, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    if format == "legacy":
+        receipt = _legacy(receipt)
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    # Both direct and queue observers must retain a typed original claim,
+    # which cannot be erased by read-only reconciliation.
+    _observe_original(gateway, request, binding, receipt, "direct", monkeypatch)
+    saved_path = gateway / "requests" / request["request_id"] / "dispatch-observation.json"
+    recorded = saved_path.read_bytes()
+    claim = json.loads(recorded)["observation"]
+    assert claim["pipeline_id"] == receipt["result"]["pipeline_id"]
+    assert claim["source_revision"] == receipt["result"]["source_revision"]
+    assert claim["raw_result_digest_verified"] == (format == "normalized")
+    if difference == "changed-target":
+        claim["compiler_instance_id"] = "i-fffffffffffffffff"
+    if difference == "changed-request-digest":
+        claim["remote_request_sha256"] = "f" * 64
+    if difference in ("changed-target", "changed-request-digest"):
+        retained = json.loads(recorded)
+        retained["observation"] = claim
+        saved_path.write_text(json.dumps(retained))
+        recorded = saved_path.read_bytes()
+
+    report = _project_readback_report(
+        binding,
+        revision=("f" * 40 if difference == "foreign-source" else None),
+        pipeline=("e" * 32 if difference == "foreign-pipeline" else None))
+    from zog.host_deploy.gateway import fonts_inspection_owner
+    from zog.host_deploy.gateway import project_current_observation as observe
+    checked = []
+    monkeypatch.setattr(simple_forward, "FIRST_FONTS_COMPILER_PROJECT_UID",
+                        os.geteuid())
+    def selected_script(root, python, request_id, *, pipeline_id=None):
+        checked.append((root, request_id, pipeline_id))
+        return "read-only-fixed-original-project-inspection"
+    monkeypatch.setattr(observe, "read_only_observation_script", selected_script)
+    sent = []
+    def authorized_inspection(*args, **kwargs):
+        sent.append(kwargs)
+        return (1, "protected-read-only-inspection")
+    monkeypatch.setattr(fonts_inspection_owner, "submit_or_recover",
+                        authorized_inspection)
+    monkeypatch.setattr(fonts_inspection_owner, "finish",
+                        lambda *args, **kwargs: None)
+    class Host:
+        def __init__(self, cfg):
+            assert cfg == target()
+        def inspect_command(self, command_id):
+            assert command_id == "protected-read-only-inspection"
+            return {
+                "CommandId": command_id,
+                "InstanceId": target()["instance_id"],
+                "Status": "Success",
+                "StandardOutputContent": json.dumps(report),
+            }
+        def submit_command(self, *args, **kwargs):
+            pytest.fail("original build SSM SendCommand was replayed")
+    if difference == "same":
+        out = simple_forward.reconcile_project_observation(
+            gateway, request["request_id"], host_factory=Host)
+        assert out["phase"] == "completed"
+        assert checked == [(binding["project_root"],
+                            request["request_id"], "a" * 32)]
+        assert len(sent) == 1
+        assert (gateway / "requests" / request["request_id"] /
+                "remote-result.json").exists()
+    else:
+        with pytest.raises(simple_forward.ForwardingDenied):
+            simple_forward.reconcile_project_observation(
+                gateway, request["request_id"], host_factory=Host)
+        assert not (gateway / "requests" / request["request_id"] /
+                    "remote-result.json").exists()
+        assert saved_path.read_bytes() == recorded
+        if difference in ("foreign-source", "foreign-pipeline"):
+            assert checked == [(binding["project_root"],
+                                request["request_id"], "a" * 32)]
+    assert load_dispatch(gateway, request["request_id"]) == frozen
