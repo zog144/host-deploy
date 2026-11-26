@@ -170,7 +170,10 @@ def verify(directory, *, now=None):
     with locked(directory) as root:
         workspace, host = _owner(root)
         selected = _read_regular(lanes._path(root, LANE))
-        if selected.get("schema") == lanes.INHERITED_SCHEMA:
+        if (selected.get("schema") == lanes.INHERITED_SCHEMA
+                and type(selected.get("specification")) is dict
+                and selected["specification"].get("project_root")
+                    == "/home/certbot-build-owner/certbot-seed"):
             from .gateway.project_current import verify_approved_lane
             try:
                 spec = lanes.validate(selected.get("specification"))
