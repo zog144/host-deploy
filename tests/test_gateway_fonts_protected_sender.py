@@ -271,3 +271,71 @@ def test_protected_inspection_owner_rejects_forged_script_target_and_original_id
             fonts_inspection_owner._validation(
                 root, request_id, **altered)
     assert calls == []
+
+
+
+def test_retained_digestless_prepared_dispatch_cannot_create_new_owner_intent(
+        tmp_path, monkeypatch):
+    """Old frozen prepared != authority for a first unguarded SSM send."""
+    project_root, source, controller = project(tmp_path)
+    spec, record = selected(project_root, controller, historic=True)
+    root = tmp_path / "gateway"
+    request = approved()
+    admit(root, request)
+    request_id = request["request_id"]
+    binding = project_current.binding(request, record, spec, target())
+    historical = dict(binding)
+    historical.pop("controller_sha256")
+    # Preserve old binding shape; do NOT rewrite a legacy dispatch to add
+    # a hash which did not exist when it was durably admitted.
+    assert project_current.validate(historical) == historical
+    prepare_dispatch(root, request_id, historical)
+    request_path = root / "requests" / request_id
+    frozen = {name: (request_path / name).read_bytes()
+              for name in ("request.json", "dispatch.json")
+              if (request_path / name).exists()}
+    before_dispatch = load_dispatch(root, request_id)
+    before_request = load_request(root, request_id)
+    OwnerJournal.reset()
+    monkeypatch.setattr(simple_forward, "verify_current_target",
+                        lambda *_: target())
+    monkeypatch.setattr(fonts_owner_sender, "_owner_factory",
+                        lambda _: OwnerJournal)
+    calls = []
+
+    class ForbiddenHost:
+        def __init__(self, *args, **kwargs):
+            pytest.fail("historical prepared dispatch constructed a Host")
+        def submit_command(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            pytest.fail("historical prepared dispatch sent SSM")
+
+    with pytest.raises(simple_forward.ForwardingDenied, match="digestless historical prepared"):
+        simple_forward.advance(root, request_id, host_factory=ForbiddenHost)
+    assert load_dispatch(root, request_id) == before_dispatch
+    assert load_request(root, request_id) == before_request
+    assert all((request_path / name).read_bytes() == raw
+               for name, raw in frozen.items())
+    assert OwnerJournal.intents == {}
+    assert OwnerJournal.commands == {}
+    assert OwnerJournal.opened == 0
+    assert calls == []
+
+    # Even a caller that already holds a "submitting" dispatch cannot
+    # bypass the non-sending Gateway path to create a new root-owner intent.
+    from zog.host_deploy.gateway.ledger import mark_dispatch_submitting
+    mark_dispatch_submitting(root, request_id)
+    sending_snapshot = load_dispatch(root, request_id)
+    with pytest.raises(fonts_owner_sender.ProtectedOwnerUnavailable,
+                       match="digestless historical"):
+        fonts_owner_sender.submit_once(
+            root, request_id, binding=historical, configuration=target(),
+            host=ForbiddenHost.__new__(ForbiddenHost),
+            script=project_current.remote_script(historical),
+            seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
+            journal_factory=OwnerJournal)
+    assert load_dispatch(root, request_id) == sending_snapshot
+    assert OwnerJournal.intents == {}
+    assert OwnerJournal.commands == {}
+    assert OwnerJournal.opened == 0
+    assert calls == []
