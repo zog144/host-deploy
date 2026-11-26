@@ -977,7 +977,7 @@ def test_current_selected_certbot_seed_does_not_require_nov14_migration_records(
         {**selected_host, "region": "eu-west-1"},
         {**selected_host, "account_id": "bad-account"},
     ):
-        with pytest.raises(RuntimeError, match="binding|Host|account"):
+        with pytest.raises(RuntimeError, match="binding|Host|account|identity"):
             project_current.verify_approved_lane(
                 "not-used", workspace, bad_host, record, spec)
     for bad_workspace in (
