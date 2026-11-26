@@ -1001,6 +1001,9 @@ def project_receipt_observation(receipt, binding, command_id, instance_id):
         "producer_status": result["status"],
         "result_sha256": receipt["result_sha256"],
         "result_bytes": receipt["result_bytes"],
+        **({"declared_result_sha256": receipt["result_sha256"],
+            "declared_result_bytes": receipt["result_bytes"],
+            "compilation_authorized": False} if not normalized else {}),
         "raw_result_digest_verified": normalized,
         "selected_project_observation_required": True,
         "producer": {
