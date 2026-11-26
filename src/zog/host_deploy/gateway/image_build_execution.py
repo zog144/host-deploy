@@ -1097,6 +1097,18 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
             at=at,
         )
         raise
+    if binding["schema"] == 4:
+        claim = project_receipt_observation(
+            receipt, binding, record["command_id"],
+            host_configuration["instance_id"])
+        if (isinstance(previous, dict)
+                and isinstance(previous.get("observation"), dict)
+                and previous["observation"].get("schema") in
+                    PROJECT_RECEIPT_OBSERVATIONS
+                and previous["observation"] != claim):
+            # A successful original SSM command has ONE immutable result,
+            # regardless of which Gateway observer polls it or when.
+            raise RuntimeError("original SSM receipt source/pipeline claim changed")
     if binding["schema"] == 4 and "result_representation" not in receipt:
         # Request #63 and other already-sent wrappers did not transmit the
         # producer object corresponding to the declared hash/length. Preserve
@@ -1104,20 +1116,14 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
         # explicitly UNVERIFIED diagnostic observation; do not create a
         # terminal remote-result.json or rewrite any original attempt.
         evidence = record_dispatch_observation(
-            gateway_root, request_id,
-            project_receipt_observation(
-                receipt, binding, record["command_id"],
-                host_configuration["instance_id"]), at=at)
+            gateway_root, request_id, claim, at=at)
         state = mark_completion(gateway_root, request_id,
                                 "recovery_blocked", at=at)
         return state, evidence, None
     completion = completion_for_receipt(receipt)
     if binding["schema"] == 4 and completion in ("running", "recovery_blocked"):
         evidence = record_dispatch_observation(
-            gateway_root, request_id,
-            project_receipt_observation(
-                receipt, binding, record["command_id"],
-                host_configuration["instance_id"]), at=at)
+            gateway_root, request_id, claim, at=at)
         state = mark_completion(gateway_root, request_id, completion, at=at)
         return state, evidence, None
     state, retained = record_remote_result(
