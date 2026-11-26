@@ -269,8 +269,8 @@ def test_gateway_uses_project_controller_only_across_saved_revision_pin_change(
     # check that the selected Project actually wins over installed zog.
     assert "zog.image_build.remote_operations" in (
         project_current._PROJECT_IMPORT_BOOTSTRAP)
-    assert "base64.b64decode" in sent[0]
-    assert "zlib" in sent[0]
+    assert "b64decode(" in sent[0]
+    assert "decompress(" in sent[0]
     assert simple_forward.advance(
         gateway, request["request_id"], host_factory=FakeHost)["phase"] == "submitted"
     assert len(sent) == 1
