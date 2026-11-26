@@ -80,6 +80,13 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
     record, binding = _frozen_binding(root, request_id)
     if record["phase"] not in ("prepared", "submitted"):
         raise ForwardingDenied("unrecognized forwarding phase")
+    if (record["phase"] == "prepared"
+            and "controller_sha256" not in binding):
+        # A frozen digestless historical record remains readable after its
+        # ORIGINAL send, but can never acquire a NEW protected SSM send intent.
+        # Root-control O_EXCL does not protect a previously unsent operation.
+        raise ForwardingDenied(
+            "digestless historical prepared Fonts dispatch cannot send")
     configuration = verify_current_target(root, binding)
     if record["phase"] == "prepared":
         if binding.get("schema") != 4 or binding.get("direct_forward") is not True:
