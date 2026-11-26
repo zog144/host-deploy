@@ -437,7 +437,21 @@ try:
         "allowed_next_operations", "attempt_ids", "controller_jobs",
         "predecessor", "reconciliation_required",
     )}
-    summary["uncertainty"] = bool(summary["uncertainty"])
+    # Do not coerce invalid producer evidence into an apparently certain
+    # completed build. Missing/None/string booleans are an integrity failure.
+    if (type(produced.get("status")) is not str
+            or produced["status"] not in ("pending", "completed", "failed", "released")
+            or type(produced.get("uncertainty")) is not bool
+            or "terminal_outcome" not in produced
+            or (produced["terminal_outcome"] is not None
+                and type(produced["terminal_outcome"]) is not str)
+            or "pipeline_id" not in produced
+            or (produced["pipeline_id"] is not None
+                and (type(produced["pipeline_id"]) is not str
+                     or re.fullmatch(r"[a-f0-9]{32}", produced["pipeline_id"]) is None))
+            or (produced.get("reconciliation_required") is not None
+                and type(produced["reconciliation_required"]) is not bool)):
+        raise RuntimeError("Project producer status/uncertainty evidence invalid")
     summary["missing_evidence_count"] = len(produced.get("missing_evidence") or [])
     # Compiler-created, fsynced request bytes bind the real selected Git
     # revision to the frozen repository/task without claiming a lane pin.
