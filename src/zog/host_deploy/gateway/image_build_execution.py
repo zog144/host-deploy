@@ -764,6 +764,44 @@ def _observation(value):
     return result
 
 
+def _legacy_project_current_receipt(receipt, binding):
+    """Validate the issued pre-fix summary; NEVER claim its raw hash verified.
+
+    The original compiler script checked the selected Git HEAD and producer
+    operation before reducing the output, but did not transmit the raw result
+    whose checksum it reported. No Gateway can recover those missing bytes
+    from this summary. Consumers must record a provisional observation and
+    use the protected same-operation selected-Project read-only inspector.
+    """
+    remote = binding["remote_request"]
+    result = receipt.get("result")
+    keys = {
+        "status", "pipeline_id", "source_revision", "recipe_identity",
+        "selected_generation", "terminal_outcome", "failure",
+        "allowed_next_operations", "uncertainty", "attempt_ids",
+        "reconciliation_required",
+    }
+    if (remote["source"] != {"repository": "zog144/image-build"}
+            or type(result) is not dict or set(result) != keys
+            or type(result["source_revision"]) is not str
+            or not re.fullmatch(r"[a-f0-9]{40}", result["source_revision"])
+            or result["status"] not in {"pending", "completed", "failed", "released"}
+            or type(result["uncertainty"]) is not bool
+            or (result["pipeline_id"] is not None
+                and (type(result["pipeline_id"]) is not str
+                     or not re.fullmatch(r"[a-f0-9]{32}", result["pipeline_id"])))
+            or (result["reconciliation_required"] is not None
+                and type(result["reconciliation_required"]) is not bool)
+            or (result["allowed_next_operations"] is not None
+                and (type(result["allowed_next_operations"]) is not list
+                     or len(result["allowed_next_operations"]) > 32))
+            or (result["attempt_ids"] is not None
+                and (type(result["attempt_ids"]) is not list
+                     or len(result["attempt_ids"]) > 24))):
+        raise RuntimeError("legacy Project-current producer summary differs")
+    return receipt
+
+
 def parse_receipt(text, binding):
     binding = _binding({"phase": "submitted", "binding": binding})
     if not isinstance(text, str) or len(text.encode("utf-8")) > 64 * 1024:
@@ -783,7 +821,25 @@ def parse_receipt(text, binding):
         "result_bytes",
         "result",
     }
-    if not isinstance(receipt, dict) or set(receipt) != expected:
+    current = binding["schema"] == 4
+    normalized = (isinstance(receipt, dict)
+                  and receipt.get("result_representation") ==
+                      "normalized-summary-v1")
+    if (not isinstance(receipt, dict)
+            or set(receipt) != (expected | {"result_representation"}
+                                if normalized else expected)
+            or (not current and normalized)):
+        raise RuntimeError("SSM gateway receipt fields are invalid")
+    if current and not normalized:
+        # An already-issued Project-current SSM command hashes its full
+        # untransmitted producer object, not the summary in the receipt.
+        # It cannot be retroactively verified by recomputing a summary
+        # checksum. Validate only the old wire fields here; the caller
+        # MUST retain it as provisional and verify original pipeline state
+        # through the separately protected read-only compiler observer.
+        return _legacy_project_current_receipt(receipt, binding)
+    if not isinstance(receipt, dict) or set(receipt) != (
+            expected | {"result_representation"} if normalized else expected):
         raise RuntimeError("SSM gateway receipt fields are invalid")
     if (
         receipt["schema"] != RECEIPT_SCHEMA
@@ -820,8 +876,13 @@ def parse_receipt(text, binding):
         or result["schema"] != "image-build-remote-result-v1"
         or result["operation_id"] != binding["request_id"]
         or result["operation_type"] != remote["operation"]
-        or result["source_repository"] != binding["source"]["repository"]
-        or result["source_revision"] != binding["source"]["revision"]
+        or result["source_repository"] != (
+            remote["source"]["repository"] if current
+            else binding["source"]["repository"])
+        or (current and (type(result["source_revision"]) is not str
+             or not re.fullmatch(r"[a-f0-9]{40}", result["source_revision"])))
+        or (not current and
+            result["source_revision"] != binding["source"]["revision"])
         or result["status"] not in {"completed", "failed", "pending", "released"}
         or type(result["uncertainty"]) is not bool
         or type(result["missing_evidence_count"]) is not int
@@ -837,6 +898,16 @@ def parse_receipt(text, binding):
     if "artifacts" in result and (not isinstance(result["artifacts"], dict)
             or len(_canonical(result["artifacts"])) > 32000):
         raise RuntimeError("image-build receipt artifacts are not bounded")
+    if normalized:
+        # Each byte claimed by a new current-Project receipt is exactly the
+        # canonical transmitted normalized result; no hidden producer JSON.
+        data = _canonical(result)
+        if (len(data) != receipt["result_bytes"]
+                or hashlib.sha256(data).hexdigest() != receipt["result_sha256"]):
+            raise RuntimeError("normalized Project-current receipt digest or size differs")
+        if (type(result.get("reconciliation_required")) is not bool
+                and result.get("reconciliation_required") is not None):
+            raise RuntimeError("invalid Project-current reconciliation flag")
     if remote["operation"].startswith("toolchain."):
         if (result.get("predecessor") != remote.get("predecessor")
                 or not isinstance(result.get("attempt_ids"), list)
