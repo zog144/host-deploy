@@ -560,7 +560,9 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
                        "GIT_CONFIG_NOSYSTEM": "1",
                        "GIT_CONFIG_GLOBAL": "/dev/null"}
             command = subprocess.run(
-                ["/usr/bin/git", "-C", "/proc/self/fd/" + str(source_fd),
+                ["/usr/bin/git", "-c",
+                 "safe.directory=" + str(project / "source"),
+                 "-C", "/proc/self/fd/" + str(source_fd),
                  "rev-parse", "--verify", "HEAD"],
                 pass_fds=(source_fd,), env=git_env,
                 capture_output=True, text=True, timeout=30, check=True)
