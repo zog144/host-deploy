@@ -161,8 +161,48 @@ def test_protected_owner_rejects_forged_request_or_different_target(prepared):
             root, request_id, binding=binding, configuration=different,
             host=Host(target()), script=script, seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
             journal_factory=OwnerJournal)
+    # A new current-Project controller hash is part of the frozen binding.
+    # An external caller cannot change the selected controller in send intent.
+    assert len(binding["controller_sha256"]) == 64
+    bad_checksum = dict(binding, controller_sha256="f" * 64)
+    with pytest.raises((RuntimeError, ValueError)):
+        fonts_owner_sender.submit_once(
+            root, request_id, binding=bad_checksum, configuration=target(),
+            host=Host(target()), script=script,
+            seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
+            journal_factory=OwnerJournal)
     assert OwnerJournal.intents == {}
     assert calls == []
+
+
+def test_current_project_once_only_owner_refuses_replay_after_submitted(prepared):
+    root, request_id, binding, Host, calls = prepared
+    # Already authorized new schema-5 binding, NOT a November 14 migration.
+    assert len(binding["controller_sha256"]) == 64
+    first = simple_forward.advance(root, request_id, host_factory=Host)
+    assert first["phase"] == "submitted"
+    assert len(calls) == 1
+    assert request_id in OwnerJournal.intents
+    assert request_id in OwnerJournal.commands
+    before = OwnerJournal.intents[request_id].copy()
+
+    # Duplicate issue/SQS delivery or a restarted Gateway is observation,
+    # never a second SSM send or a fresh root-control intent.
+    repeated = simple_forward.advance(root, request_id, host_factory=Host)
+    assert repeated["phase"] == "submitted"
+    assert len(calls) == 1
+    assert OwnerJournal.intents[request_id] == before
+    with pytest.raises(fonts_owner_sender.ProtectedOwnerUnavailable,
+                       match="already claimed"):
+        fonts_owner_sender.ready(request_id, journal_factory=OwnerJournal)
+    with pytest.raises(fonts_owner_sender.ProtectedOwnerUnavailable,
+                       match="admission or send intent"):
+        fonts_owner_sender.submit_once(
+            root, request_id, binding=binding, configuration=target(),
+            host=Host(target()), script=project_current.remote_script(binding),
+            seconds=fonts_owner_sender.PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
+            journal_factory=OwnerJournal)
+    assert len(calls) == 1
 
 
 def test_no_unprotected_send_when_root_control_owner_missing(prepared,
