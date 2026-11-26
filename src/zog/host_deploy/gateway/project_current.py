@@ -5,10 +5,12 @@ producer uses that Project's *current* image-build checkout and package pins.
 Existing pinned dispatch records remain immutable and readable.
 """
 import hashlib
+import io
 import json
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import tokenize
 
 from .. import image_build_lanes
 from .github_dispatch import FIRST_FONTS_TASK
@@ -583,13 +585,47 @@ _CURRENT_RUN_MARKER = '''    command = subprocess.run(
     revision = command.stdout.strip()'''
 if _RUN.count(_CURRENT_RUN_MARKER) != 1:
     raise RuntimeError("Project-current preflight source insertion point differs")
+def _compact_current_python(source):
+    """Drop only blank and comment-only lines, never string-literal content.
+
+    Root-control's existing trusted-Host sender caps the *entire* SSM shell
+    script at 32 KiB. New controller preflight is incorporated without
+    weakening that limit or touching any saved historical command bytes.
+    Tokenize protects embedded multiline literals from line removal.
+    """
+    lines = source.splitlines(keepends=True)
+    protected = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for token in tokens:
+            if token.type == tokenize.STRING and token.start[0] < token.end[0]:
+                protected.update(range(token.start[0], token.end[0] + 1))
+    except (tokenize.TokenError, IndentationError, SyntaxError) as error:
+        raise RuntimeError("current selected Project script is not valid Python") from error
+    return "".join(
+        line for i, line in enumerate(lines, 1)
+        if i in protected or (line.strip() and not line.lstrip().startswith("#"))
+    )
+
+
 def _current_runtime_script():
     # The original _RUN may be patched in a disposable timeout fixture.
-    # Compose from the active original script without changing its bytes
-    # for already frozen historical dispatches.
-    if _RUN.count(_CURRENT_RUN_MARKER) != 1:
-        raise RuntimeError("Project-current selected controller preflight cannot be injected")
-    return _RUN.replace(_CURRENT_RUN_MARKER, _CURRENT_CONTROLLER_PREFLIGHT)
+    # The old script/argv are left byte-for-byte identical for the saved
+    # schema-4 remote operation; only new controller-bound scripts compact.
+    from .project_current_observation import _OBSERVER
+    previous_observer, next_observer = (
+        repr(_OBSERVER), repr(_compact_current_python(_OBSERVER)))
+    previous_import, next_import = (
+        repr(_PROJECT_IMPORT_BOOTSTRAP),
+        repr(_compact_current_python(_PROJECT_IMPORT_BOOTSTRAP)))
+    if (_RUN.count(_CURRENT_RUN_MARKER) != 1
+            or _RUN.count(previous_observer) != 1
+            or _RUN.count(previous_import) != 1):
+        raise RuntimeError("Project-current selected controller script binding differs")
+    rendered = (_RUN.replace(previous_observer, next_observer)
+                    .replace(previous_import, next_import)
+                    .replace(_CURRENT_RUN_MARKER, _CURRENT_CONTROLLER_PREFLIGHT))
+    return _compact_current_python(rendered)
 
 
 def remote_script(value):
