@@ -17,6 +17,7 @@ from .github_dispatch import FIRST_FONTS_TASK
 from .image_build_dispatch import prepare_image_build_dispatch, verify_current_target
 from .image_build_execution import (
     CONTROL_TIMEOUT_SECONDS, RECEIPT_SCHEMA, _binding, remote_script,
+    parse_receipt,
 )
 from .project_current_observation import (
     CONTROL_TIMEOUT_SECONDS as PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
@@ -181,6 +182,9 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
             or not isinstance(receipt.get("result"), dict)):
         raise ForwardingDenied("producer result differs from original operation")
     if binding.get("schema") == 4:
+        # Same checksum, normalized fields and frozen-source validation as
+        # dispatch-observe; no alternative permissive receipt parser.
+        receipt = parse_receipt(output, binding)
         result = receipt["result"]
         pipeline = result.get("pipeline_id")
         source_revision = result.get("source_revision")
@@ -193,6 +197,27 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
                 or result.get("status") not in
                     ("pending", "running", "completed", "failed", "released")):
             raise ForwardingDenied("producer status or identity is invalid")
+        if "result_representation" not in receipt:
+            # An already-sent pre-fix wrapper's SHA covers a producer object
+            # omitted from SSM stdout. The checksum cannot be verified from
+            # the reduced summary, even if the SSM invocation succeeded.
+            # Preserve the original operation for same-pipeline readback.
+            record_dispatch_observation(root, request_id, {
+                **summary,
+                "schema": "host-deploy-project-current-legacy-receipt-v1",
+                "source_repository": binding["remote_request"]["source"]["repository"],
+                "source_revision": source_revision,
+                "pipeline_id": pipeline,
+                "reported_status": result["status"],
+                "declared_result_sha256": receipt["result_sha256"],
+                "declared_result_bytes": receipt["result_bytes"],
+                "raw_result_digest_verified": False,
+                "selected_project_observation_required": True,
+            })
+            mark_completion(root, request_id, "recovery_blocked")
+            return {"request_id": request_id, "phase": "recovery_blocked",
+                    "command_id": command_id, "pipeline_id": pipeline,
+                    "observation_required": True}
         # Do not store a provisional result as the immutable terminal
         # remote-result.json: later read-only observation may reconcile it.
         report = {**summary,
