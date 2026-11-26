@@ -30,7 +30,18 @@ mixed-state recovery receipt for the existing Project and then denied all
 new builds. It now requires **active schema 5**, `managed`,
 `project_selection=existing`, the exact selected `certbot-seed` root,
 matching lane-specific controller and source/package/state paths, and
-consistent Workspace/Host identity. It does not require any schema-4 file.
+consistent Workspace/Host identity, including the exact approved compiler
+instance. It does not require any schema-4 file.
+
+`host-deploy fonts-lane-verify` (`fonts_lane_profile.verify`) now has a
+separate **current schema-5** verification branch. It reads the same
+current active lane and expected controller SHA-256 without asking for
+historical migration/archive/receipt evidence. Its nonauthorizing report
+explicitly states `installed_controller_verified=false` and
+`native_readback_required=true`. The actual controller is verified in the
+protected compiler command, not claimed from a Gateway-local file. A truly
+historical migrated destination remains inspectable through its distinct
+legacy verification branch and is never treated as the current selection.
 
 The Gateway freezes the SHA-256 of the **exact expected controller bytes**
 generated from the active schema-5 specification into every **new** protected
@@ -57,6 +68,15 @@ They remain available for read-only observation of the same retained
 request and pipeline; neither schema-4 installation migration nor a
 new original SSM send is performed. New original commands must have
 new request identities: the once-only journal forbids replay of old ones.
+
+The new controller verification is composed from reviewed source into the
+same fixed SSM script. Comment-only and blank lines (not multiline string
+contents) are removed **only for new current-schema-5 scripts** to keep the
+entire submitted shell command inside root-control's existing **32 KiB**
+limit. The original fixed script remains byte-for-byte unchanged for frozen
+historical dispatches. Tests cover both the size bound and the real root
+journal's one-submit/no-replay behavior; there is no increased command
+allowance or extra execution/sender path.
 
 ### Security boundary
 
