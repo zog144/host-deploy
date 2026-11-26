@@ -192,6 +192,13 @@ def verify(directory, *, now=None):
                 "migration_required": False,
                 "workspace": str(root),
             }
+        if selected.get("schema") == lanes.INHERITED_SCHEMA:
+            # Historical migrated schema-5 controllers remain inspectable
+            # *only as historical evidence*. They are not the current
+            # existing-Project selection and never authorize a new dispatch.
+            from . import fonts_lane_migration
+            return fonts_lane_migration.verify_existing(
+                root, workspace, host, selected)
         record, spec, digest = _approved(root)
         return {
             "schema": "host-deploy-first-fonts-historical-inspection-v1",
