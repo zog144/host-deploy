@@ -949,6 +949,11 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
     host_configuration = verify_current_target(gateway_root, binding)
     host = host_factory(host_configuration)
     observed = host.inspect_command(record["command_id"])
+    if observed is not None and (
+            type(observed) is not dict
+            or observed.get("CommandId") != record["command_id"]
+            or observed.get("InstanceId") != host_configuration["instance_id"]):
+        raise RuntimeError("SSM original CommandId or compiler instance differs")
     evidence = record_dispatch_observation(
         gateway_root,
         request_id,
@@ -986,6 +991,33 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
             at=at,
         )
         raise
+    if binding["schema"] == 4 and "result_representation" not in receipt:
+        # Request #63 and other already-sent wrappers did not transmit the
+        # producer object corresponding to the declared hash/length. Preserve
+        # its SSM identity, received bytes and reported revision as an
+        # explicitly UNVERIFIED diagnostic observation; do not create a
+        # terminal remote-result.json or rewrite any original attempt.
+        result = receipt["result"]
+        evidence = record_dispatch_observation(
+            gateway_root, request_id, {
+                "schema": "host-deploy-project-current-legacy-receipt-v1",
+                "command_id": record["command_id"],
+                "compiler_instance_id": host_configuration["instance_id"],
+                "remote_request_sha256": binding["remote_request_sha256"],
+                "declared_result_sha256": receipt["result_sha256"],
+                "declared_result_bytes": receipt["result_bytes"],
+                "source_repository": binding["remote_request"]["source"]["repository"],
+                "source_revision": result["source_revision"],
+                "pipeline_id": result["pipeline_id"],
+                "producer_status": result["status"],
+                "raw_result_digest_verified": False,
+                "selected_project_observation_required": True,
+                "compilation_authorized": False,
+            }, at=at,
+        )
+        state = mark_completion(gateway_root, request_id,
+                                "recovery_blocked", at=at)
+        return state, evidence, None
     completion = completion_for_receipt(receipt)
     state, retained = record_remote_result(
         gateway_root,
