@@ -862,7 +862,8 @@ def parse_receipt(text, binding):
         "missing_evidence_count",
     }
     auxiliary = {"recipe_identity", "artifacts", "selected_generation",
-                 "attempt_ids", "controller_jobs", "predecessor"}
+                 "attempt_ids", "controller_jobs", "predecessor",
+                 "reconciliation_required", "source_evidence"}
     remote = binding["remote_request"]
     if (
         not isinstance(result, dict)
@@ -894,6 +895,24 @@ def parse_receipt(text, binding):
             or len(_canonical(result["artifacts"])) > 32000):
         raise RuntimeError("image-build receipt artifacts are not bounded")
     if normalized:
+        # The execution wrapper read the selected compiler Git HEAD, wrote a
+        # fsynced Project-owned producer request and required the producer to
+        # echo that exact revision. Verify its request bytes against the
+        # FROZEN Gateway operation with only the resolved Git revision added.
+        source = result.get("source_evidence")
+        request_source = dict(remote["source"])
+        request_source["revision"] = result["source_revision"]
+        reviewed_request = dict(remote, source=request_source)
+        expected_request_sha = hashlib.sha256(
+            _canonical(reviewed_request) + b"\n").hexdigest()
+        if (type(source) is not dict
+                or set(source) != {"schema", "repository",
+                                   "revision", "request_sha256"}
+                or source["schema"] != "host-deploy-project-current-source-v1"
+                or source["repository"] != remote["source"]["repository"]
+                or source["revision"] != result["source_revision"]
+                or source["request_sha256"] != expected_request_sha):
+            raise RuntimeError("Project-current resolved revision is not bound to original request")
         # Each byte claimed by a new current-Project receipt is exactly the
         # canonical transmitted normalized result; no hidden producer JSON.
         data = _canonical(result)
