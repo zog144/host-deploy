@@ -830,17 +830,6 @@ def parse_receipt(text, binding):
                                 if normalized else expected)
             or (not current and normalized)):
         raise RuntimeError("SSM gateway receipt fields are invalid")
-    if current and not normalized:
-        # An already-issued Project-current SSM command hashes its full
-        # untransmitted producer object, not the summary in the receipt.
-        # It cannot be retroactively verified by recomputing a summary
-        # checksum. Validate only the old wire fields here; the caller
-        # MUST retain it as provisional and verify original pipeline state
-        # through the separately protected read-only compiler observer.
-        return _legacy_project_current_receipt(receipt, binding)
-    if not isinstance(receipt, dict) or set(receipt) != (
-            expected | {"result_representation"} if normalized else expected):
-        raise RuntimeError("SSM gateway receipt fields are invalid")
     if (
         receipt["schema"] != RECEIPT_SCHEMA
         or receipt["request_id"] != binding["request_id"]
@@ -851,6 +840,12 @@ def parse_receipt(text, binding):
         or not 1 <= receipt["result_bytes"] <= _MAX_REMOTE_RESULT
     ):
         raise RuntimeError("SSM gateway receipt identity is invalid")
+    if current and not normalized:
+        # The legacy hash covers producer bytes the SSM wrapper omitted.
+        # Report original identity as provisional, never as a verified
+        # result or a terminal pipeline. Read-only compiler reconciliation
+        # is required to establish the actual failed/pending outcome.
+        return _legacy_project_current_receipt(receipt, binding)
     result = receipt["result"]
     result_fields = {
         "schema",
