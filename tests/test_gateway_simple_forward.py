@@ -121,6 +121,29 @@ def forwarding(tmp_path, monkeypatch):
     # only the upstream parser boundary is simulated here.
     monkeypatch.setattr(simple_forward, "parse_receipt",
                         lambda raw, selected: json.loads(raw.strip().splitlines()[-1]))
+    monkeypatch.setattr(simple_forward, "project_receipt_observation",
+        lambda receipt, selected, command_id, instance_id: {
+            "schema": "host-deploy-project-current-normalized-receipt-v1",
+            "request_id": REQUEST_ID,
+            "command_id": command_id,
+            "compiler_instance_id": instance_id,
+            "remote_request_sha256": selected["remote_request_sha256"],
+            "source_repository": "zog144/image-build",
+            "source_revision": receipt["result"]["source_revision"],
+            "pipeline_id": receipt["result"]["pipeline_id"],
+            "producer_status": receipt["result"]["status"],
+            "result_sha256": "a" * 64,
+            "result_bytes": 100,
+            "raw_result_digest_verified": True,
+            "selected_project_observation_required": True,
+            "producer": {
+                "request_id": REQUEST_ID,
+                "source_revision": receipt["result"]["source_revision"],
+                "pipeline_id": receipt["result"]["pipeline_id"],
+                "status": receipt["result"]["status"],
+                "uncertainty": receipt["result"]["uncertainty"],
+            },
+        })
     monkeypatch.setattr(simple_forward, "verify_current_target",
                         lambda gateway, selected: TARGET)
     monkeypatch.setattr(simple_forward, "remote_script",
