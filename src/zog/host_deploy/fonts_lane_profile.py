@@ -156,18 +156,42 @@ def _approved(root, *, records=None):
 
 
 def verify(directory, *, now=None):
-    """Authenticate retained *local* lane evidence without executing it.
+    """Read the selected CURRENT schema-5 Project without a migration dependency.
 
-    PR #36 prohibits account-selected schema-4 execution. Inspection must not
-    contact SSM, save a new installed-facts receipt, or treat old account data
-    as authorization. The old specification stays byte-for-byte unchanged.
+    This is local selection evidence, not an assertion that the remote
+    compiler's installed controller is still valid. New protected direct
+    dispatch independently checks that controller on the selected Host before
+    any producer-owned files can be created. No SSM inspection, installation,
+    migration receipt, archive or operation replay occurs in this verifier.
+
+    A retained schema-4 record is *historical evidence only*, and remains
+    inspectable by the separate original-profile compatibility contract.
     """
     with locked(directory) as root:
         workspace, host = _owner(root)
         selected = _read_regular(lanes._path(root, LANE))
         if selected.get("schema") == lanes.INHERITED_SCHEMA:
-            from . import fonts_lane_migration
-            return fonts_lane_migration.verify_existing(root, workspace, host, selected)
+            from .gateway.project_current import verify_approved_lane
+            try:
+                spec = lanes.validate(selected.get("specification"))
+            except (TypeError, KeyError, ValueError) as error:
+                raise RuntimeError("current Fonts schema-5 specification differs") from error
+            current = verify_approved_lane(root, workspace, host, selected, spec)
+            return {
+                "schema": "host-deploy-first-fonts-current-project-selection-v1",
+                "binding": _binding(workspace, host),
+                "state": selected["state"],
+                "project_selection": "existing",
+                "project_root": current["project_root"],
+                "controller_config": current["controller_config"],
+                "expected_controller_sha256": current["controller_sha256"],
+                "specification_sha256": lanes.specification_sha256(spec),
+                "installed_controller_verified": False,
+                "native_readback_required": True,
+                "execution_authorized": False,
+                "migration_required": False,
+                "workspace": str(root),
+            }
         record, spec, digest = _approved(root)
         return {
             "schema": "host-deploy-first-fonts-historical-inspection-v1",
