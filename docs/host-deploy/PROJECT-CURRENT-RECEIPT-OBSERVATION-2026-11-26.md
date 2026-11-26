@@ -66,6 +66,52 @@ the protected original SSM script under the existing root-control
 historical already-frozen script bytes. Runtime module-origin tests
 still verify import from the selected Project, not installed fallback.
 
+## November 26 independent review corrections: terminal and recovery identity
+
+Both Gateway entry points now use the exact same
+`project_current_completion()` result classifier for a new schema-4
+Project-current dispatch. The canonical wire hash is **not** proof of a
+completed pipeline. A terminal successful `pipeline.submit` requires
+a valid original 32-hex pipeline ID, `status=completed`,
+`terminal_outcome=success`, `uncertainty=false`, no unresolved
+`reconciliation_required`, and no failure. Contradictory even
+self-consistently rehashed normalized receipts remain
+`recovery_blocked`; they cannot create terminal `remote-result.json`.
+A genuine pre-pipeline request-validation failure with a structured
+failure reason can remain failed without a pipeline ID. The compiler
+wrapper now **rejects** invalid/missing/None producer uncertainty and
+status/terminal evidence rather than coercing it to false.
+
+The original receipt's claimed source revision and pipeline ID are
+retained in a typed `dispatch-observation.json` for **both** observers:
+`host-deploy-project-current-legacy-receipt-v1` for the old
+unverifiable full-result hash; and
+`host-deploy-project-current-normalized-receipt-v1` for a new
+authenticated normalized summary. Both store the original CommandId,
+compiler instance, frozen request SHA, repository, revision, pipeline,
+status, declared hash/size and `producer` claim, with a truthful
+`raw_result_digest_verified` bit. Re-polling an original SSM command
+cannot replace a different retained source/pipeline/terminal claim.
+
+Before any protected same-operation read-only SSM inspection,
+`reconcile_project_observation()` validates the complete retained
+typed claim against its original dispatch and target, extracts that
+specific original pipeline ID as `expected_pipeline` for the
+fixed source-only observer, and compares the independent Host's
+revision and pipeline against the original claimed values **before**
+any terminal write. A changed revision/pipeline, mismatched Host/
+CommandId/request digest, or invalid typed record HOLD without
+changing original evidence. The distinct read-only inspection retains
+its separately journaled operation and CommandId; it cannot replay
+the original build's protected send-once intent.
+
+Disposable CI tests verify a real fixture producer writing its
+completed pipeline and attempt, both observers' identical terminal
+classification, a self-consistently rehashed false-success receipt,
+pre-pipeline failure, missing/invalid uncertainty, an original
+CommandId that changes its claimed result, and protected mismatching
+or matching source/pipeline readback without a new original SSM send.
+
 ## Retained old receipt: incomplete integrity is not success
 
 The **already sent** Project-current wrapper reported the digest and
