@@ -439,6 +439,14 @@ try:
     )}
     summary["uncertainty"] = bool(summary["uncertainty"])
     summary["missing_evidence_count"] = len(produced.get("missing_evidence") or [])
+    # Compiler-created, fsynced request bytes bind the real selected Git
+    # revision to the frozen repository/task without claiming a lane pin.
+    summary["source_evidence"] = {
+        "schema": "host-deploy-project-current-source-v1",
+        "repository": request["source"]["repository"],
+        "revision": revision,
+        "request_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
     for field, limit in (("allowed_next_operations", 32),
                          ("attempt_ids", 24), ("controller_jobs", 24)):
         summary[field] = list(summary[field] or [])[:limit]
