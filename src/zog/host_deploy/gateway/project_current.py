@@ -4,6 +4,7 @@ The lane selects the Project and controller. At execution on that Host, the
 producer uses that Project's *current* image-build checkout and package pins.
 Existing pinned dispatch records remain immutable and readable.
 """
+import base64
 import hashlib
 import io
 import json
@@ -11,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import tokenize
+import zlib
 
 from .. import image_build_lanes
 from .github_dispatch import FIRST_FONTS_TASK
@@ -422,6 +424,7 @@ try:
     if (produced.get("schema") != "image-build-remote-result-v1"
             or produced.get("operation_id") != operation_id
             or produced.get("operation_type") != "pipeline.submit"
+            or produced.get("source_repository") != "zog144/image-build"
             or produced.get("source_revision") != revision):
         raise RuntimeError("Project producer result identity differs")
     # The wire receipt is a NORMALIZED summary. Its declared length and
@@ -646,9 +649,18 @@ def _current_runtime_script():
     from .project_current_observation import _OBSERVER
     previous_observer, next_observer = (
         repr(_OBSERVER), repr(_compact_current_python(_OBSERVER)))
-    previous_import, next_import = (
-        repr(_PROJECT_IMPORT_BOOTSTRAP),
-        repr(_compact_current_python(_PROJECT_IMPORT_BOOTSTRAP)))
+    # Only NEW controller-bound scripts embed a compressed, fixed
+    # import-only bootstrap expression; the protected 32-KiB SSM limit
+    # remains unchanged. Inflate to the exact reviewed source, before
+    # importing anything from the selected Project.
+    import_source = _compact_current_python(_PROJECT_IMPORT_BOOTSTRAP)
+    packed = base64.b64encode(zlib.compress(
+        import_source.encode("utf-8"), level=9)).decode("ascii")
+    previous_import = repr(_PROJECT_IMPORT_BOOTSTRAP)
+    next_import = (
+        "__import__('zlib').decompress(__import__('base64').b64decode("
+        + repr(packed) + ")).decode('utf-8')"
+    )
     if (_RUN.count(_CURRENT_RUN_MARKER) != 1
             or _RUN.count(previous_observer) != 1
             or _RUN.count(previous_import) != 1):
