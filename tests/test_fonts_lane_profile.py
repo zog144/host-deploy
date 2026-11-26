@@ -360,7 +360,7 @@ def test_current_profile_rejects_foreign_selection_or_host_without_old_migration
     elif changed == "wrong-account":
         host["account_id"] = "not-an-account"
     else:
-        spec["controller"]["resource_limits"]["memory-maximum-bytes"] = -1
+        spec["controller"]["execution_user_id"] = 24202
     save(path, record)
     save(root / "host.json", host)
     before = path.read_bytes()
