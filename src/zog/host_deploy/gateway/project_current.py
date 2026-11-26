@@ -484,7 +484,7 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
     def verified_directory(parent_fd, part):
         info = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
         if not __import__('stat').S_ISDIR(info.st_mode):
-            raise RuntimeError("selected Project ancestor is not a directory")
+            raise RuntimeError("Project ancestor unsafe")
         fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY |
                      os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
         opened = os.fstat(fd)
@@ -492,12 +492,12 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
                 != (opened.st_dev, opened.st_ino, opened.st_uid,
                     opened.st_gid, opened.st_mode)):
             os.close(fd)
-            raise RuntimeError("selected Project ancestry changed during open")
+            raise RuntimeError("Project ancestor changed")
         sticky_root = (opened.st_uid == 0 and
                        __import__('stat').S_IMODE(opened.st_mode) == 0o1777)
         if opened.st_mode & 0o022 and not sticky_root:
             os.close(fd)
-            raise RuntimeError("selected Project ancestor is writable")
+            raise RuntimeError("Project ancestor writable")
         return fd, opened
     project_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     project_ancestors = []
@@ -511,7 +511,7 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
         if (not all(x.st_uid in (0, project_info.st_uid)
                     for x in project_ancestors)
                 or __import__('stat').S_IMODE(project_info.st_mode) & 0o077):
-            raise RuntimeError("selected Project ownership or private mode differs")
+            raise RuntimeError("Project ownership differs")
         config_info = os.stat(controller.name, dir_fd=project_fd,
                               follow_symlinks=False)
         if (not __import__('stat').S_ISREG(config_info.st_mode)
@@ -519,7 +519,7 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
                 or config_info.st_uid not in (0, project_info.st_uid)
                 or config_info.st_mode & 0o022
                 or not 0 < config_info.st_size <= 65536):
-            raise RuntimeError("installed current controller file is unsafe")
+            raise RuntimeError("controller file unsafe")
         config_fd = os.open(controller.name, os.O_RDONLY | os.O_NOFOLLOW |
                             os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=project_fd)
         try:
@@ -530,7 +530,7 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
                 (config_info.st_dev, config_info.st_ino, config_info.st_mode,
                  config_info.st_uid, config_info.st_gid, config_info.st_nlink,
                  config_info.st_size)):
-                raise RuntimeError("selected current controller inode changed")
+                raise RuntimeError("controller inode changed")
             installed = os.read(config_fd, 65537)
             after = os.fstat(config_fd)
             still = os.stat(controller.name, dir_fd=project_fd,
@@ -544,9 +544,9 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
                      still.st_uid) !=
                     (before.st_dev, before.st_ino, before.st_mode,
                      before.st_uid)):
-                raise RuntimeError("installed current controller changed during readback")
+                raise RuntimeError("controller readback changed")
             if hashlib.sha256(installed).hexdigest() != expected_controller_sha256:
-                raise RuntimeError("installed current controller differs from schema-5 selection")
+                raise RuntimeError("installed current controller differs")
         finally:
             os.close(config_fd)
         # Use the *opened* selected source and cleared Git environment, not
@@ -568,14 +568,14 @@ _CURRENT_CONTROLLER_PREFLIGHT = r'''
                 capture_output=True, text=True, timeout=30, check=True)
             revision = command.stdout.strip()
             if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
-                raise RuntimeError("selected Project has no current Git checkout")
+                raise RuntimeError("selected Git checkout missing")
         finally:
             os.close(source_fd)
         # Existing controller and Project path must remain the same immediately
         # before any producer-owned file changes occur.
         if (os.fstat(project_fd).st_dev, os.fstat(project_fd).st_ino) != (
                 project_info.st_dev, project_info.st_ino):
-            raise RuntimeError("selected Project changed before producer")
+            raise RuntimeError("Project changed before producer")
     finally:
         os.close(project_fd)
 '''
