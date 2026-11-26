@@ -339,3 +339,55 @@ def test_retained_digestless_prepared_dispatch_cannot_create_new_owner_intent(
     assert OwnerJournal.commands == {}
     assert OwnerJournal.opened == 0
     assert calls == []
+
+
+
+def test_retained_digestless_submitted_dispatch_only_inspects_original_command(
+        tmp_path, monkeypatch):
+    """Old submitted record is readable; it never becomes new send authority."""
+    project_root, source, controller = project(tmp_path)
+    spec, record = selected(project_root, controller, historic=True)
+    root = tmp_path / "gateway"
+    request = approved()
+    admit(root, request)
+    request_id = request["request_id"]
+    binding = project_current.binding(request, record, spec, target())
+    frozen = dict(binding)
+    frozen.pop("controller_sha256")
+    prepare_dispatch(root, request_id, frozen)
+    from zog.host_deploy.gateway.ledger import (
+        mark_dispatch_submitting, mark_dispatch_submitted,
+    )
+    mark_dispatch_submitting(root, request_id)
+    mark_dispatch_submitted(root, request_id, "retained-original-command")
+    before = load_dispatch(root, request_id)
+    before_state = load_request(root, request_id)
+    monkeypatch.setattr(simple_forward, "verify_current_target",
+                        lambda *_: target())
+    OwnerJournal.reset()
+    monkeypatch.setattr(fonts_owner_sender, "_owner_factory",
+                        lambda _: OwnerJournal)
+    calls = []
+
+    class ReadbackOnlyHost:
+        instance = target()["instance_id"]
+        def __init__(self, configuration):
+            assert configuration == target()
+        def submit_command(self, *args, **kwargs):
+            pytest.fail("historical submitted operation was replayed")
+        def inspect_command(self, command_id):
+            calls.append(command_id)
+            return None
+
+    result = simple_forward.advance(root, request_id,
+                                    host_factory=ReadbackOnlyHost)
+    assert result == {
+        "request_id": request_id, "phase": "submitted",
+        "command_id": "retained-original-command",
+        "status": "not-yet-visible",
+    }
+    assert calls == ["retained-original-command"]
+    assert load_dispatch(root, request_id) == before
+    assert load_request(root, request_id) == before_state
+    assert not OwnerJournal.intents and not OwnerJournal.commands
+    assert OwnerJournal.opened == 0
