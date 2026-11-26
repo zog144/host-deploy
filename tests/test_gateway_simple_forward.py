@@ -244,6 +244,8 @@ def forwarding(tmp_path, monkeypatch):
                         "remote_request_sha256": "0" * 64,
                         "result_representation": "normalized-summary-v1",
                         "result": {"status": "pending", "uncertainty": False,
+                                   "operation_type": "pipeline.submit",
+                                   "reconciliation_required": False,
                                    "source_revision": SOURCE["revision"],
                                    "pipeline_id": "c" * 32},
                     })}
