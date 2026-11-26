@@ -938,7 +938,84 @@ def parse_receipt(text, binding):
     return receipt
 
 
+PROJECT_RECEIPT_OBSERVATIONS = frozenset({
+    "host-deploy-project-current-legacy-receipt-v1",
+    "host-deploy-project-current-normalized-receipt-v1",
+})
+
+
+def project_current_completion(receipt):
+    """One conservative pipeline.submit classifier for both Gateway paths."""
+    if receipt.get("result_representation") != "normalized-summary-v1":
+        return "recovery_blocked"
+    result = receipt["result"]
+    pipeline = result.get("pipeline_id")
+    owned_pipeline = (type(pipeline) is str
+                      and re.fullmatch(r"[a-f0-9]{32}", pipeline) is not None)
+    if (result.get("operation_type") != "pipeline.submit"
+            or type(result.get("uncertainty")) is not bool
+            or type(result.get("reconciliation_required")) is not bool
+            or result["uncertainty"] or result["reconciliation_required"]):
+        return "recovery_blocked"
+    status = result.get("status")
+    outcome = result.get("terminal_outcome")
+    if status == "completed":
+        return ("completed" if (owned_pipeline and outcome == "success"
+                                and result.get("failure") is None)
+                else "recovery_blocked")
+    if status == "failed":
+        failure = result.get("failure")
+        credible = (type(failure) is dict
+                    and type(failure.get("type")) is str and bool(failure["type"])
+                    and type(failure.get("reason")) is str and bool(failure["reason"]))
+        if credible and (
+                (owned_pipeline and type(outcome) is str
+                 and outcome not in ("", "success"))
+                or (pipeline is None and outcome in (None, "failed"))):
+            return "failed"
+        return "recovery_blocked"
+    if status == "released":
+        return ("cancelled" if owned_pipeline and outcome == "released"
+                else "recovery_blocked")
+    if status == "pending":
+        return "running" if owned_pipeline else "recovery_blocked"
+    return "recovery_blocked"
+
+
+def project_receipt_observation(receipt, binding, command_id, instance_id):
+    """Keep original SSM source/pipeline claims for protected readback."""
+    from .project_current import validate as validate_project_binding
+    binding = validate_project_binding(binding)
+    result = receipt["result"]
+    normalized = receipt.get("result_representation") == "normalized-summary-v1"
+    return {
+        "schema": ("host-deploy-project-current-normalized-receipt-v1"
+                   if normalized else "host-deploy-project-current-legacy-receipt-v1"),
+        "request_id": binding["request_id"],
+        "command_id": command_id,
+        "compiler_instance_id": instance_id,
+        "remote_request_sha256": binding["remote_request_sha256"],
+        "source_repository": binding["remote_request"]["source"]["repository"],
+        "source_revision": result["source_revision"],
+        "pipeline_id": result["pipeline_id"],
+        "producer_status": result["status"],
+        "result_sha256": receipt["result_sha256"],
+        "result_bytes": receipt["result_bytes"],
+        "raw_result_digest_verified": normalized,
+        "selected_project_observation_required": True,
+        "producer": {
+            "request_id": binding["request_id"],
+            "source_revision": result["source_revision"],
+            "pipeline_id": result["pipeline_id"],
+            "status": result["status"],
+            "uncertainty": result["uncertainty"],
+        },
+    }
+
+
 def completion_for_receipt(receipt):
+    if receipt.get("result_representation") == "normalized-summary-v1":
+        return project_current_completion(receipt)
     result = receipt["result"]
     if result["uncertainty"]:
         return "recovery_blocked"
@@ -973,12 +1050,19 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
             or observed.get("CommandId") != record["command_id"]
             or observed.get("InstanceId") != host_configuration["instance_id"]):
         raise RuntimeError("SSM original CommandId or compiler instance differs")
-    evidence = record_dispatch_observation(
-        gateway_root,
-        request_id,
-        _observation(observed),
-        at=at,
-    )
+    # Re-polling the SAME command cannot erase authenticated source and
+    # pipeline claims already retained for protected read-only recovery.
+    path = Path(gateway_root) / "requests" / request_id / "dispatch-observation.json"
+    previous = json.loads(path.read_text()) if path.is_file() else None
+    if (binding["schema"] == 4 and isinstance(previous, dict)
+            and previous.get("command_id") == record["command_id"]
+            and isinstance(previous.get("observation"), dict)
+            and previous["observation"].get("schema") in PROJECT_RECEIPT_OBSERVATIONS):
+        evidence = previous
+    else:
+        evidence = record_dispatch_observation(
+            gateway_root, request_id, _observation(observed), at=at)
+
     if observed is None:
         return load_request(gateway_root, request_id), evidence, None
 
@@ -1016,33 +1100,23 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
         # its SSM identity, received bytes and reported revision as an
         # explicitly UNVERIFIED diagnostic observation; do not create a
         # terminal remote-result.json or rewrite any original attempt.
-        result = receipt["result"]
         evidence = record_dispatch_observation(
-            gateway_root, request_id, {
-                "schema": "host-deploy-project-current-legacy-receipt-v1",
-                "command_id": record["command_id"],
-                "compiler_instance_id": host_configuration["instance_id"],
-                "remote_request_sha256": binding["remote_request_sha256"],
-                "declared_result_sha256": receipt["result_sha256"],
-                "declared_result_bytes": receipt["result_bytes"],
-                "source_repository": binding["remote_request"]["source"]["repository"],
-                "source_revision": result["source_revision"],
-                "pipeline_id": result["pipeline_id"],
-                "producer_status": result["status"],
-                "raw_result_digest_verified": False,
-                "selected_project_observation_required": True,
-                "compilation_authorized": False,
-            }, at=at,
-        )
+            gateway_root, request_id,
+            project_receipt_observation(
+                receipt, binding, record["command_id"],
+                host_configuration["instance_id"]), at=at)
         state = mark_completion(gateway_root, request_id,
                                 "recovery_blocked", at=at)
         return state, evidence, None
     completion = completion_for_receipt(receipt)
+    if binding["schema"] == 4 and completion in ("running", "recovery_blocked"):
+        evidence = record_dispatch_observation(
+            gateway_root, request_id,
+            project_receipt_observation(
+                receipt, binding, record["command_id"],
+                host_configuration["instance_id"]), at=at)
+        state = mark_completion(gateway_root, request_id, completion, at=at)
+        return state, evidence, None
     state, retained = record_remote_result(
-        gateway_root,
-        request_id,
-        receipt,
-        completion,
-        at=at,
-    )
+        gateway_root, request_id, receipt, completion, at=at)
     return state, evidence, retained
