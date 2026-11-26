@@ -24,9 +24,52 @@ def _canonical(value):
                       ensure_ascii=True, allow_nan=False).encode("ascii")
 
 
-def receipt_fixture(tmp_path, *, request_id="a" * 32):
+def receipt_fixture(tmp_path, *, request_id="a" * 32,
+                    actual_terminal=False):
     root, source, controller = project(tmp_path)
     (source / "project/package/pins.txt").write_text("sha256:" + "a" * 64)
+    if actual_terminal:
+        # A real disposable Project producer writes its original immutable
+        # pipeline and completed attempt, rather than tests patching stdout
+        # from pending into a pretend successful build.
+        module = source / "src/zog/image_build/remote_operations.py"
+        module.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "def main():\n"
+            " req_path=Path(sys.argv[-1])\n"
+            " req=json.loads(req_path.read_text())\n"
+            " root=req_path.parents[2]\n"
+            " op=req['operation_id']\n"
+            " pipeline='a'*32\n"
+            " attempt='image-original-fonts-final'\n"
+            " generation='b'*64\n"
+            " state=root/'state/image-build'\n"
+            " op_dir=state/'remote-operations'/op\n"
+            " op_dir.mkdir(parents=True,exist_ok=True)\n"
+            " (op_dir/'request.json').write_text(json.dumps(req))\n"
+            " (op_dir/'binding.json').write_text(json.dumps({'pipeline_id':pipeline}))\n"
+            " pipe_dir=state/'pipelines'/pipeline\n"
+            " pipe_dir.mkdir(parents=True,exist_ok=True)\n"
+            " record={'schema':1,'pipeline_id':pipeline,'status':'complete',"
+            "'operation':'image','arguments':req['arguments'],"
+            "'attempts':{'fontconfig-final':attempt},'generation':generation,"
+            "'owner':{'contract':req['schema'],'operation_id':op,"
+            "'source_repository':req['source']['repository'],"
+            "'source_revision':req['source']['revision']}}\n"
+            " (pipe_dir/'pipeline.json').write_text(json.dumps(record))\n"
+            " attempt_dir=state/'attempts'/attempt\n"
+            " attempt_dir.mkdir(parents=True,exist_ok=True)\n"
+            " (attempt_dir/'status.json').write_text(json.dumps("
+            "{'status':'complete','generation':generation}))\n"
+            " print(json.dumps({'schema':'image-build-remote-result-v1',"
+            "'operation_id':op,'operation_type':'pipeline.submit',"
+            "'source_repository':req['source']['repository'],"
+            "'source_revision':req['source']['revision'],"
+            "'pipeline_id':pipeline,'status':'completed',"
+            "'terminal_outcome':'success','uncertainty':False,"
+            "'reconciliation_required':False,'failure':None,"
+            "'attempt_ids':[attempt]}))\n"
+        )
     git(source, "add", ".")
     git(source, "commit", "-qm", "sha256 recipe snapshot for parser")
     spec, record = selected(root, controller, historic=False)
@@ -330,14 +373,13 @@ def test_valid_terminal_pipeline_classification_agrees_across_observers(
         tmp_path, monkeypatch, observer):
     request = approved()
     compiler, binding, receipt, _ = receipt_fixture(
-        tmp_path, request_id=request["request_id"])
-    # The selected synthetic producer reports exactly the same pipeline,
-    # source revision, request digest and terminal evidence in this case.
-    receipt["result"].update(
-        status="completed", terminal_outcome="success",
-        uncertainty=False, reconciliation_required=False,
-        pipeline_id="a" * 32, failure=None)
-    receipt = _rehash(receipt)
+        tmp_path, request_id=request["request_id"], actual_terminal=True)
+    assert (compiler / "state/image-build/pipelines" /
+            ("a" * 32) / "pipeline.json").is_file()
+    assert (compiler / "state/image-build/attempts" /
+            "image-original-fonts-final/status.json").is_file()
+    assert receipt["result"]["terminal_outcome"] == "success"
+    assert receipt["result"]["attempt_ids"] == ["image-original-fonts-final"]
     assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
     assert execution.project_current_completion(receipt) == "completed"
     gateway = tmp_path / ("gateway-" + observer)
