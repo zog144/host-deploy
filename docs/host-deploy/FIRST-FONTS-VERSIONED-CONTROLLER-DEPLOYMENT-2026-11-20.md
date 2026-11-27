@@ -23,9 +23,9 @@ authenticate any real child, approve a compiler run, or establish that systemd
 uses the intended version. The historical schema-4 lane, UID-required producer and
 associated hashes remain evidence only.
 
-## Exact pinned candidate — 2026-11-21
+## Previous pinned candidate — 2026-11-21 (historical)
 
-The supported source tuple is **exactly**:
+The previously supported source tuple was **exactly**:
 
 | Component | Git commit | Complete clean tracked source-tree SHA-256 |
 | --- | --- | --- |
@@ -35,8 +35,8 @@ The supported source tuple is **exactly**:
 
 The hashes were measured by the exact-revision clean-checkout
 `source_tree_sha256()` algorithm on GitHub Actions on November 21, 2026.
-PR #35's `SELECTED_SOURCES`, manifest validator and CI now reject any other
-commit or clean-tree digest. Changing a tuple requires another reviewed code
+At that revision PR #35's `SELECTED_SOURCES`, manifest validator and CI rejected any other
+commit or clean-tree digest. The November 27 successor below supersedes these pins for new staging. Changing a tuple requires another reviewed code
 revision; it cannot be selected through an untrusted runtime manifest.
 
 **Installed hashes are not yet available.** No versioned combined runtime,
@@ -485,3 +485,38 @@ receipts preserved.
 
 No native selection, service start, systemd 252 fixture, issuer storage
 mutation, reboot or Fonts compilation is authorized by this review.
+
+
+## November 27 — corrected Boot A compiler selection (task 21)
+
+The new source tuple is exactly the combination selected by image-build PR #30
+[Boot A source acceptance](https://github.com/zog144/image-build/pull/30#issuecomment-7228974308).
+
+| Component | Git commit | Complete clean tracked source-tree SHA-256 |
+| --- | --- | --- |
+| root-control | `35fc1ea8969c97a00cdb4b3c18ecb47bf1f83bbb` | `ede1ddd9c1c23c8e385d4e118f973105925f400a21440dae17d9eb7919b1f672` |
+| box-control | `b5903779e72ea852a125a268dcd35189339dc4ae` | `46e0b09fe35a0aff54e5bcf49e4f855b6091705e14723b39df63137b392b5380` |
+| image-build | `d42703b9e4f7aedce2b9959aab855485add2795a` | `580f478d12858f8cef083736169da61f319f65e7ed4014455328a678c4b3eaaf` |
+
+Measured from exact clean checkouts by `source_tree_sha256()` in
+[CI #46078519403](https://github.com/zog144/host-deploy/actions/runs/46078519403)
+before repinning. That measurement run deliberately failed its final equality
+check against the older verifier pins; the succeeding exact-head workflow must
+enforce the new tuple. The current CI also checks out the three previous
+revisions to exercise rejection of all seven nonempty old-component subsets.
+The root-owned disposable staged-runtime test uses actual selected upstream
+critical module bytes and matching RECORD entries, then replaces changed
+module bytes with old source bytes under the unchanged reviewed selection.
+This is not a wheel installation or native compiler admission proof.
+
+Host-install Regular must select the exact same tuple and verifier revision,
+stage a distinct new release, and obtain fresh actual installed module/RECORD,
+complete runtime, unit/composition and rollback evidence. Do not relabel or
+overwrite the earlier approved manifest, source/runtime/policy custody, rollback
+or pending transaction; retain the earlier verifier revision for historical
+transaction readback and explicitly supported recovery. Existing issuer
+persistence, guard, strict inactive-state and installed-byte gates remain.
+The current schema-5 existing Project is not dependent on historical schema-4
+migration provenance. This is a compiler deployment-verifier change only,
+not a Gateway admission change. No R5 replay, SSM submission, service switch,
+or compilation is authorized.
