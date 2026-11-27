@@ -673,20 +673,20 @@ def _current_runtime_script():
     # The old script/argv are left byte-for-byte identical for the saved
     # schema-4 remote operation; only new controller-bound scripts compact.
     from .project_current_observation import _OBSERVER
-    previous_observer, next_observer = (
-        repr(_OBSERVER), repr(_compact_current_python(_OBSERVER)))
+    # Pack the fixed read-only observer as well as the import bootstrap.
+    # Both decode to reviewed Python; no caller-provided payload is accepted.
+    def packed_source(source):
+        packed = base64.b64encode(zlib.compress(
+            _compact_current_python(source).encode("utf-8"), level=9)).decode("ascii")
+        return ("__import__('zlib').decompress(__import__('base64').b64decode("
+                + repr(packed) + ")).decode('utf-8')")
+    previous_observer, next_observer = repr(_OBSERVER), packed_source(_OBSERVER)
     # Only NEW controller-bound scripts embed a compressed, fixed
     # import-only bootstrap expression; the protected 32-KiB SSM limit
     # remains unchanged. Inflate to the exact reviewed source, before
     # importing anything from the selected Project.
-    import_source = _compact_current_python(_PROJECT_IMPORT_BOOTSTRAP)
-    packed = base64.b64encode(zlib.compress(
-        import_source.encode("utf-8"), level=9)).decode("ascii")
     previous_import = repr(_PROJECT_IMPORT_BOOTSTRAP)
-    next_import = (
-        "__import__('zlib').decompress(__import__('base64').b64decode("
-        + repr(packed) + ")).decode('utf-8')"
-    )
+    next_import = packed_source(_PROJECT_IMPORT_BOOTSTRAP)
     if (_RUN.count(_CURRENT_RUN_MARKER) != 1
             or _RUN.count(previous_observer) != 1
             or _RUN.count(previous_import) != 1):
