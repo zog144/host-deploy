@@ -23,6 +23,8 @@ from .ledger import (
     record_dispatch_observation,
     record_remote_result,
     record_dispatch_runtime_preflight,
+    record_project_poll, load_project_observation,
+    PROJECT_RECEIPT_OBSERVATIONS,
 )
 
 
@@ -938,12 +940,6 @@ def parse_receipt(text, binding):
     return receipt
 
 
-PROJECT_RECEIPT_OBSERVATIONS = frozenset({
-    "host-deploy-project-current-legacy-receipt-v1",
-    "host-deploy-project-current-normalized-receipt-v1",
-})
-
-
 def project_current_completion(receipt):
     """One conservative pipeline.submit classifier for both Gateway paths."""
     if receipt.get("result_representation") != "normalized-summary-v1":
@@ -955,7 +951,8 @@ def project_current_completion(receipt):
     if (result.get("operation_type") != "pipeline.submit"
             or type(result.get("uncertainty")) is not bool
             or type(result.get("reconciliation_required")) is not bool
-            or result["uncertainty"] or result["reconciliation_required"]):
+            or result["uncertainty"] or result["reconciliation_required"]
+            or result.get("missing_evidence_count", 0) != 0):
         return "recovery_blocked"
     status = result.get("status")
     outcome = result.get("terminal_outcome")
@@ -1001,6 +998,7 @@ def project_receipt_observation(receipt, binding, command_id, instance_id):
         "producer_status": result["status"],
         "result_sha256": receipt["result_sha256"],
         "result_bytes": receipt["result_bytes"],
+        "receipt_sha256": hashlib.sha256(_canonical(receipt)).hexdigest(),
         **({"declared_result_sha256": receipt["result_sha256"],
             "declared_result_bytes": receipt["result_bytes"],
             "compilation_authorized": False} if not normalized else {}),
@@ -1053,79 +1051,61 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
             or observed.get("CommandId") != record["command_id"]
             or observed.get("InstanceId") != host_configuration["instance_id"]):
         raise RuntimeError("SSM original CommandId or compiler instance differs")
-    # Re-polling the SAME command cannot erase authenticated source and
-    # pipeline claims already retained for protected read-only recovery.
-    path = Path(gateway_root) / "requests" / request_id / "dispatch-observation.json"
-    previous = json.loads(path.read_text()) if path.is_file() else None
-    if (binding["schema"] == 4 and isinstance(previous, dict)
-            and previous.get("command_id") == record["command_id"]
-            and isinstance(previous.get("observation"), dict)
-            and previous["observation"].get("schema") in PROJECT_RECEIPT_OBSERVATIONS):
-        evidence = previous
-    else:
-        evidence = record_dispatch_observation(
-            gateway_root, request_id, _observation(observed), at=at)
-
+    if binding["schema"] == 4:
+        return observe_project_command(gateway_root, request_id, record, binding,
+                                       host_configuration, observed, at=at)
+    evidence = record_dispatch_observation(
+        gateway_root, request_id, _observation(observed), at=at)
     if observed is None:
         return load_request(gateway_root, request_id), evidence, None
-
     status = observed.get("Status")
     if status in {"Pending", "InProgress", "Delayed", "Cancelling"}:
-        state = mark_completion(
-            gateway_root,
-            request_id,
-            "running",
-            at=at,
-        )
+        state = mark_completion(gateway_root, request_id, "running", at=at)
         return state, evidence, None
     if status != "Success":
-        state = mark_completion(
-            gateway_root,
-            request_id,
-            "recovery_blocked",
-            at=at,
-        )
+        state = mark_completion(gateway_root, request_id, "recovery_blocked", at=at)
         return state, evidence, None
-
     try:
         receipt = parse_receipt(observed.get("StandardOutputContent", ""), binding)
     except Exception:
-        mark_completion(
-            gateway_root,
-            request_id,
-            "recovery_blocked",
-            at=at,
-        )
+        mark_completion(gateway_root, request_id, "recovery_blocked", at=at)
         raise
-    if binding["schema"] == 4:
-        claim = project_receipt_observation(
-            receipt, binding, record["command_id"],
-            host_configuration["instance_id"])
-        if (isinstance(previous, dict)
-                and isinstance(previous.get("observation"), dict)
-                and previous["observation"].get("schema") in
-                    PROJECT_RECEIPT_OBSERVATIONS
-                and previous["observation"] != claim):
-            # A successful original SSM command has ONE immutable result,
-            # regardless of which Gateway observer polls it or when.
-            raise RuntimeError("original SSM receipt source/pipeline claim changed")
-    if binding["schema"] == 4 and "result_representation" not in receipt:
-        # Request #63 and other already-sent wrappers did not transmit the
-        # producer object corresponding to the declared hash/length. Preserve
-        # its SSM identity, received bytes and reported revision as an
-        # explicitly UNVERIFIED diagnostic observation; do not create a
-        # terminal remote-result.json or rewrite any original attempt.
-        evidence = record_dispatch_observation(
-            gateway_root, request_id, claim, at=at)
-        state = mark_completion(gateway_root, request_id,
-                                "recovery_blocked", at=at)
-        return state, evidence, None
-    completion = completion_for_receipt(receipt)
-    if binding["schema"] == 4 and completion in ("running", "recovery_blocked"):
-        evidence = record_dispatch_observation(
-            gateway_root, request_id, claim, at=at)
-        state = mark_completion(gateway_root, request_id, completion, at=at)
-        return state, evidence, None
     state, retained = record_remote_result(
-        gateway_root, request_id, receipt, completion, at=at)
+        gateway_root, request_id, receipt, completion_for_receipt(receipt), at=at)
     return state, evidence, retained
+
+
+def observe_project_command(root, request_id, record, binding, configuration,
+                            observed, *, at=None, parser=None, claim_factory=None):
+    """Shared original-command polling with one atomic ledger boundary."""
+    if observed is not None and (
+            type(observed) is not dict
+            or observed.get("CommandId") != record["command_id"]
+            or observed.get("InstanceId") != configuration["instance_id"]):
+        raise RuntimeError("SSM original CommandId or compiler instance differs")
+    if observed is None:
+        return record_project_poll(root, request_id, observation=None, at=at)
+    status = observed.get("Status")
+    if status != "Success":
+        if status not in {"Pending", "InProgress", "Delayed", "Cancelling",
+                          "Failed", "Cancelled", "TimedOut"}:
+            raise RuntimeError("invalid original SSM invocation status")
+        return record_project_poll(
+            root, request_id, observation=_observation(observed),
+            completion=("running" if status in
+                        {"Pending", "InProgress", "Delayed", "Cancelling"}
+                        else "recovery_blocked"), at=at)
+    try:
+        receipt = (parser or parse_receipt)(
+            observed.get("StandardOutputContent", ""), binding)
+        claim = (claim_factory or project_receipt_observation)(
+            receipt, binding, record["command_id"], configuration["instance_id"])
+    except Exception:
+        record_project_poll(root, request_id, observation=_observation(observed),
+                            completion="recovery_blocked", at=at)
+        raise
+    completion = project_current_completion(receipt)
+    return record_project_poll(
+        root, request_id, observation=claim, claim=claim,
+        receipt=(receipt if completion in {"completed", "failed", "cancelled"}
+                 else None), completion=completion, at=at)
