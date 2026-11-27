@@ -30,6 +30,79 @@ def _canonical(value):
 _PRODUCER_BASE = "RESULT_SCHEMA = \"image-build-remote-result-v1\"\nMAX_MISSING = 24\ndef _base_result(\n    request,\n    *,\n    status,\n    terminal_outcome,\n    uncertainty=False,\n    failure=None,\n    missing_evidence=None,\n    allowed_next_operations=None,\n    pipeline_id=None,\n):\n    return {\n        \"schema\": RESULT_SCHEMA,\n        \"operation_id\": request[\"operation_id\"],\n        \"operation_type\": request[\"operation\"],\n        \"source_repository\": request[\"source\"][\"repository\"],\n        \"source_revision\": request[\"source\"][\"revision\"],\n        \"recipe_identity\": None,\n        \"pipeline_id\": pipeline_id,\n        \"attempt_ids\": [],\n        \"selected_generation\": None,\n        \"package\": None,\n        \"stage\": None,\n        \"phase\": None,\n        \"status\": status,\n        \"terminal_outcome\": terminal_outcome,\n        \"failure\": failure,\n        \"controller_jobs\": [],\n        \"log_locators\": [],\n        \"artifacts\": {},\n        \"provenance\": {},\n        \"uncertainty\": bool(uncertainty),\n        \"missing_evidence\": list(missing_evidence or [])[:MAX_MISSING],\n        \"allowed_next_operations\": list(allowed_next_operations or []),\n        \"predecessor\": request.get(\"predecessor\"),\n    }\n"
 
 
+# Exact method bodies copied from accepted image-build 50698663; this
+# disposable producer reads real local execution/observation files through
+# the actual evidence collector and pipeline-summary result constructor.
+# Only storage setup and unrelated command-view/owner lookups are fixture stubs.
+_PRODUCER_EVIDENCE = "    def _evidence(self, record):\n        commands = []\n        failures = []\n        missing = []\n        observations = {}\n        for attempt in self._attempt_paths(record):\n            if not attempt.exists():\n                missing.append(\n                    {\n                        \"kind\": \"attempt-directory\",\n                        \"locator\": str(attempt.relative_to(self.observed_state)),\n                    }\n                )\n                continue\n            try:\n                page = read_build_commands(attempt, limit=MAX_COMMANDS)\n                commands.extend(page[\"commands\"])\n            except Exception:\n                missing.append(\n                    {\n                        \"kind\": \"command-view\",\n                        \"locator\": str(attempt.relative_to(self.observed_state)),\n                    }\n                )\n            for path in sorted(attempt.rglob(\"*.execution.json\")):\n                try:\n                    value = json.loads(path.read_text())\n                except (OSError, ValueError, TypeError):\n                    continue\n                if (\n                    value.get(\"cleanup_complete\") is True\n                    and type(value.get(\"exit_code\")) is int\n                    and value[\"exit_code\"] != 0\n                ):\n                    failures.append(\n                        {\n                            \"kind\": \"command-exit\",\n                            \"exit_code\": value[\"exit_code\"],\n                            \"journal_reference\": value.get(\"journal_reference\"),\n                            \"process_cleanup_complete\": value.get(\n                                \"process_cleanup_complete\"\n                            ),\n                            \"locator\": str(path.relative_to(self.observed_state)),\n                        }\n                    )\n            for path in sorted(attempt.rglob(\"*.observation.json\")):\n                try:\n                    value = json.loads(path.read_text())\n                except (OSError, ValueError, TypeError):\n                    continue\n                if value.get(\"job_id\"):\n                    observations[value[\"job_id\"]] = {\n                        key: value.get(key)\n                        for key in (\n                            \"state\",\n                            \"outcome\",\n                            \"exit_code\",\n                            \"signal\",\n                            \"journal_reference\",\n                            \"process_cleanup_complete\",\n                        )\n                        if key in value\n                    }\n                if value.get(\"outcome\") in {\n                    \"nonzero-exit\",\n                    \"signal\",\n                    \"timeout\",\n                    \"fault\",\n                    \"cancelled\",\n                    \"unknown\",\n                }:\n                    failures.append(\n                        {\n                            \"kind\": \"controller-outcome\",\n                            \"outcome\": value.get(\"outcome\"),\n                            \"job_id\": value.get(\"job_id\"),\n                            \"exit_code\": value.get(\"exit_code\"),\n                            \"signal\": value.get(\"signal\"),\n                            \"journal_reference\": value.get(\"journal_reference\"),\n                            \"process_cleanup_complete\": value.get(\n                                \"process_cleanup_complete\"\n                            ),\n                            \"locator\": str(path.relative_to(self.observed_state)),\n                        }\n                    )\n        commands = commands[:MAX_COMMANDS]\n        missing = missing[:MAX_MISSING]\n        jobs = []\n        for command in commands:\n            if command.get(\"job_id\"):\n                job = {\n                    \"job_id\": command[\"job_id\"],\n                    \"request_id\": command.get(\"request_id\"),\n                    \"attempt_id\": command.get(\"attempt_id\"),\n                    \"package\": command.get(\"package\"),\n                    \"stage\": command.get(\"stage_id\"),\n                    \"phase\": command.get(\"phase\"),\n                    \"command_index\": command.get(\"command_index\"),\n                    \"command_key\": command.get(\"command_key\"),\n                    \"command\": command.get(\"command\"),\n                }\n                job.update(observations.get(command[\"job_id\"], {}))\n                excerpt = self._log_excerpt(command[\"job_id\"])\n                if excerpt is not None:\n                    job[\"log_excerpt\"] = excerpt\n                jobs.append(job)\n        return commands, jobs, failures, missing\n"
+_PRODUCER_PIPELINE_SUMMARY = "    def _pipeline_summary(self, request, pipeline_id, *, raised=None):\n        try:\n            record, pipeline_record_digest = self._inspect_pipeline_record(\n                pipeline_id\n            )\n        except Exception as error:\n            result = self._base_result(\n                request,\n                status=\"pending\",\n                terminal_outcome=None,\n                uncertainty=True,\n                failure={\"type\": type(error).__name__, \"reason\": str(error)},\n                missing_evidence=[{\"kind\": \"pipeline-record\", \"locator\": pipeline_id}],\n                allowed_next_operations=[\"pipeline.inspect\"],\n                pipeline_id=pipeline_id,\n            )\n            if self.external_observed_state:\n                result[\"artifacts\"][\"observation_source\"] = {\n                    \"kind\": \"external-state\"\n                }\n            return result\n        commands, jobs, failures, missing = self._evidence(record)\n        status = record.get(\"status\")\n        uncertainty = False\n        outcome = None\n        allowed = []\n        failure = None\n        if status == \"complete\":\n            remote_status = \"completed\"\n            outcome = \"success\"\n        elif status == \"released\":\n            remote_status = \"released\"\n            outcome = \"released\"\n            allowed = [\"pipeline.inspect\"]\n        else:\n            unknown = any(item.get(\"outcome\") == \"unknown\" for item in failures)\n            terminal = [\n                item\n                for item in failures\n                if item.get(\"kind\") == \"command-exit\"\n                or (\n                    item.get(\"outcome\") not in (None, \"unknown\")\n                    and item.get(\"process_cleanup_complete\") is not False\n                )\n            ]\n            if terminal:\n                remote_status = \"failed\"\n                outcome = terminal[-1].get(\"outcome\") or \"nonzero-exit\"\n                failure = terminal[-1]\n                allowed = [\"pipeline.retry\", \"pipeline.inspect\"]\n            else:\n                remote_status = \"pending\"\n                uncertainty = unknown or \"unknown\" in str(record.get(\"error\", \"\")).lower()\n                failure = (\n                    {\"type\": type(raised).__name__, \"reason\": str(raised)}\n                    if raised is not None\n                    else (\n                        {\"type\": \"pending\", \"reason\": record.get(\"error\")}\n                        if record.get(\"error\")\n                        else None\n                    )\n                )\n                allowed = [\"pipeline.resume\", \"pipeline.inspect\", \"pipeline.cancel\"]\n        if status == \"complete\":\n            allowed = [\"pipeline.inspect\"]\n        result = self._base_result(\n            request,\n            status=remote_status,\n            terminal_outcome=outcome,\n            uncertainty=uncertainty,\n            failure=failure,\n            missing_evidence=missing,\n            allowed_next_operations=allowed,\n            pipeline_id=pipeline_id,\n        )\n        if self.external_observed_state:\n            result[\"allowed_next_operations\"] = [\"pipeline.inspect\"]\n            result[\"artifacts\"][\"observation_source\"] = {\n                \"kind\": \"external-state\",\n                \"pipeline_record_sha256\": pipeline_record_digest,\n            }\n        owner = self._pipeline_owner(record)\n        if owner and owner.get(\"recipe_snapshot\"):\n            result[\"recipe_identity\"] = owner[\"recipe_snapshot\"]\n            result[\"artifacts\"][\"recipe_snapshot\"] = owner[\n                \"recipe_snapshot\"\n            ]\n        result[\"attempt_ids\"] = sorted(record.get(\"attempts\", {}).values())\n        result[\"controller_jobs\"] = jobs[:MAX_COMMANDS]\n        result[\"log_locators\"] = [\n            {\n                \"job_id\": item.get(\"job_id\"),\n                \"journal_reference\": item.get(\"journal_reference\"),\n                \"locator\": item.get(\"locator\"),\n            }\n            for item in failures\n            if item.get(\"journal_reference\") or item.get(\"locator\")\n        ][:MAX_COMMANDS]\n        result[\"package\"] = jobs[-1].get(\"package\") if jobs else None\n        result[\"stage\"] = jobs[-1].get(\"stage\") if jobs else None\n        result[\"phase\"] = jobs[-1].get(\"phase\") if jobs else None\n        if record.get(\"generation\"):\n            result[\"selected_generation\"] = record[\"generation\"]\n            try:\n                selection = self._observed_generation(record[\"generation\"])\n                result[\"artifacts\"].update({\n                    \"generation_manifest\": str(\n                        selection.root.parent.relative_to(self.observed_state)\n                        / \"manifest.json\"\n                    ),\n                    \"generation_inventory_digest\": \"sha256:\"\n                    + identity(selection.manifest[\"outputs\"]),\n                })\n                result[\"provenance\"] = {\n                    key: selection.manifest[key]\n                    for key in (\"build_record\", \"verification_execution\")\n                    if key in selection.manifest\n                }\n                if record.get(\"observation_snapshot\"):\n                    result[\"provenance\"][\"observation_snapshot\"] = record[\n                        \"observation_snapshot\"\n                    ]\n                    result[\"provenance\"][\"build_trace\"] = {\n                        \"snapshot\": record[\"observation_snapshot\"]\n                    }\n            except Exception:\n                result[\"missing_evidence\"].append(\n                    {\"kind\": \"generation\", \"locator\": record[\"generation\"]}\n                )\n        return result\n"
+_PRODUCER_ATTEMPT_PATHS = "    def _attempt_paths(self, record):\n        root = self.observed_state / \"image-build\" / \"attempts\"\n        return [root / name for name in record.get(\"attempts\", {}).values()]\n"
+
+
+def _terminal_failure_module(kind):
+    setup = r'''
+import json, sys
+from pathlib import Path
+MAX_COMMANDS = 24
+def read_build_commands(attempt, limit):
+    return {"commands": []}
+
+'''
+    class_source = r'''
+class Producer:
+    _base_result = staticmethod(_base_result)
+    external_observed_state = False
+    def __init__(self, state):
+        self.observed_state = state
+    def _inspect_pipeline_record(self, pipeline_id):
+        path = self.observed_state / "image-build/pipelines" / pipeline_id / "pipeline.json"
+        return json.loads(path.read_text()), "fixture-digest"
+    def _pipeline_owner(self, record):
+        return record["owner"]
+'''
+    main_source = r'''
+def main():
+    path = Path(sys.argv[-1])
+    req = json.loads(path.read_text())
+    state = path.parents[2] / "state"
+    pipeline = "a" * 32
+    attempt = "image-original-fonts-final"
+    pipeline_dir = state / "image-build/pipelines" / pipeline
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "pipeline_id": pipeline, "status": "pending",
+        "attempts": {"fontconfig-final": attempt},
+        "owner": {"operation_id": req["operation_id"],
+                  "source_repository": req["source"]["repository"],
+                  "source_revision": req["source"]["revision"]},
+    }
+    (pipeline_dir / "pipeline.json").write_text(json.dumps(record))
+    attempt_dir = state / "image-build/attempts" / attempt
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    if KIND == "command-exit":
+        evidence = {"cleanup_complete": True, "exit_code": 7,
+                    "journal_reference": "journal:original-command",
+                    "process_cleanup_complete": True}
+        name = "failure.execution.json"
+    else:
+        evidence = {"state": "completed", "outcome": "nonzero-exit",
+                    "job_id": "original-controller-job", "exit_code": 9,
+                    "signal": None, "journal_reference": "journal:original-controller",
+                    "process_cleanup_complete": True}
+        if KIND == "controller-unknown":
+            evidence.update(state="unknown", outcome="unknown",
+                            exit_code=None, process_cleanup_complete=False)
+        if KIND == "controller-cleanup-pending":
+            evidence["process_cleanup_complete"] = False
+        name = "failure.observation.json"
+    (attempt_dir / name).write_text(json.dumps(evidence))
+    print(json.dumps(Producer(state)._pipeline_summary(req, pipeline)))
+'''
+    return (setup + _PRODUCER_BASE + "\nKIND = " + repr(kind) + "\n"
+            + class_source + _PRODUCER_ATTEMPT_PATHS + _PRODUCER_EVIDENCE
+            + _PRODUCER_PIPELINE_SUMMARY + main_source)
+
+
 def receipt_fixture(tmp_path, *, request_id="a" * 32,
                     actual_terminal=False, producer_case=None):
     root, source, controller = project(tmp_path)
@@ -98,6 +171,9 @@ def receipt_fixture(tmp_path, *, request_id="a" * 32,
                 " print(json.dumps(_base_result(req,status='failed',"
                 "terminal_outcome='request-error',failure={'type':'ImageBuildError',"
                 "'reason':'validated request rejected'},allowed_next_operations=[])))\n")
+    if producer_case in ("command-exit", "controller-outcome",
+                         "controller-unknown", "controller-cleanup-pending"):
+        module.write_text(_terminal_failure_module(producer_case))
     git(source, "add", ".")
     git(source, "commit", "-qm", "sha256 recipe snapshot for parser")
     spec, record = selected(root, controller, historic=False)
@@ -849,3 +925,110 @@ def test_upgrade_requires_authenticated_original_readback_without_erasing_old_ev
     assert latest_path.read_bytes() == prior
     assert load_dispatch(gateway, request["request_id"]) == frozen
     assert not (directory / "remote-result.json").exists()
+
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+@pytest.mark.parametrize("kind", ["command-exit", "controller-outcome"])
+def test_actual_pipeline_summary_terminal_failure_retains_original_evidence(
+        tmp_path, monkeypatch, observer, kind):
+    request = approved()
+    compiler, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"], producer_case=kind)
+    result = receipt["result"]
+    failure = result["failure"]
+    assert result["status"] == "failed"
+    assert result["terminal_outcome"] == "nonzero-exit"
+    assert result["uncertainty"] is False
+    assert result["reconciliation_required"] is False
+    assert result["missing_evidence_count"] == 0
+    assert failure["kind"] == kind
+    assert failure["exit_code"] == (7 if kind == "command-exit" else 9)
+    assert failure["process_cleanup_complete"] is True
+    assert failure["journal_reference"].startswith("journal:original-")
+    assert "type" not in failure and "reason" not in failure
+    evidence_path = compiler / "state" / failure["locator"]
+    local = json.loads(evidence_path.read_text())
+    assert failure["exit_code"] == local["exit_code"]
+    assert failure["journal_reference"] == local["journal_reference"]
+    if kind == "controller-outcome":
+        assert failure["job_id"] == local["job_id"]
+        assert failure["outcome"] == local["outcome"]
+        assert failure["signal"] == local["signal"]
+    assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    assert _observe_original(gateway, request, binding, receipt,
+                             observer, monkeypatch) == "failed"
+    directory = gateway / "requests" / request["request_id"]
+    saved = json.loads((directory / "remote-result.json").read_text())
+    assert saved["completion"] == "failed"
+    assert saved["result"]["result"]["failure"] == failure
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+@pytest.mark.parametrize("kind", ["controller-unknown", "controller-cleanup-pending"])
+def test_actual_unresolved_controller_summary_remains_nonterminal(
+        tmp_path, monkeypatch, observer, kind):
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"], producer_case=kind)
+    assert receipt["result"]["status"] == "pending"
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    assert _observe_original(gateway, request, binding, receipt,
+                             observer, monkeypatch) in {"running", "recovery_blocked"}
+    assert not (gateway / "requests" / request["request_id"] /
+                "remote-result.json").exists()
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+@pytest.mark.parametrize("damage", [
+    "generic-text", "missing-cleanup", "cleanup-false", "zero-exit",
+    "boolean-exit", "unknown-outcome", "contradictory-outcome", "foreign-attempt",
+    "traversal", "missing-job", "unbounded-journal", "unlisted-attempt",
+])
+def test_rehashed_invalid_terminal_failure_never_creates_terminal_result(
+        tmp_path, monkeypatch, observer, damage):
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"],
+        producer_case="controller-outcome")
+    result = receipt["result"]
+    failure = result["failure"]
+    if damage == "generic-text":
+        result["failure"] = {"type": "Anything", "reason": "nonzero exit"}
+    elif damage == "missing-cleanup":
+        del failure["process_cleanup_complete"]
+    elif damage == "cleanup-false":
+        failure["process_cleanup_complete"] = False
+    elif damage == "zero-exit":
+        failure["exit_code"] = 0
+    elif damage == "boolean-exit":
+        failure["exit_code"] = True
+    elif damage == "unknown-outcome":
+        failure["outcome"] = result["terminal_outcome"] = "unknown"
+    elif damage == "contradictory-outcome":
+        result["terminal_outcome"] = "timeout"
+    elif damage == "foreign-attempt":
+        failure["locator"] = "image-build/attempts/foreign/failure.observation.json"
+    elif damage == "traversal":
+        failure["locator"] = ("image-build/attempts/image-original-fonts-final/"
+                              "../foreign/failure.observation.json")
+    elif damage == "missing-job":
+        failure["job_id"] = None
+    elif damage == "unbounded-journal":
+        failure["journal_reference"] = "x" * 4097
+    elif damage == "unlisted-attempt":
+        result["attempt_ids"] = []
+    receipt = _rehash(receipt)
+    assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    assert _observe_original(gateway, request, binding, receipt,
+                             observer, monkeypatch) == "recovery_blocked"
+    assert not (gateway / "requests" / request["request_id"] /
+                "remote-result.json").exists()
+    assert load_dispatch(gateway, request["request_id"]) == frozen
