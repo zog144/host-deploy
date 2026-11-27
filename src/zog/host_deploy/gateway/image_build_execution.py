@@ -940,6 +940,71 @@ def parse_receipt(text, binding):
     return receipt
 
 
+def _terminal_pipeline_failure(result):
+    """Validate the accepted image-build _evidence() terminal failure shape.
+
+    The authenticated original SSM receipt binds the producer operation and
+    pipeline; the evidence locator must belong to an attempt named by that
+    same result. A checksum alone cannot establish a terminal failure.
+    """
+    failure = result.get("failure")
+    if type(failure) is not dict or len(_canonical(failure)) > 4096:
+        return False
+    kind = failure.get("kind")
+    common = {"kind", "exit_code", "journal_reference",
+              "process_cleanup_complete", "locator"}
+    if kind == "command-exit":
+        if set(failure) != common or result.get("terminal_outcome") != "nonzero-exit":
+            return False
+    elif kind == "controller-outcome":
+        if set(failure) != common | {"outcome", "job_id", "signal"}:
+            return False
+        outcome = failure["outcome"]
+        job = failure["job_id"]
+        if (outcome not in ("nonzero-exit", "signal", "timeout", "fault", "cancelled")
+                or result.get("terminal_outcome") != outcome
+                or type(job) is not str or not 1 <= len(job) <= 128
+                or any(ord(c) < 33 or ord(c) == 127 for c in job)):
+            return False
+        signal = failure["signal"]
+        if signal is not None and (type(signal) is not int or signal <= 0):
+            return False
+        if outcome == "signal" and signal is None:
+            return False
+    else:
+        return False
+    if failure["process_cleanup_complete"] is not True:
+        return False
+    exit_code = failure["exit_code"]
+    if exit_code is not None and type(exit_code) is not int:
+        return False
+    if (result.get("terminal_outcome") == "nonzero-exit"
+            and (type(exit_code) is not int or exit_code == 0)):
+        return False
+    journal = failure["journal_reference"]
+    if journal is not None and (type(journal) is not str
+                                or not 1 <= len(journal) <= 2048
+                                or any(ord(c) < 32 or ord(c) == 127 for c in journal)):
+        return False
+    locator = failure["locator"]
+    if (type(locator) is not str or not 1 <= len(locator) <= 2048
+            or any(ord(c) < 32 or ord(c) == 127 for c in locator)
+            or "\\" in locator):
+        return False
+    parts = locator.split("/")
+    attempts = result.get("attempt_ids")
+    suffix = ".execution.json" if kind == "command-exit" else ".observation.json"
+    if (len(parts) < 4 or parts[:2] != ["image-build", "attempts"]
+            or any(part in ("", ".", "..") for part in parts)
+            or not parts[-1].endswith(suffix)
+            or type(attempts) is not list or not 1 <= len(attempts) <= 24
+            or any(type(item) is not str or not item or "/" in item
+                   or item in (".", "..") for item in attempts)
+            or parts[2] not in attempts):
+        return False
+    return True
+
+
 def project_current_completion(receipt):
     """One conservative pipeline.submit classifier for both Gateway paths."""
     if receipt.get("result_representation") != "normalized-summary-v1":
@@ -965,10 +1030,11 @@ def project_current_completion(receipt):
         credible = (type(failure) is dict
                     and type(failure.get("type")) is str and bool(failure["type"])
                     and type(failure.get("reason")) is str and bool(failure["reason"]))
-        if credible and (
-                (owned_pipeline and type(outcome) is str
-                 and outcome not in ("", "success"))
-                or (pipeline is None and outcome in (None, "failed", "request-error"))):
+        if owned_pipeline:
+            return ("failed" if _terminal_pipeline_failure(result)
+                    else "recovery_blocked")
+        if (credible and "kind" not in failure and pipeline is None
+                and outcome in (None, "failed", "request-error")):
             return "failed"
         return "recovery_blocked"
     if status == "released":
