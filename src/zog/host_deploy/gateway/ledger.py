@@ -945,7 +945,9 @@ def record_project_poll(root, request_id, *, observation, claim=None,
                 claim is None and (original is not None or typed)):
             return state, latest, None
         if claim is not None:
-            observation = claim
+            # Preserve the prior typed observation bytes on upgrade as
+            # well; the separate claim holds the new received-summary SHA.
+            observation = prior if typed else claim
         if completion is not None:
             state = _apply_completion(state, completion, at)
         if receipt is not None:
