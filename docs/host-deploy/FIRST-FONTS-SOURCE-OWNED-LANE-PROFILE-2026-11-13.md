@@ -1,3 +1,12 @@
+> **Architecture superseded, 2026-11-13:** Alternate build-owner/build-worker
+> accounts and their UID/GID selectors are no longer permitted for GitHub
+> compilation. The retained schema-4 lane is historical evidence only: old
+> `fonts-lane-activate` is blocked, and `fonts-lane-verify` is a local
+> evidence reader, not a remote readiness probe. Do not follow the old
+> controller installation/activation instructions below. Use
+> [the inherited-execution migration contract](FIRST-FONTS-INHERITED-EXECUTION-MIGRATION-2026-11-13.md)
+> and wait for compatible image-build, box-control and root-control revisions.
+
 # First Fonts — retained approved lane and controller recovery (2026-11-13)
 
 **Scope:** source implementation and native Work handoff. No GitHub submission, SQS
