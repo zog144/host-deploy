@@ -4,6 +4,7 @@ The lane selects the Project and controller. At execution on that Host, the
 producer uses that Project's *current* image-build checkout and package pins.
 Existing pinned dispatch records remain immutable and readable.
 """
+import base64
 import hashlib
 import io
 import json
@@ -11,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import tokenize
+import zlib
 
 from .. import image_build_lanes
 from .github_dispatch import FIRST_FONTS_TASK
@@ -385,6 +387,7 @@ try:
             "terminal_outcome": None, "uncertainty": True,
             "attempt_ids": observed["attempt_ids"],
             "reconciliation_required": True,
+            "missing_evidence": [],
             "failure": {"type": "producer-timeout",
                         "reason": "bounded producer wait expired; observe original operation"},
             "allowed_next_operations": ["pipeline.inspect"],
@@ -410,6 +413,7 @@ try:
                 "terminal_outcome": None, "uncertainty": True,
                 "attempt_ids": observed["attempt_ids"],
                 "reconciliation_required": True,
+                "missing_evidence": [],
                 "failure": {"type": "producer-exit",
                             "reason": "producer exited; durable pipeline requires reconciliation"},
                 "allowed_next_operations": ["pipeline.inspect"],
@@ -422,19 +426,83 @@ try:
     if (produced.get("schema") != "image-build-remote-result-v1"
             or produced.get("operation_id") != operation_id
             or produced.get("operation_type") != "pipeline.submit"
+            or produced.get("source_repository") != "zog144/image-build"
             or produced.get("source_revision") != revision):
         raise RuntimeError("Project producer result identity differs")
+    # The wire receipt is a NORMALIZED summary. Its declared length and
+    # digest cover these exact transmitted bytes, never a hidden producer
+    # result that a recovering Gateway cannot read or reconstruct.
     summary = {k: produced.get(k) for k in (
-        "status", "pipeline_id", "source_revision",
-        "recipe_identity", "selected_generation", "terminal_outcome",
-        "failure", "allowed_next_operations", "uncertainty",
-        "attempt_ids", "reconciliation_required",
+        "schema", "operation_id", "operation_type", "source_repository",
+        "source_revision", "status", "pipeline_id", "terminal_outcome",
+        "recipe_identity", "selected_generation", "failure", "uncertainty",
+        "allowed_next_operations", "attempt_ids", "controller_jobs",
+        "predecessor", "reconciliation_required",
     )}
-    raw = json.dumps(produced, sort_keys=True, separators=(",", ":")).encode()
+    # Do not coerce invalid producer evidence into an apparently certain
+    # completed build. Missing/None/string booleans are an integrity failure.
+    if (type(produced.get("status")) is not str
+            or produced["status"] not in ("pending", "completed", "failed", "released")
+            or type(produced.get("uncertainty")) is not bool
+            or "terminal_outcome" not in produced
+            or (produced["terminal_outcome"] is not None
+                and type(produced["terminal_outcome"]) is not str)
+            or "pipeline_id" not in produced
+            or (produced["pipeline_id"] is not None
+                and (type(produced["pipeline_id"]) is not str
+                     or re.fullmatch(r"[a-f0-9]{32}", produced["pipeline_id"]) is None))
+            or ("reconciliation_required" in produced
+                and type(produced["reconciliation_required"]) is not bool)
+            or type(produced.get("missing_evidence")) is not list):
+        raise RuntimeError("producer status invalid")
+    summary["missing_evidence_count"] = len(produced["missing_evidence"])
+    summary["reconciliation_required"] = (
+        produced.get("reconciliation_required", False)
+        or produced["uncertainty"] or bool(summary["missing_evidence_count"]))
+    # Compiler-created, fsynced request bytes bind the real selected Git
+    # revision to the frozen repository/task without claiming a lane pin.
+    summary["source_evidence"] = {
+        "schema": "host-deploy-project-current-source-v1",
+        "repository": request["source"]["repository"],
+        "revision": revision,
+        "request_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    for field, limit in (("allowed_next_operations", 32),
+                         ("attempt_ids", 24), ("controller_jobs", 24)):
+        summary[field] = list(summary[field] or [])[:limit]
+    if isinstance(summary["failure"], dict):
+        failure = summary["failure"]
+        if "kind" in failure:
+            # Preserve actual _evidence() command/controller records, not
+            # fabricated type/reason strings. Invalid evidence is retained
+            # only within a bounded receipt; the Gateway classifies it.
+            if len(json.dumps(failure, sort_keys=True, separators=(",", ":"),
+                              allow_nan=False).encode("ascii")) > 4096:
+                raise RuntimeError("producer failure evidence exceeds bound")
+        else:
+            summary["failure"] = {
+                "type": str(failure.get("type", ""))[:128],
+                "reason": str(failure.get("reason", ""))[:2000],
+                **({"job_id": str(failure["job_id"])[:128]}
+                   if failure.get("job_id") is not None else {}),
+            }
+    elif summary["failure"] is not None:
+        summary["failure"] = {"type": "unstructured",
+                              "reason": str(summary["failure"])[:2000]}
+    names = ("remote_capabilities", "recipe_snapshot", "contract",
+             "pin_date", "monthly_identity", "inventory_digest",
+             "toolchain_specification", "toolchain_execution")
+    artifacts = produced.get("artifacts")
+    summary["artifacts"] = ({name: artifacts[name] for name in names
+                            if name in artifacts}
+                           if isinstance(artifacts, dict) else {})
+    raw = json.dumps(summary, sort_keys=True, separators=(",", ":"),
+                     allow_nan=False).encode("ascii")
     print(json.dumps({
         "schema": "host-deploy-image-build-receipt-v1",
         "request_id": operation_id,
         "remote_request_sha256": template_digest,
+        "result_representation": "normalized-summary-v1",
         "result_sha256": hashlib.sha256(raw).hexdigest(),
         "result_bytes": len(raw),
         "result": summary,
@@ -615,11 +683,20 @@ def _current_runtime_script():
     # The old script/argv are left byte-for-byte identical for the saved
     # schema-4 remote operation; only new controller-bound scripts compact.
     from .project_current_observation import _OBSERVER
-    previous_observer, next_observer = (
-        repr(_OBSERVER), repr(_compact_current_python(_OBSERVER)))
-    previous_import, next_import = (
-        repr(_PROJECT_IMPORT_BOOTSTRAP),
-        repr(_compact_current_python(_PROJECT_IMPORT_BOOTSTRAP)))
+    # Pack the fixed read-only observer as well as the import bootstrap.
+    # Both decode to reviewed Python; no caller-provided payload is accepted.
+    def packed_source(source):
+        packed = base64.b64encode(zlib.compress(
+            _compact_current_python(source).encode("utf-8"), level=9)).decode("ascii")
+        return ("__import__('zlib').decompress(__import__('base64').b64decode("
+                + repr(packed) + ")).decode('utf-8')")
+    previous_observer, next_observer = repr(_OBSERVER), packed_source(_OBSERVER)
+    # Only NEW controller-bound scripts embed a compressed, fixed
+    # import-only bootstrap expression; the protected 32-KiB SSM limit
+    # remains unchanged. Inflate to the exact reviewed source, before
+    # importing anything from the selected Project.
+    previous_import = repr(_PROJECT_IMPORT_BOOTSTRAP)
+    next_import = packed_source(_PROJECT_IMPORT_BOOTSTRAP)
     if (_RUN.count(_CURRENT_RUN_MARKER) != 1
             or _RUN.count(previous_observer) != 1
             or _RUN.count(previous_import) != 1):

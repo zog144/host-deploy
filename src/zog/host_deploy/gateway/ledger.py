@@ -768,6 +768,239 @@ def reconcile_dispatch(root, request_id, *, at=None):
 
 
 
+# Original SSM receipts and later protected Project observations have
+# different lifetimes. Never use a mutable latest observation as the sole
+# custody of an original CommandId's receipt.
+PROJECT_RECEIPT_OBSERVATIONS = frozenset({
+    "host-deploy-project-current-legacy-receipt-v1",
+    "host-deploy-project-current-normalized-receipt-v1",
+})
+_PROJECT_CLAIM_FILE = "original-ssm-receipt-claim.json"
+
+
+def _project_observation_locked(directory, state):
+    dispatch = _validate_dispatch_record(
+        json.loads((directory / "dispatch.json").read_text()), state)
+    binding = dispatch["binding"]
+    if dispatch["phase"] != "submitted" or binding.get("schema") != 4:
+        raise LedgerConflict("Project observation requires submitted schema-4 dispatch")
+
+    def read(name):
+        path = directory / name
+        if path.is_symlink():
+            raise LedgerConflict("unsafe Project observation file")
+        return json.loads(path.read_text()) if path.exists() else None
+
+    latest = read("dispatch-observation.json")
+    if latest is not None and (
+            type(latest) is not dict or latest.get("schema") != 1
+            or latest.get("request_id") != state["request_id"]
+            or latest.get("command_id") != dispatch["command_id"]
+            or type(latest.get("observation")) is not dict):
+        raise LedgerConflict("retained SSM/Project observation identity differs")
+    retained = read(_PROJECT_CLAIM_FILE)
+    claim = None
+    if retained is not None:
+        if type(retained) is not dict:
+            raise LedgerConflict("invalid original SSM receipt claim")
+        claim = retained.get("claim")
+        _, digest = _detached_json(claim, "original SSM receipt claim")
+        if (set(retained) != {"schema", "request_id", "command_id",
+                              "binding_sha256", "claim_sha256", "claim"}
+                or retained["schema"] != 1
+                or retained["request_id"] != state["request_id"]
+                or retained["command_id"] != dispatch["command_id"]
+                or retained["binding_sha256"] != dispatch["binding_sha256"]
+                or retained["claim_sha256"] != digest):
+            raise LedgerConflict("original SSM receipt claim digest or binding differs")
+        _validate_project_claim(claim, dispatch)
+    if latest is not None:
+        observation = latest["observation"]
+        if observation.get("schema") in PROJECT_RECEIPT_OBSERVATIONS:
+            _validate_project_claim(observation, dispatch, historical=True)
+            if claim is not None and not _same_project_claim(observation, claim):
+                raise LedgerConflict("original SSM receipt source/pipeline claim changed")
+        if claim is not None and observation.get("status") == "reconciled-project":
+            _compare_project_identity(claim["producer"], observation.get("producer"))
+    return dispatch, latest, claim
+
+
+def _validate_project_claim(claim, dispatch, *, historical=False):
+    binding = dispatch["binding"]
+    if type(claim) is not dict:
+        raise LedgerConflict("invalid original SSM receipt claim")
+    schema = claim.get("schema")
+    producer = claim.get("producer")
+    if (schema not in PROJECT_RECEIPT_OBSERVATIONS
+            or claim.get("request_id") != dispatch["request_id"]
+            or claim.get("command_id") != dispatch["command_id"]
+            or claim.get("compiler_instance_id") != binding["target"]["instance_id"]
+            or claim.get("remote_request_sha256") != binding["remote_request_sha256"]
+            or claim.get("source_repository") != binding["remote_request"]["source"]["repository"]
+            or type(claim.get("source_revision")) is not str
+            or not re.fullmatch(r"[0-9a-f]{40}", claim["source_revision"])
+            or (claim.get("pipeline_id") is not None and (
+                type(claim["pipeline_id"]) is not str
+                or not _HEX_32.fullmatch(claim["pipeline_id"])))
+            or claim.get("producer_status") not in {"pending", "completed", "failed", "released"}
+            or type(claim.get("result_sha256")) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", claim["result_sha256"])
+            or type(claim.get("result_bytes")) is not int
+            or not 1 <= claim["result_bytes"] <= 131072
+            or claim.get("raw_result_digest_verified") is not
+                (schema == "host-deploy-project-current-normalized-receipt-v1")
+            or claim.get("selected_project_observation_required") is not True
+            or type(producer) is not dict
+            or set(producer) != {"request_id", "source_revision", "pipeline_id",
+                                 "status", "uncertainty"}
+            or producer["request_id"] != dispatch["request_id"]
+            or producer["source_revision"] != claim["source_revision"]
+            or producer["pipeline_id"] != claim.get("pipeline_id")
+            or producer["status"] != claim["producer_status"]
+            or type(producer["uncertainty"]) is not bool):
+        raise LedgerConflict("provisional SSM producer binding differs from original")
+    if schema == "host-deploy-project-current-legacy-receipt-v1" and (
+            claim.get("declared_result_sha256") != claim["result_sha256"]
+            or claim.get("declared_result_bytes") != claim["result_bytes"]
+            or claim.get("compilation_authorized") is not False):
+        raise LedgerConflict("legacy producer digest is not verified")
+    if not historical or "receipt_sha256" in claim:
+        if (type(claim.get("receipt_sha256")) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", claim["receipt_sha256"])):
+            raise LedgerConflict("original SSM receipt summary digest differs")
+
+
+def _same_project_claim(old, new):
+    # The immediately preceding PR stored typed claims without a digest
+    # of the received summary itself. Only an authenticated original
+    # readback may extend that record, without changing any old field.
+    if "receipt_sha256" not in old:
+        return old == {k: v for k, v in new.items() if k != "receipt_sha256"}
+    return old == new
+
+
+def _compare_project_identity(original, later):
+    if (type(later) is not dict
+            or original.get("request_id") != later.get("request_id")
+            or original.get("source_revision") != later.get("source_revision")
+            or (original.get("pipeline_id") is not None
+                and original["pipeline_id"] != later.get("pipeline_id"))):
+        raise LedgerConflict("owned Project differs from original SSM producer")
+
+
+def load_project_observation(root, request_id):
+    """Consistent snapshot for a protected read-only inspection; no writes."""
+    with request_lock(root, request_id) as directory:
+        state = _load_state(directory)
+        dispatch, latest, claim = _project_observation_locked(directory, state)
+        return {"latest": latest, "claim": claim}
+
+
+def record_project_poll(root, request_id, *, observation, claim=None,
+                        receipt=None, completion=None, at=None):
+    """Atomically compare/create original receipt and preserve later evidence.
+
+    A poll is never allowed to regress a reconciled or terminal Project.
+    The original receipt claim is committed before any latest/terminal
+    result. Concurrent polls cannot both install conflicting claims.
+    """
+    at = at or utc_now()
+    with request_lock(root, request_id) as directory:
+        state = _load_state(directory)
+        dispatch, latest, original = _project_observation_locked(directory, state)
+        prior = latest["observation"] if latest is not None else {}
+        reconciled = prior.get("status") == "reconciled-project"
+        typed = prior.get("schema") in PROJECT_RECEIPT_OBSERVATIONS
+        result_path = directory / "remote-result.json"
+        if claim is not None:
+            claim, digest = _detached_json(claim, "original SSM receipt claim")
+            _validate_project_claim(claim, dispatch)
+            if (original is not None and original != claim
+                    or typed and not _same_project_claim(prior, claim)):
+                raise LedgerConflict("original SSM receipt source/pipeline claim changed")
+            if reconciled:
+                # In the old installation a matching reconciliation might
+                # have erased the original typed claim. Authenticate C
+                # again and compare its identity to the retained Project.
+                _compare_project_identity(claim["producer"], prior.get("producer"))
+                if original is None:
+                    # An upgrade with no retained original receipt cannot
+                    # invent a missing pipeline binding from later evidence.
+                    _compare_project_identity(prior["producer"], claim["producer"])
+            if original is None and result_path.exists() and not (typed or reconciled):
+                raise LedgerConflict("cannot bind new original claim to historical terminal result")
+            if receipt is not None:
+                _, receipt_digest = _detached_json(receipt, "original SSM receipt")
+                if (claim["receipt_sha256"] != receipt_digest
+                        or claim["raw_result_digest_verified"] is not True):
+                    raise LedgerConflict("terminal receipt differs from verified original claim")
+            if original is None:
+                save(directory / _PROJECT_CLAIM_FILE, {
+                    "schema": 1, "request_id": request_id,
+                    "command_id": dispatch["command_id"],
+                    "binding_sha256": dispatch["binding_sha256"],
+                    "claim_sha256": digest, "claim": claim,
+                })
+        if reconciled or result_path.exists() or (
+                claim is None and (original is not None or typed)):
+            return state, latest, None
+        if claim is not None:
+            # Preserve the prior typed observation bytes on upgrade as
+            # well; the separate claim holds the new received-summary SHA.
+            observation = prior if typed else claim
+        if completion is not None:
+            state = _apply_completion(state, completion, at)
+        if receipt is not None:
+            if claim is None or completion not in {"completed", "failed", "cancelled"}:
+                raise LedgerConflict("terminal Project receipt lacks original claim")
+            value = _record_remote_result_locked(
+                directory, dispatch, receipt, completion, at)
+        else:
+            value = None
+        if observation is not None and (latest is None or
+                                        latest["observation"] != observation):
+            latest = _save_project_latest(directory, dispatch, observation, at)
+        save(directory / "state.json", state)
+        return state, latest, value
+
+
+def _save_project_latest(directory, dispatch, observation, at):
+    observation, _ = _detached_json(observation, "dispatch observation")
+    value = {
+        "schema": 1, "request_id": dispatch["request_id"],
+        "command_id": dispatch["command_id"], "observed_at": at,
+        "observation": observation,
+    }
+    save(directory / "dispatch-observation.json", value)
+    return value
+
+
+def record_project_reconciliation(root, request_id, *, expected, observation,
+                                  result, completion, at=None):
+    """Commit protected evidence only against the exact pre-inspection snapshot."""
+    at = at or utc_now()
+    with request_lock(root, request_id) as directory:
+        state = _load_state(directory)
+        dispatch, latest, claim = _project_observation_locked(directory, state)
+        if expected != {"latest": latest, "claim": claim}:
+            raise LedgerConflict("Project observation changed during protected readback")
+        if (directory / "remote-result.json").exists():
+            raise LedgerConflict("terminal historical Gateway result must not be reclassified")
+        prior = latest["observation"] if latest is not None else {}
+        if claim is not None:
+            _compare_project_identity(claim["producer"], observation["producer"])
+        elif prior.get("schema") in PROJECT_RECEIPT_OBSERVATIONS:
+            raise LedgerConflict("original SSM receipt readback required before reconciliation")
+        if prior.get("status") == "reconciled-project":
+            _compare_project_identity(prior["producer"], observation["producer"])
+        state = _apply_completion(state, completion, at)
+        if completion in ("completed", "failed"):
+            _record_remote_result_locked(directory, dispatch, result, completion, at)
+        _save_project_latest(directory, dispatch, observation, at)
+        save(directory / "state.json", state)
+        return state
+
+
 def record_dispatch_observation(root, request_id, observation, *, at=None):
     """Persist a bounded latest SSM observation; this never authorizes resubmission."""
     at = at or utc_now()
@@ -826,42 +1059,45 @@ def mark_completion(root, request_id, target, *, at=None):
         return state
 
 
+def _record_remote_result_locked(directory, dispatch, result, completion, at):
+    result, result_digest = _detached_json(result, "remote result receipt")
+    path = directory / "remote-result.json"
+    if completion not in _COMPLETION_TARGETS:
+        raise ValueError("invalid remote result completion")
+    value = {
+        "schema": 1,
+        "request_id": dispatch["request_id"],
+        "command_id": dispatch["command_id"],
+        "result_sha256": result_digest,
+        "completion": completion,
+        "recorded_at": at,
+        "result": result,
+    }
+    if path.exists():
+        existing = json.loads(path.read_text())
+        comparable = dict(existing)
+        comparable["recorded_at"] = at
+        if comparable != value:
+            raise LedgerConflict("remote result differs from retained evidence")
+        return existing
+    save(path, value)
+    return value
+
+
 def record_remote_result(root, request_id, result, completion, *, at=None):
     """Bind one immutable image-build result receipt before terminal classification."""
     at = at or utc_now()
-    result, result_digest = _detached_json(result, "remote result receipt")
     with request_lock(root, request_id) as directory:
         state = _load_state(directory)
-        dispatch_path = directory / "dispatch.json"
         dispatch = _validate_dispatch_record(
-            json.loads(dispatch_path.read_text()), state
-        )
+            json.loads((directory / "dispatch.json").read_text()), state)
         if dispatch["phase"] != "submitted":
             raise RuntimeError("remote result requires submitted dispatch")
-        path = directory / "remote-result.json"
-        if completion not in _COMPLETION_TARGETS:
-            raise ValueError("invalid remote result completion")
-        value = {
-            "schema": 1,
-            "request_id": request_id,
-            "command_id": dispatch["command_id"],
-            "result_sha256": result_digest,
-            "completion": completion,
-            "recorded_at": at,
-            "result": result,
-        }
-        if path.exists():
-            existing = json.loads(path.read_text())
-            comparable = dict(existing)
-            comparable["recorded_at"] = at
-            if comparable != value:
-                raise LedgerConflict("remote result differs from retained evidence")
-            value = existing
-        else:
-            save(path, value)
-
-    state = mark_completion(root, request_id, completion, at=at)
-    return state, json.loads(json.dumps(value))
+        state = _apply_completion(state, completion, at)
+        value = _record_remote_result_locked(
+            directory, dispatch, result, completion, at)
+        save(directory / "state.json", state)
+        return state, json.loads(json.dumps(value))
 
 
 def _checkpoint_handoff_metadata(archive):

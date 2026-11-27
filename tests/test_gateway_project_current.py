@@ -41,8 +41,11 @@ def project(tmp_path):
         "    print(json.dumps({'schema':'image-build-remote-result-v1',"
         "'operation_id':request['operation_id'],"
         "'operation_type':request['operation'],"
+        "'source_repository':request['source']['repository'],"
         "'source_revision':request['source']['revision'],"
-        "'status':'pending','pipeline_id':'a'*32,'recipe_identity':pin}))\n"
+        "'status':'pending','pipeline_id':'a'*32,'recipe_identity':pin,"
+        "'terminal_outcome':None,'uncertainty':False,"
+        "'missing_evidence':[],'failure':None}))\n"
         "if __name__ == '__main__': main()\n"
     )
     git(source, "init", "-q")
@@ -262,7 +265,14 @@ def test_gateway_uses_project_controller_only_across_saved_revision_pin_change(
         owner_factory=_FakeProtectedJournal)
     assert submitted["command_id"] == "command-project-current"
     assert len(sent) == 1
-    assert "zog.image_build.remote_operations" in sent[0]
+    # New-only fixed bootstrap is source-controlled but packed to preserve
+    # root-control's 32 KiB limit. Verify the reviewed module origin in
+    # the uncompressed source; execution-time module-origin tests below
+    # check that the selected Project actually wins over installed zog.
+    assert "zog.image_build.remote_operations" in (
+        project_current._PROJECT_IMPORT_BOOTSTRAP)
+    assert "b64decode(" in sent[0]
+    assert "decompress(" in sent[0]
     assert simple_forward.advance(
         gateway, request["request_id"], host_factory=FakeHost)["phase"] == "submitted"
     assert len(sent) == 1

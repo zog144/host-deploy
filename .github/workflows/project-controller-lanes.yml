@@ -17,6 +17,8 @@ on:
       - src/zog/host_deploy/gateway/fonts_owner_sender.py
       - src/zog/host_deploy/gateway/image_build_dispatch.py
       - tests/test_gateway_project_current.py
+      - tests/test_gateway_project_current_receipt.py
+      - src/zog/host_deploy/gateway/image_build_execution.py
       - tests/test_gateway_project_current_real_resume.py
       - tests/test_gateway_fonts_protected_sender.py
       - src/zog/host_deploy/gateway/fonts_owner_sender.py
@@ -52,6 +54,7 @@ jobs:
           python -m compileall -q src/zog/host_deploy tests/test_gateway_project_current.py
           python -m pytest -q tests/test_gateway_fonts_protected_sender.py \
             tests/test_gateway_project_current.py \
+            tests/test_gateway_project_current_receipt.py \
             tests/test_fonts_lane_mixed_recovery.py \
             tests/test_gateway_project_current_real_resume.py \
             tests/test_existing_project_lane.py tests/test_image_build_lanes.py \

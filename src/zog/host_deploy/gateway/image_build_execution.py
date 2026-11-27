@@ -23,6 +23,8 @@ from .ledger import (
     record_dispatch_observation,
     record_remote_result,
     record_dispatch_runtime_preflight,
+    record_project_poll, load_project_observation,
+    PROJECT_RECEIPT_OBSERVATIONS,
 )
 
 
@@ -764,6 +766,44 @@ def _observation(value):
     return result
 
 
+def _legacy_project_current_receipt(receipt, binding):
+    """Validate the issued pre-fix summary; NEVER claim its raw hash verified.
+
+    The original compiler script checked the selected Git HEAD and producer
+    operation before reducing the output, but did not transmit the raw result
+    whose checksum it reported. No Gateway can recover those missing bytes
+    from this summary. Consumers must record a provisional observation and
+    use the protected same-operation selected-Project read-only inspector.
+    """
+    remote = binding["remote_request"]
+    result = receipt.get("result")
+    keys = {
+        "status", "pipeline_id", "source_revision", "recipe_identity",
+        "selected_generation", "terminal_outcome", "failure",
+        "allowed_next_operations", "uncertainty", "attempt_ids",
+        "reconciliation_required",
+    }
+    if (remote["source"] != {"repository": "zog144/image-build"}
+            or type(result) is not dict or set(result) != keys
+            or type(result["source_revision"]) is not str
+            or not re.fullmatch(r"[a-f0-9]{40}", result["source_revision"])
+            or result["status"] not in {"pending", "completed", "failed", "released"}
+            or type(result["uncertainty"]) is not bool
+            or (result["pipeline_id"] is not None
+                and (type(result["pipeline_id"]) is not str
+                     or not re.fullmatch(r"[a-f0-9]{32}", result["pipeline_id"])))
+            or (result["reconciliation_required"] is not None
+                and type(result["reconciliation_required"]) is not bool)
+            or (result["allowed_next_operations"] is not None
+                and (type(result["allowed_next_operations"]) is not list
+                     or len(result["allowed_next_operations"]) > 32))
+            or (result["attempt_ids"] is not None
+                and (type(result["attempt_ids"]) is not list
+                     or len(result["attempt_ids"]) > 24))):
+        raise RuntimeError("legacy Project-current producer summary differs")
+    return receipt
+
+
 def parse_receipt(text, binding):
     binding = _binding({"phase": "submitted", "binding": binding})
     if not isinstance(text, str) or len(text.encode("utf-8")) > 64 * 1024:
@@ -783,7 +823,14 @@ def parse_receipt(text, binding):
         "result_bytes",
         "result",
     }
-    if not isinstance(receipt, dict) or set(receipt) != expected:
+    current = binding["schema"] == 4
+    normalized = (isinstance(receipt, dict)
+                  and receipt.get("result_representation") ==
+                      "normalized-summary-v1")
+    if (not isinstance(receipt, dict)
+            or set(receipt) != (expected | {"result_representation"}
+                                if normalized else expected)
+            or (not current and normalized)):
         raise RuntimeError("SSM gateway receipt fields are invalid")
     if (
         receipt["schema"] != RECEIPT_SCHEMA
@@ -795,6 +842,12 @@ def parse_receipt(text, binding):
         or not 1 <= receipt["result_bytes"] <= _MAX_REMOTE_RESULT
     ):
         raise RuntimeError("SSM gateway receipt identity is invalid")
+    if current and not normalized:
+        # The legacy hash covers producer bytes the SSM wrapper omitted.
+        # Report original identity as provisional, never as a verified
+        # result or a terminal pipeline. Read-only compiler reconciliation
+        # is required to establish the actual failed/pending outcome.
+        return _legacy_project_current_receipt(receipt, binding)
     result = receipt["result"]
     result_fields = {
         "schema",
@@ -811,7 +864,8 @@ def parse_receipt(text, binding):
         "missing_evidence_count",
     }
     auxiliary = {"recipe_identity", "artifacts", "selected_generation",
-                 "attempt_ids", "controller_jobs", "predecessor"}
+                 "attempt_ids", "controller_jobs", "predecessor",
+                 "reconciliation_required", "source_evidence"}
     remote = binding["remote_request"]
     if (
         not isinstance(result, dict)
@@ -820,8 +874,13 @@ def parse_receipt(text, binding):
         or result["schema"] != "image-build-remote-result-v1"
         or result["operation_id"] != binding["request_id"]
         or result["operation_type"] != remote["operation"]
-        or result["source_repository"] != binding["source"]["repository"]
-        or result["source_revision"] != binding["source"]["revision"]
+        or result["source_repository"] != (
+            remote["source"]["repository"] if current
+            else binding["source"]["repository"])
+        or (current and (type(result["source_revision"]) is not str
+             or not re.fullmatch(r"[a-f0-9]{40}", result["source_revision"])))
+        or (not current and
+            result["source_revision"] != binding["source"]["revision"])
         or result["status"] not in {"completed", "failed", "pending", "released"}
         or type(result["uncertainty"]) is not bool
         or type(result["missing_evidence_count"]) is not int
@@ -837,6 +896,34 @@ def parse_receipt(text, binding):
     if "artifacts" in result and (not isinstance(result["artifacts"], dict)
             or len(_canonical(result["artifacts"])) > 32000):
         raise RuntimeError("image-build receipt artifacts are not bounded")
+    if normalized:
+        # The execution wrapper read the selected compiler Git HEAD, wrote a
+        # fsynced Project-owned producer request and required the producer to
+        # echo that exact revision. Verify its request bytes against the
+        # FROZEN Gateway operation with only the resolved Git revision added.
+        source = result.get("source_evidence")
+        request_source = dict(remote["source"])
+        request_source["revision"] = result["source_revision"]
+        reviewed_request = dict(remote, source=request_source)
+        expected_request_sha = hashlib.sha256(
+            _canonical(reviewed_request) + b"\n").hexdigest()
+        if (type(source) is not dict
+                or set(source) != {"schema", "repository",
+                                   "revision", "request_sha256"}
+                or source["schema"] != "host-deploy-project-current-source-v1"
+                or source["repository"] != remote["source"]["repository"]
+                or source["revision"] != result["source_revision"]
+                or source["request_sha256"] != expected_request_sha):
+            raise RuntimeError("Project-current resolved revision is not bound to original request")
+        # Each byte claimed by a new current-Project receipt is exactly the
+        # canonical transmitted normalized result; no hidden producer JSON.
+        data = _canonical(result)
+        if (len(data) != receipt["result_bytes"]
+                or hashlib.sha256(data).hexdigest() != receipt["result_sha256"]):
+            raise RuntimeError("normalized Project-current receipt digest or size differs")
+        if (type(result.get("reconciliation_required")) is not bool
+                and result.get("reconciliation_required") is not None):
+            raise RuntimeError("invalid Project-current reconciliation flag")
     if remote["operation"].startswith("toolchain."):
         if (result.get("predecessor") != remote.get("predecessor")
                 or not isinstance(result.get("attempt_ids"), list)
@@ -853,7 +940,149 @@ def parse_receipt(text, binding):
     return receipt
 
 
+def _terminal_pipeline_failure(result):
+    """Validate the accepted image-build _evidence() terminal failure shape.
+
+    The authenticated original SSM receipt binds the producer operation and
+    pipeline; the evidence locator must belong to an attempt named by that
+    same result. A checksum alone cannot establish a terminal failure.
+    """
+    failure = result.get("failure")
+    if type(failure) is not dict or len(_canonical(failure)) > 4096:
+        return False
+    kind = failure.get("kind")
+    common = {"kind", "exit_code", "journal_reference",
+              "process_cleanup_complete", "locator"}
+    if kind == "command-exit":
+        if set(failure) != common or result.get("terminal_outcome") != "nonzero-exit":
+            return False
+    elif kind == "controller-outcome":
+        if set(failure) != common | {"outcome", "job_id", "signal"}:
+            return False
+        outcome = failure["outcome"]
+        job = failure["job_id"]
+        if (outcome not in ("nonzero-exit", "signal", "timeout", "fault", "cancelled")
+                or result.get("terminal_outcome") != outcome
+                or type(job) is not str or not 1 <= len(job) <= 128
+                or any(ord(c) < 33 or ord(c) == 127 for c in job)):
+            return False
+        signal = failure["signal"]
+        if signal is not None and (type(signal) is not int or signal <= 0):
+            return False
+        if outcome == "signal" and signal is None:
+            return False
+    else:
+        return False
+    if failure["process_cleanup_complete"] is not True:
+        return False
+    exit_code = failure["exit_code"]
+    if exit_code is not None and type(exit_code) is not int:
+        return False
+    if (result.get("terminal_outcome") == "nonzero-exit"
+            and (type(exit_code) is not int or exit_code == 0)):
+        return False
+    journal = failure["journal_reference"]
+    if journal is not None and (type(journal) is not str
+                                or not 1 <= len(journal) <= 2048
+                                or any(ord(c) < 32 or ord(c) == 127 for c in journal)):
+        return False
+    locator = failure["locator"]
+    if (type(locator) is not str or not 1 <= len(locator) <= 2048
+            or any(ord(c) < 32 or ord(c) == 127 for c in locator)
+            or "\\" in locator):
+        return False
+    parts = locator.split("/")
+    attempts = result.get("attempt_ids")
+    suffix = ".execution.json" if kind == "command-exit" else ".observation.json"
+    if (len(parts) < 4 or parts[:2] != ["image-build", "attempts"]
+            or any(part in ("", ".", "..") for part in parts)
+            or not parts[-1].endswith(suffix)
+            or type(attempts) is not list or not 1 <= len(attempts) <= 24
+            or any(type(item) is not str or not item or "/" in item
+                   or item in (".", "..") for item in attempts)
+            or parts[2] not in attempts):
+        return False
+    return True
+
+
+def project_current_completion(receipt):
+    """One conservative pipeline.submit classifier for both Gateway paths."""
+    if receipt.get("result_representation") != "normalized-summary-v1":
+        return "recovery_blocked"
+    result = receipt["result"]
+    pipeline = result.get("pipeline_id")
+    owned_pipeline = (type(pipeline) is str
+                      and re.fullmatch(r"[a-f0-9]{32}", pipeline) is not None)
+    if (result.get("operation_type") != "pipeline.submit"
+            or type(result.get("uncertainty")) is not bool
+            or type(result.get("reconciliation_required")) is not bool
+            or result["uncertainty"] or result["reconciliation_required"]
+            or result.get("missing_evidence_count", 0) != 0):
+        return "recovery_blocked"
+    status = result.get("status")
+    outcome = result.get("terminal_outcome")
+    if status == "completed":
+        return ("completed" if (owned_pipeline and outcome == "success"
+                                and result.get("failure") is None)
+                else "recovery_blocked")
+    if status == "failed":
+        failure = result.get("failure")
+        credible = (type(failure) is dict
+                    and type(failure.get("type")) is str and bool(failure["type"])
+                    and type(failure.get("reason")) is str and bool(failure["reason"]))
+        if owned_pipeline:
+            return ("failed" if _terminal_pipeline_failure(result)
+                    else "recovery_blocked")
+        if (credible and "kind" not in failure and pipeline is None
+                and outcome in (None, "failed", "request-error")):
+            return "failed"
+        return "recovery_blocked"
+    if status == "released":
+        return ("cancelled" if owned_pipeline and outcome == "released"
+                else "recovery_blocked")
+    if status == "pending":
+        return "running" if owned_pipeline else "recovery_blocked"
+    return "recovery_blocked"
+
+
+def project_receipt_observation(receipt, binding, command_id, instance_id):
+    """Keep original SSM source/pipeline claims for protected readback."""
+    from .project_current import validate as validate_project_binding
+    binding = validate_project_binding(binding)
+    result = receipt["result"]
+    normalized = receipt.get("result_representation") == "normalized-summary-v1"
+    return {
+        "schema": ("host-deploy-project-current-normalized-receipt-v1"
+                   if normalized else "host-deploy-project-current-legacy-receipt-v1"),
+        "request_id": binding["request_id"],
+        "command_id": command_id,
+        "compiler_instance_id": instance_id,
+        "remote_request_sha256": binding["remote_request_sha256"],
+        "source_repository": binding["remote_request"]["source"]["repository"],
+        "source_revision": result["source_revision"],
+        "pipeline_id": result["pipeline_id"],
+        "producer_status": result["status"],
+        "result_sha256": receipt["result_sha256"],
+        "result_bytes": receipt["result_bytes"],
+        "receipt_sha256": hashlib.sha256(_canonical(receipt)).hexdigest(),
+        **({"declared_result_sha256": receipt["result_sha256"],
+            "declared_result_bytes": receipt["result_bytes"],
+            "compilation_authorized": False} if not normalized else {}),
+        "raw_result_digest_verified": normalized,
+        "selected_project_observation_required": True,
+        "producer": {
+            "request_id": binding["request_id"],
+            "source_revision": result["source_revision"],
+            "pipeline_id": result["pipeline_id"],
+            "status": result["status"],
+            "uncertainty": result["uncertainty"],
+        },
+    }
+
+
 def completion_for_receipt(receipt):
+    if receipt.get("result_representation") == "normalized-summary-v1":
+        return project_current_completion(receipt)
     result = receipt["result"]
     if result["uncertainty"]:
         return "recovery_blocked"
@@ -883,49 +1112,70 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
     host_configuration = verify_current_target(gateway_root, binding)
     host = host_factory(host_configuration)
     observed = host.inspect_command(record["command_id"])
+    if observed is not None and (
+            type(observed) is not dict
+            or observed.get("CommandId") != record["command_id"]
+            or observed.get("InstanceId") != host_configuration["instance_id"]):
+        raise RuntimeError("SSM original CommandId or compiler instance identity differs")
+    if binding["schema"] == 4:
+        return observe_project_command(gateway_root, request_id, record, binding,
+                                       host_configuration, observed, at=at)
     evidence = record_dispatch_observation(
-        gateway_root,
-        request_id,
-        _observation(observed),
-        at=at,
-    )
+        gateway_root, request_id, _observation(observed), at=at)
     if observed is None:
         return load_request(gateway_root, request_id), evidence, None
-
     status = observed.get("Status")
     if status in {"Pending", "InProgress", "Delayed", "Cancelling"}:
-        state = mark_completion(
-            gateway_root,
-            request_id,
-            "running",
-            at=at,
-        )
+        state = mark_completion(gateway_root, request_id, "running", at=at)
         return state, evidence, None
     if status != "Success":
-        state = mark_completion(
-            gateway_root,
-            request_id,
-            "recovery_blocked",
-            at=at,
-        )
+        state = mark_completion(gateway_root, request_id, "recovery_blocked", at=at)
         return state, evidence, None
-
     try:
         receipt = parse_receipt(observed.get("StandardOutputContent", ""), binding)
     except Exception:
-        mark_completion(
-            gateway_root,
-            request_id,
-            "recovery_blocked",
-            at=at,
-        )
+        mark_completion(gateway_root, request_id, "recovery_blocked", at=at)
         raise
-    completion = completion_for_receipt(receipt)
     state, retained = record_remote_result(
-        gateway_root,
-        request_id,
-        receipt,
-        completion,
-        at=at,
-    )
+        gateway_root, request_id, receipt, completion_for_receipt(receipt), at=at)
     return state, evidence, retained
+
+
+def observe_project_command(root, request_id, record, binding, configuration,
+                            observed, *, at=None, parser=None, claim_factory=None):
+    """Shared original-command polling with one atomic ledger boundary."""
+    if observed is not None and (
+            type(observed) is not dict
+            or observed.get("CommandId") != record["command_id"]
+            or observed.get("InstanceId") != configuration["instance_id"]):
+        raise RuntimeError("SSM original CommandId or compiler instance identity differs")
+    if observed is None:
+        return record_project_poll(root, request_id, observation=None, at=at)
+    status = observed.get("Status")
+    if status != "Success":
+        if status not in {"Pending", "InProgress", "Delayed", "Cancelling",
+                          "Failed", "Cancelled", "TimedOut"}:
+            raise RuntimeError("invalid original SSM invocation status")
+        return record_project_poll(
+            root, request_id, observation=_observation(observed),
+            completion=("running" if status in
+                        {"Pending", "InProgress", "Delayed", "Cancelling"}
+                        else "recovery_blocked"), at=at)
+    try:
+        receipt = (parser or parse_receipt)(
+            observed.get("StandardOutputContent", ""), binding)
+        if (type(receipt) is not dict or receipt.get("schema") != RECEIPT_SCHEMA
+                or receipt.get("request_id") != request_id
+                or receipt.get("remote_request_sha256") != binding["remote_request_sha256"]):
+            raise RuntimeError("producer result differs from original operation")
+        claim = (claim_factory or project_receipt_observation)(
+            receipt, binding, record["command_id"], configuration["instance_id"])
+    except Exception:
+        record_project_poll(root, request_id, observation=_observation(observed),
+                            completion="recovery_blocked", at=at)
+        raise
+    completion = project_current_completion(receipt)
+    return record_project_poll(
+        root, request_id, observation=claim, claim=claim,
+        receipt=(receipt if completion in {"completed", "failed", "cancelled"}
+                 else None), completion=completion, at=at)

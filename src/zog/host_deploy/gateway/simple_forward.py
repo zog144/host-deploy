@@ -17,6 +17,8 @@ from .github_dispatch import FIRST_FONTS_TASK
 from .image_build_dispatch import prepare_image_build_dispatch, verify_current_target
 from .image_build_execution import (
     CONTROL_TIMEOUT_SECONDS, RECEIPT_SCHEMA, _binding, remote_script,
+    parse_receipt, project_current_completion, project_receipt_observation,
+    PROJECT_RECEIPT_OBSERVATIONS, observe_project_command,
 )
 from .project_current_observation import (
     CONTROL_TIMEOUT_SECONDS as PROJECT_CURRENT_CONTROL_TIMEOUT_SECONDS,
@@ -26,7 +28,8 @@ from .ledger import (
     load_dispatch, load_request, mark_dispatch_submitting,
     mark_dispatch_submitted, mark_dispatch_uncertain, prepare_dispatch,
     mark_completion, record_dispatch_observation, record_remote_result,
-    valid_request_ids,
+    valid_request_ids, load_project_observation, record_project_reconciliation,
+    LedgerConflict,
 )
 
 # Explicitly finite task/operation mapping. No supplied script, user-selected
@@ -123,23 +126,35 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
     # SSM control-window status. Otherwise a Gateway polling iteration could
     # incorrectly turn a reconciled running pipeline back into TimedOut.
     command_id = record["command_id"]
-    observation_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
-    if binding.get("schema") == 4 and observation_path.is_file():
-        saved = json.loads(observation_path.read_text())
-        observed = saved.get("observation", {})
-        if (saved.get("schema") == 1 and saved.get("request_id") == request_id
-                and saved.get("command_id") == command_id
-                and type(observed) is dict
-                and observed.get("status") == "reconciled-project"):
-            state = load_request(root, request_id)["states"]["completion"]
-            if state in ("running", "recovery_blocked", "completed", "failed"):
-                return {"request_id": request_id, "phase": state,
-                        "command_id": command_id,
-                        "pipeline_id": observed.get("producer", {}).get("pipeline_id"),
-                        "observation_required": state in
-                            ("running", "recovery_blocked")}
     host = host_factory(configuration)
     observation = host.inspect_command(command_id)
+    if binding.get("schema") == 4:
+        try:
+            state, latest, _ = observe_project_command(
+                root, request_id, record, binding, configuration, observation,
+                parser=parse_receipt, claim_factory=project_receipt_observation)
+        except RuntimeError as error:
+            raise ForwardingDenied(str(error)) from error
+        phase = state["states"]["completion"]
+        retained = latest["observation"] if latest else {}
+        # Preserve the existing transport-facing submitted status for an
+        # initial control-window poll; a producer claim/reconciliation
+        # instead reports the durable Project completion state.
+        if retained.get("schema") in PROJECT_RECEIPT_OBSERVATIONS or (
+                retained.get("status") == "reconciled-project"):
+            return {"request_id": request_id, "phase": phase,
+                    "command_id": command_id,
+                    "pipeline_id": retained.get("producer", {}).get("pipeline_id"),
+                    "observation_required": phase in ("running", "recovery_blocked")}
+        if observation is None:
+            return {"request_id": request_id, "phase": "submitted",
+                    "command_id": command_id, "status": "not-yet-visible"}
+        if observation["Status"] in _RUNNING:
+            return {"request_id": request_id, "phase": "submitted",
+                    "command_id": command_id, "status": observation["Status"]}
+        return {"request_id": request_id, "phase": phase,
+                "command_id": command_id, "ssm_status": observation["Status"],
+                "observation_required": phase == "recovery_blocked"}
     if observation is None:
         return {"request_id": request_id, "phase": "submitted",
                 "command_id": command_id, "status": "not-yet-visible"}
@@ -151,19 +166,20 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
     status = observation["Status"]
     summary = {"schema": "host-deploy-direct-ssm-observation-v1",
                "command_id": command_id, "status": status}
-    record_dispatch_observation(root, request_id, summary)
+    # A status-only re-poll must not erase the original retained receipt
+    # source/pipeline claim needed for a later protected same-pipeline read.
+    old_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
+    previous = json.loads(old_path.read_text()) if old_path.is_file() else None
+    retained_claim = (
+        type(previous) is dict and previous.get("command_id") == command_id
+        and type(previous.get("observation")) is dict
+        and previous["observation"].get("schema") in PROJECT_RECEIPT_OBSERVATIONS)
+    if not retained_claim:
+        record_dispatch_observation(root, request_id, summary)
     if status in _RUNNING:
         return {"request_id": request_id, "phase": "submitted",
                 "command_id": command_id, "status": status}
     if status != "Success":
-        if binding.get("schema") == 4:
-            # SSM's TimedOut/Failed/Cancelled describes the control window,
-            # not the actual 14,400-second image-build pipeline. Never mark
-            # a Project-current pipeline terminal without producer evidence.
-            mark_completion(root, request_id, "recovery_blocked")
-            return {"request_id": request_id, "phase": "recovery_blocked",
-                    "command_id": command_id, "ssm_status": status,
-                    "observation_required": True}
         record_remote_result(root, request_id, summary, _TERMINAL[status])
         return {"request_id": request_id, "phase": _TERMINAL[status],
                 "command_id": command_id}
@@ -180,48 +196,6 @@ def advance(root, request_id, *, host_factory=Host, owner_factory=None):
                 binding["remote_request_sha256"]
             or not isinstance(receipt.get("result"), dict)):
         raise ForwardingDenied("producer result differs from original operation")
-    if binding.get("schema") == 4:
-        result = receipt["result"]
-        pipeline = result.get("pipeline_id")
-        source_revision = result.get("source_revision")
-        from .project_current import IDENTITY, REVISION
-        if (type(source_revision) is not str
-                or not REVISION.fullmatch(source_revision)
-                or (pipeline is not None and
-                    (type(pipeline) is not str or
-                     not IDENTITY.fullmatch(pipeline)))
-                or result.get("status") not in
-                    ("pending", "running", "completed", "failed", "released")):
-            raise ForwardingDenied("producer status or identity is invalid")
-        # Do not store a provisional result as the immutable terminal
-        # remote-result.json: later read-only observation may reconcile it.
-        report = {**summary,
-                  "producer": {
-                      "request_id": request_id,
-                      "source_revision": source_revision,
-                      "pipeline_id": pipeline,
-                      "status": result["status"],
-                      "uncertainty": result.get("uncertainty") is True}}
-        record_dispatch_observation(root, request_id, report)
-        if (result["status"] == "completed"
-                and result.get("terminal_outcome") == "success"
-                and result.get("uncertainty") is False):
-            completion = "completed"
-        elif (result["status"] == "failed"
-              and result.get("terminal_outcome") is not None
-              and result.get("uncertainty") is False):
-            completion = "failed"
-        elif pipeline is not None:
-            completion = "running"
-        else:
-            completion = "recovery_blocked"
-        if completion in ("completed", "failed"):
-            record_remote_result(root, request_id, receipt, completion)
-        else:
-            mark_completion(root, request_id, completion)
-        return {"request_id": request_id, "phase": completion,
-                "command_id": command_id, "pipeline_id": pipeline,
-                "observation_required": completion not in ("completed", "failed")}
     record_remote_result(root, request_id, receipt, "completed")
     return {"request_id": request_id, "phase": "completed",
             "command_id": command_id}
@@ -254,18 +228,39 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
     from .project_current import REVISION, IDENTITY
     from .project_current_observation import read_only_observation_script
 
-    previous_path = Path(root) / "requests" / request_id / "dispatch-observation.json"
-    prior = {}
-    if previous_path.exists():
-        previous = json.loads(previous_path.read_text())
-        if (previous.get("schema") != 1
-                or previous.get("request_id") != request_id
-                or previous.get("command_id") != record["command_id"]
-                or type(previous.get("observation")) is not dict):
-            raise ForwardingDenied("retained SSM/Project observation identity differs")
-        prior = previous["observation"].get("producer", {})
-        if type(prior) is not dict:
+    try:
+        selected = load_project_observation(root, request_id)
+        latest = selected["latest"]
+        prior = latest["observation"] if latest else {}
+        if selected["claim"] is None and (
+                prior.get("schema") in PROJECT_RECEIPT_OBSERVATIONS
+                or prior.get("status") == "reconciled-project"):
+            # A pre-upgrade latest record may have lost the original claim.
+            # Read C itself, never construct a claim from a later Project.
+            original = host_factory(config).inspect_command(record["command_id"])
+            if original is None or original.get("Status") not in (
+                    "Success", "Failed", "TimedOut", "Cancelled"):
+                raise ForwardingDenied("original SSM receipt readback required")
+            observe_project_command(root, request_id, record, binding, config, original,
+                                    parser=parse_receipt,
+                                    claim_factory=project_receipt_observation)
+            selected = load_project_observation(root, request_id)
+            latest = selected["latest"]
+            prior = latest["observation"] if latest else {}
+            if (selected["claim"] is None and
+                    prior.get("schema") in PROJECT_RECEIPT_OBSERVATIONS):
+                raise ForwardingDenied("original SSM receipt readback required")
+        # Prefer the most specific retained Project identity when the
+        # original receipt did not yet identify a pipeline.
+        producer = prior.get("producer", {})
+        if selected["claim"] is not None:
+            producer = (producer if prior.get("status") == "reconciled-project"
+                        else selected["claim"]["producer"])
+        if type(producer) is not dict:
             raise ForwardingDenied("previous Project producer identity is invalid")
+        prior = producer
+    except (RuntimeError, ValueError, KeyError, TypeError) as error:
+        raise ForwardingDenied(str(error)) from error
 
     expected_pipeline = prior.get("pipeline_id")
     if (expected_pipeline is not None and
@@ -396,11 +391,7 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
         "terminal_confirmed": observation["terminal_confirmed"],
         "evidence": evidence,
     }
-    if completion in ("completed", "failed"):
-        record_remote_result(root, request_id, snapshot, completion)
-    else:
-        mark_completion(root, request_id, completion)
-    record_dispatch_observation(root, request_id, {
+    latest = {
         "schema": "host-deploy-direct-ssm-observation-v1",
         "command_id": record["command_id"],
         "inspection_command_id": inspection_id,
@@ -414,7 +405,13 @@ def reconcile_project_observation(root, request_id, *, host_factory=Host):
             "uncertainty": not observation["terminal_confirmed"],
             "evidence_sha256": evidence["evidence_sha256"],
         },
-    })
+    }
+    try:
+        record_project_reconciliation(root, request_id, expected=selected,
+                                      observation=latest, result=snapshot,
+                                      completion=completion)
+    except LedgerConflict as error:
+        raise ForwardingDenied(str(error)) from error
     return {"request_id": request_id, "command_id": record["command_id"],
             "phase": completion, "pipeline_id": pipeline}
 
