@@ -472,12 +472,20 @@ try:
         summary[field] = list(summary[field] or [])[:limit]
     if isinstance(summary["failure"], dict):
         failure = summary["failure"]
-        summary["failure"] = {
-            "type": str(failure.get("type", ""))[:128],
-            "reason": str(failure.get("reason", ""))[:2000],
-            **({"job_id": str(failure["job_id"])[:128]}
-               if failure.get("job_id") is not None else {}),
-        }
+        if "kind" in failure:
+            # Preserve actual _evidence() command/controller records, not
+            # fabricated type/reason strings. Invalid evidence is retained
+            # only within a bounded receipt; the Gateway classifies it.
+            if len(json.dumps(failure, sort_keys=True, separators=(",", ":"),
+                              allow_nan=False).encode("ascii")) > 4096:
+                raise RuntimeError("producer failure evidence exceeds bound")
+        else:
+            summary["failure"] = {
+                "type": str(failure.get("type", ""))[:128],
+                "reason": str(failure.get("reason", ""))[:2000],
+                **({"job_id": str(failure["job_id"])[:128]}
+                   if failure.get("job_id") is not None else {}),
+            }
     elif summary["failure"] is not None:
         summary["failure"] = {"type": "unstructured",
                               "reason": str(summary["failure"])[:2000]}
