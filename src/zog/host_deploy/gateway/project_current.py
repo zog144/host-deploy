@@ -449,10 +449,14 @@ try:
             or (produced["pipeline_id"] is not None
                 and (type(produced["pipeline_id"]) is not str
                      or re.fullmatch(r"[a-f0-9]{32}", produced["pipeline_id"]) is None))
-            or (produced.get("reconciliation_required") is not None
-                and type(produced["reconciliation_required"]) is not bool)):
+            or ("reconciliation_required" in produced
+                and type(produced["reconciliation_required"]) is not bool)
+            or type(produced.get("missing_evidence", [])) is not list):
         raise RuntimeError("producer status invalid")
-    summary["missing_evidence_count"] = len(produced.get("missing_evidence") or [])
+    summary["missing_evidence_count"] = len(produced.get("missing_evidence", []))
+    summary["reconciliation_required"] = (
+        produced.get("reconciliation_required", False)
+        or produced["uncertainty"] or bool(summary["missing_evidence_count"]))
     # Compiler-created, fsynced request bytes bind the real selected Git
     # revision to the frozen repository/task without claiming a lane pin.
     summary["source_evidence"] = {
