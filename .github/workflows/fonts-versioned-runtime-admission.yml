@@ -35,19 +35,19 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: zog144/root-control
-          ref: a672f007b33f83bf70970e3a571fd443366bd93f
+          ref: 35fc1ea8969c97a00cdb4b3c18ecb47bf1f83bbb
           path: companions/root-control
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: zog144/box-control
-          ref: ad61fa6a4e9c3176149720868cb008e0512dbec9
+          ref: b5903779e72ea852a125a268dcd35189339dc4ae
           path: companions/box-control
           persist-credentials: false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: zog144/image-build
-          ref: 0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a
+          ref: d42703b9e4f7aedce2b9959aab855485add2795a
           path: companions/image-build
           persist-credentials: false
       # Audit the actual SSM/Project-current -> producer -> box-control
@@ -74,16 +74,20 @@ jobs:
           from zog.host_deploy.fonts_versioned_runtime import source_tree_sha256, SELECTED_SOURCES
           import json
           revisions = {
-              "root-control": "a672f007b33f83bf70970e3a571fd443366bd93f",
-              "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
-              "image-build": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
+              "root-control": "35fc1ea8969c97a00cdb4b3c18ecb47bf1f83bbb",
+              "box-control": "b5903779e72ea852a125a268dcd35189339dc4ae",
+              "image-build": "d42703b9e4f7aedce2b9959aab855485add2795a",
           }
+          measured = {}
           for component, expected in sorted(revisions.items()):
               observed = source_tree_sha256(Path("companions") / component)
-              if observed != SELECTED_SOURCES[component] or observed["revision"] != expected:
-                  raise SystemExit("selected source commit/tree hash differs: " + component)
+              if observed["revision"] != expected:
+                  raise SystemExit("selected source revision differs: " + component)
+              measured[component] = observed
               print("ZOG_PINNED_SOURCE " + component + " " + observed["revision"]
-                    + " sha256:" + observed["source_tree_sha256"])
+                    + " sha256:" + observed["source_tree_sha256"], flush=True)
+          if measured != SELECTED_SOURCES:
+              raise SystemExit("selected source tuple differs from reviewed pins")
           PY
       - name: Source-only regression and compile
         run: |
