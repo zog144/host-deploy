@@ -45,7 +45,7 @@ def project(tmp_path):
         "'source_revision':request['source']['revision'],"
         "'status':'pending','pipeline_id':'a'*32,'recipe_identity':pin,"
         "'terminal_outcome':None,'uncertainty':False,"
-        "'reconciliation_required':False,'failure':None}))\n"
+        "'missing_evidence':[],'failure':None}))\n"
         "if __name__ == '__main__': main()\n"
     )
     git(source, "init", "-q")
