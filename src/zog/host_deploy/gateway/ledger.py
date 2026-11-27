@@ -859,6 +859,11 @@ def _validate_project_claim(claim, dispatch, *, historical=False):
             or producer["status"] != claim["producer_status"]
             or type(producer["uncertainty"]) is not bool):
         raise LedgerConflict("provisional SSM producer binding differs from original")
+    if schema == "host-deploy-project-current-legacy-receipt-v1" and (
+            claim.get("declared_result_sha256") != claim["result_sha256"]
+            or claim.get("declared_result_bytes") != claim["result_bytes"]
+            or claim.get("compilation_authorized") is not False):
+        raise LedgerConflict("legacy producer digest is not verified")
     if not historical or "receipt_sha256" in claim:
         if (type(claim.get("receipt_sha256")) is not str
                 or not re.fullmatch(r"[0-9a-f]{64}", claim["receipt_sha256"])):
@@ -918,7 +923,17 @@ def record_project_poll(root, request_id, *, observation, claim=None,
                 # have erased the original typed claim. Authenticate C
                 # again and compare its identity to the retained Project.
                 _compare_project_identity(claim["producer"], prior.get("producer"))
-                _compare_project_identity(prior["producer"], claim["producer"])
+                if original is None:
+                    # An upgrade with no retained original receipt cannot
+                    # invent a missing pipeline binding from later evidence.
+                    _compare_project_identity(prior["producer"], claim["producer"])
+            if original is None and result_path.exists() and not (typed or reconciled):
+                raise LedgerConflict("cannot bind new original claim to historical terminal result")
+            if receipt is not None:
+                _, receipt_digest = _detached_json(receipt, "original SSM receipt")
+                if (claim["receipt_sha256"] != receipt_digest
+                        or claim["raw_result_digest_verified"] is not True):
+                    raise LedgerConflict("terminal receipt differs from verified original claim")
             if original is None:
                 save(directory / _PROJECT_CLAIM_FILE, {
                     "schema": 1, "request_id": request_id,
@@ -940,7 +955,8 @@ def record_project_poll(root, request_id, *, observation, claim=None,
                 directory, dispatch, receipt, completion, at)
         else:
             value = None
-        if observation is not None:
+        if observation is not None and (latest is None or
+                                        latest["observation"] != observation):
             latest = _save_project_latest(directory, dispatch, observation, at)
         save(directory / "state.json", state)
         return state, latest, value
