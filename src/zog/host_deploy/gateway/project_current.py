@@ -387,6 +387,7 @@ try:
             "terminal_outcome": None, "uncertainty": True,
             "attempt_ids": observed["attempt_ids"],
             "reconciliation_required": True,
+            "missing_evidence": [],
             "failure": {"type": "producer-timeout",
                         "reason": "bounded producer wait expired; observe original operation"},
             "allowed_next_operations": ["pipeline.inspect"],
@@ -412,6 +413,7 @@ try:
                 "terminal_outcome": None, "uncertainty": True,
                 "attempt_ids": observed["attempt_ids"],
                 "reconciliation_required": True,
+                "missing_evidence": [],
                 "failure": {"type": "producer-exit",
                             "reason": "producer exited; durable pipeline requires reconciliation"},
                 "allowed_next_operations": ["pipeline.inspect"],
@@ -451,9 +453,9 @@ try:
                      or re.fullmatch(r"[a-f0-9]{32}", produced["pipeline_id"]) is None))
             or ("reconciliation_required" in produced
                 and type(produced["reconciliation_required"]) is not bool)
-            or type(produced.get("missing_evidence", [])) is not list):
+            or type(produced.get("missing_evidence")) is not list):
         raise RuntimeError("producer status invalid")
-    summary["missing_evidence_count"] = len(produced.get("missing_evidence", []))
+    summary["missing_evidence_count"] = len(produced["missing_evidence"])
     summary["reconciliation_required"] = (
         produced.get("reconciliation_required", False)
         or produced["uncertainty"] or bool(summary["missing_evidence_count"]))
