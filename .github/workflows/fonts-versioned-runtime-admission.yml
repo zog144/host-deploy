@@ -50,6 +50,24 @@ jobs:
           ref: d42703b9e4f7aedce2b9959aab855485add2795a
           path: companions/image-build
           persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/root-control
+          ref: a672f007b33f83bf70970e3a571fd443366bd93f
+          path: companions/previous-root-control
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/box-control
+          ref: ad61fa6a4e9c3176149720868cb008e0512dbec9
+          path: companions/previous-box-control
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: zog144/image-build
+          ref: 0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a
+          path: companions/previous-image-build
+          persist-credentials: false
       # Audit the actual SSM/Project-current -> producer -> box-control
       # source path, not the historical schema-3 identity selector path.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
