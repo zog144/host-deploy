@@ -24,17 +24,23 @@ def _canonical(value):
                       ensure_ascii=True, allow_nan=False).encode("ascii")
 
 
+# Copied from image-build remote_operations.py::_base_result at exact
+# accepted revision 50698663f3ffc7058c85748a455df1531cfd0355 (body unchanged).
+# Keep wrapper-only reconciliation_required OUT of this producer fixture.
+_PRODUCER_BASE = "RESULT_SCHEMA = \"image-build-remote-result-v1\"\nMAX_MISSING = 64\ndef _base_result(\n    request,\n    *,\n    status,\n    terminal_outcome,\n    uncertainty=False,\n    failure=None,\n    missing_evidence=None,\n    allowed_next_operations=None,\n    pipeline_id=None,\n):\n    return {\n        \"schema\": RESULT_SCHEMA,\n        \"operation_id\": request[\"operation_id\"],\n        \"operation_type\": request[\"operation\"],\n        \"source_repository\": request[\"source\"][\"repository\"],\n        \"source_revision\": request[\"source\"][\"revision\"],\n        \"recipe_identity\": None,\n        \"pipeline_id\": pipeline_id,\n        \"attempt_ids\": [],\n        \"selected_generation\": None,\n        \"package\": None,\n        \"stage\": None,\n        \"phase\": None,\n        \"status\": status,\n        \"terminal_outcome\": terminal_outcome,\n        \"failure\": failure,\n        \"controller_jobs\": [],\n        \"log_locators\": [],\n        \"artifacts\": {},\n        \"provenance\": {},\n        \"uncertainty\": bool(uncertainty),\n        \"missing_evidence\": list(missing_evidence or [])[:MAX_MISSING],\n        \"allowed_next_operations\": list(allowed_next_operations or []),\n        \"predecessor\": request.get(\"predecessor\"),\n    }\n"
+
+
 def receipt_fixture(tmp_path, *, request_id="a" * 32,
-                    actual_terminal=False):
+                    actual_terminal=False, producer_case=None):
     root, source, controller = project(tmp_path)
     (source / "project/package/pins.txt").write_text("sha256:" + "a" * 64)
-    if actual_terminal:
+    if actual_terminal or producer_case is not None:
         # A real disposable Project producer writes its original immutable
         # pipeline and completed attempt, rather than tests patching stdout
         # from pending into a pretend successful build.
         module = source / "src/zog/image_build/remote_operations.py"
         module.write_text(
-            "import json,sys\nfrom pathlib import Path\n"
+            "import json,sys\nfrom pathlib import Path\n" + _PRODUCER_BASE +
             "def main():\n"
             " req_path=Path(sys.argv[-1])\n"
             " req=json.loads(req_path.read_text())\n"
@@ -61,14 +67,26 @@ def receipt_fixture(tmp_path, *, request_id="a" * 32,
             " attempt_dir.mkdir(parents=True,exist_ok=True)\n"
             " (attempt_dir/'status.json').write_text(json.dumps("
             "{'status':'complete','generation':generation}))\n"
-            " print(json.dumps({'schema':'image-build-remote-result-v1',"
-            "'operation_id':op,'operation_type':'pipeline.submit',"
-            "'source_repository':req['source']['repository'],"
-            "'source_revision':req['source']['revision'],"
-            "'pipeline_id':pipeline,'status':'completed',"
-            "'terminal_outcome':'success','uncertainty':False,"
-            "'reconciliation_required':False,'failure':None,"
-            "'attempt_ids':[attempt]}))\n"
+            + (" result=_base_result(req,status='failed',"
+               "terminal_outcome='request-error',failure={'type':'ImageBuildError',"
+               "'reason':'validated request rejected'})\n"
+               if producer_case == "request-error" else
+               " result=_base_result(req,status='pending',terminal_outcome=None,"
+               "pipeline_id=pipeline,uncertainty=True,"
+               "missing_evidence=[{'kind':'pipeline-record','locator':pipeline}],"
+               "allowed_next_operations=['pipeline.inspect'])\n"
+               if producer_case == "unknown" else
+               " result=_base_result(req,status='completed',terminal_outcome='success',"
+               "pipeline_id=pipeline,missing_evidence=[{'kind':'generation',"
+               "'locator':generation}])\n"
+               if producer_case == "missing-evidence" else
+               " result=_base_result(req,status='pending',terminal_outcome=None,"
+               "pipeline_id=pipeline,allowed_next_operations=['pipeline.inspect'])\n"
+               if producer_case == "pending" else
+               " result=_base_result(req,status='completed',terminal_outcome='success',"
+               "pipeline_id=pipeline,allowed_next_operations=['pipeline.inspect'])\n")
+            + " result['attempt_ids']=[attempt] if result['pipeline_id'] else []\n"
+            " print(json.dumps(result))\n"
         )
     git(source, "add", ".")
     git(source, "commit", "-qm", "sha256 recipe snapshot for parser")
@@ -553,12 +571,9 @@ def test_failed_pre_pipeline_request_is_consistently_non_successful(
         tmp_path, monkeypatch, observer):
     request = approved()
     _, binding, receipt, _ = receipt_fixture(
-        tmp_path, request_id=request["request_id"])
-    receipt["result"].update(
-        status="failed", pipeline_id=None, terminal_outcome=None,
-        uncertainty=False, reconciliation_required=False,
-        failure={"type": "request-invalid", "reason": "validated request rejected"})
-    receipt = _rehash(receipt)
+        tmp_path, request_id=request["request_id"], producer_case="request-error")
+    assert receipt["result"]["terminal_outcome"] == "request-error"
+    assert receipt["result"]["reconciliation_required"] is False
     assert execution.parse_receipt(json.dumps(receipt), binding) == receipt
     assert execution.project_current_completion(receipt) == "failed"
     gateway = tmp_path / "gateway"
@@ -569,7 +584,7 @@ def test_failed_pre_pipeline_request_is_consistently_non_successful(
     result = json.loads((gateway / "requests" / request["request_id"] /
                         "remote-result.json").read_text())
     assert result["completion"] == "failed"
-    assert result["result"]["result"]["failure"]["type"] == "request-invalid"
+    assert result["result"]["result"]["failure"]["type"] == "ImageBuildError"
 
 
 @pytest.mark.parametrize("producer_uncertainty", ["none", "string", "missing"])
@@ -595,3 +610,174 @@ def test_project_wrapper_rejects_invalid_uncertainty_instead_of_coercing_false(
     assert actual.returncode != 0
     assert "producer status invalid" in actual.stderr
     assert '"result_representation"' not in actual.stdout
+
+
+
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+@pytest.mark.parametrize("producer_case,expected", [
+    ("pending", "running"),
+    ("unknown", "recovery_blocked"),
+    ("missing-evidence", "recovery_blocked"),
+])
+def test_accepted_producer_without_wrapper_flag_never_invents_success(
+        tmp_path, monkeypatch, observer, producer_case, expected):
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"], producer_case=producer_case)
+    assert receipt["result"]["reconciliation_required"] is (
+        producer_case != "pending")
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    assert _observe_original(gateway, request, binding, receipt,
+                             observer, monkeypatch) == expected
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+    assert not (gateway / "requests" / request["request_id"] /
+                "remote-result.json").exists()
+
+
+@pytest.mark.parametrize("format", ["legacy", "normalized"])
+@pytest.mark.parametrize("observer", ["forward", "direct"])
+def test_original_claim_survives_nonterminal_readback_and_later_polls(
+        tmp_path, monkeypatch, format, observer):
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    if format == "legacy":
+        receipt = _legacy(receipt)
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    _observe_original(gateway, request, binding, receipt, observer, monkeypatch)
+    directory = gateway / "requests" / request["request_id"]
+    claim_path = directory / "original-ssm-receipt-claim.json"
+    claim_bytes = claim_path.read_bytes()
+    claim = json.loads(claim_bytes)["claim"]
+    assert claim["raw_result_digest_verified"] is (format == "normalized")
+    report = _project_readback_report(binding)
+    report.update(terminal_confirmed=False, uncertainty=True,
+                  producer_status="pending", terminal_outcome=None,
+                  pipeline_status="pending")
+    from zog.host_deploy.gateway import fonts_inspection_owner
+    from zog.host_deploy.gateway import project_current_observation as observe
+    monkeypatch.setattr(simple_forward, "FIRST_FONTS_COMPILER_PROJECT_UID",
+                        os.geteuid())
+    inspections = []
+    def authorized(*args, **kwargs):
+        assert kwargs["pipeline_id"] == claim["pipeline_id"]
+        assert kwargs["original_command_id"] == frozen["command_id"]
+        inspections.append(kwargs)
+        return len(inspections), "read-only-" + str(len(inspections))
+    monkeypatch.setattr(fonts_inspection_owner, "submit_or_recover", authorized)
+    monkeypatch.setattr(fonts_inspection_owner, "finish", lambda *a, **kw: None)
+    monkeypatch.setattr(observe, "read_only_observation_script",
+                        lambda *a, **kw: "fixed-read-only-script")
+
+    class InspectionHost:
+        def __init__(self, config):
+            assert config == target()
+        def inspect_command(self, command_id):
+            assert command_id.startswith("read-only-")
+            return {"CommandId": command_id,
+                    "InstanceId": target()["instance_id"], "Status": "Success",
+                    "StandardOutputContent": json.dumps(report)}
+        def submit_command(self, *a, **kw):
+            pytest.fail("original SSM build replayed")
+    assert simple_forward.reconcile_project_observation(
+        gateway, request["request_id"], host_factory=InspectionHost)["phase"] == "running"
+    latest_path = directory / "dispatch-observation.json"
+    latest = latest_path.read_bytes()
+
+    # Status-only and temporarily absent polls in BOTH callers cannot erase
+    # the more recent protected readback or regress its completion state.
+    for status in (None, "InProgress", "TimedOut"):
+        class PollHost:
+            def __init__(self, config):
+                assert config == target()
+            def inspect_command(self, command_id):
+                assert command_id == frozen["command_id"]
+                return None if status is None else {
+                    "CommandId": command_id, "InstanceId": target()["instance_id"],
+                    "Status": status}
+            def submit_command(self, *a, **kw):
+                pytest.fail("poll replayed original SSM")
+        direct, _, _ = execution.observe_submitted(
+            gateway, request["request_id"], host_factory=PollHost)
+        assert direct["states"]["completion"] == "running"
+        assert simple_forward.advance(
+            gateway, request["request_id"], host_factory=PollHost)["phase"] == "running"
+        assert latest_path.read_bytes() == latest
+        assert claim_path.read_bytes() == claim_bytes
+
+    for route in ("direct", "forward"):
+        assert _observe_original(gateway, request, binding, receipt,
+                                 route, monkeypatch) == "running"
+        # Independently valid/rehashed altered receipts from the SAME C
+        # must be denied even after reconciliation advanced latest state.
+        for field, value in (
+                ("source_revision", "f" * 40), ("pipeline_id", "e" * 32),
+                ("status", "completed")):
+            later = copy.deepcopy(receipt)
+            later["result"][field] = value
+            if field == "status":
+                later["result"].update(terminal_outcome="success",
+                                       reconciliation_required=False)
+            if format == "normalized":
+                if field == "source_revision":
+                    template = copy.deepcopy(binding["remote_request"])
+                    template["source"]["revision"] = value
+                    later["result"]["source_evidence"].update(
+                        revision=value, request_sha256=hashlib.sha256(
+                            _canonical(template) + b"\n").hexdigest())
+                later = _rehash(later)
+            assert execution.parse_receipt(json.dumps(later), binding) == later
+            with pytest.raises(RuntimeError, match="original SSM receipt"):
+                _observe_original(gateway, request, binding, later, route, monkeypatch)
+            assert latest_path.read_bytes() == latest
+            assert claim_path.read_bytes() == claim_bytes
+            assert not (directory / "remote-result.json").exists()
+
+    # Repeated same-operation inspection can legitimately reach terminal.
+    report.update(terminal_confirmed=True, uncertainty=False,
+                  producer_status="completed", terminal_outcome="success",
+                  pipeline_status="complete")
+    assert simple_forward.reconcile_project_observation(
+        gateway, request["request_id"], host_factory=InspectionHost)["phase"] == "completed"
+    assert claim_path.read_bytes() == claim_bytes
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+    assert len(inspections) == 2
+
+
+def test_original_receipt_claim_creation_is_atomic_under_request_lock(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from zog.host_deploy.gateway.ledger import LedgerConflict, record_project_poll
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    changed = copy.deepcopy(receipt)
+    changed["result"]["pipeline_id"] = "e" * 32
+    changed = _rehash(changed)
+    barrier = Barrier(2)
+    def poll(value):
+        verified = execution.parse_receipt(json.dumps(value), binding)
+        claim = execution.project_receipt_observation(
+            verified, binding, frozen["command_id"], target()["instance_id"])
+        barrier.wait(timeout=10)
+        try:
+            record_project_poll(gateway, request["request_id"], observation=claim,
+                                claim=claim, completion="running")
+            return "accepted", claim
+        except LedgerConflict:
+            return "conflict", claim
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(poll, [receipt, changed]))
+    assert sorted(status for status, _ in results) == ["accepted", "conflict"]
+    winner = next(claim for status, claim in results if status == "accepted")
+    directory = gateway / "requests" / request["request_id"]
+    assert json.loads((directory / "original-ssm-receipt-claim.json").read_text())[
+        "claim"] == winner
+    assert json.loads((directory / "dispatch-observation.json").read_text())[
+        "observation"] == winner
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+    assert not (directory / "remote-result.json").exists()
