@@ -112,6 +112,66 @@ pre-pipeline failure, missing/invalid uncertainty, an original
 CommandId that changes its claimed result, and protected mismatching
 or matching source/pipeline readback without a new original SSM send.
 
+## November 27 independent re-review corrections
+
+The earlier typed original receipt was stored in the mutable latest
+`dispatch-observation.json`; a matching nonterminal reconciliation
+could replace it with a Project observation. Both original-command
+polling paths now call `observe_project_command()` and the same
+request-locked `ledger.record_project_poll()`.
+
+A validated original SSM response creates
+`original-ssm-receipt-claim.json` once, with its original CommandId,
+immutable dispatch-binding SHA-256, request/instance/repository/revision/
+pipeline identities, the digest of the **received receipt**, and a
+canonical claim digest. The original producer's declared hash/size
+remain explicitly unverified for legacy reduced receipts. No result
+bytes omitted by the historical wrapper are invented.
+
+The original claim is independent of the mutable latest observation.
+Comparison/create-once and latest/terminal commit are performed under
+the same existing per-request file lock, using fsynced atomic JSON
+publication. A later protected Project observation checks the original
+claim and any more specific previously observed pipeline. Its commit
+rechecks the exact pre-inspection claim/latest snapshot under that lock;
+a concurrent change fails closed. Neither polling route can regress a
+reconciled Project, discard its evidence on an absent/status-only poll,
+or accept a changed original receipt for the same CommandId. An
+identical repeat is idempotent. An upgraded ledger with only the old
+typed/reconciled observation needs matching authenticated original
+CommandId readback before establishing the separate claim; it cannot
+manufacture the original claim from later Project evidence. A genuine
+control-window failure with no successful producer receipt may still
+use the independent protected read-only same-operation path.
+
+The accepted image-build result contract at
+`50698663f3ffc7058c85748a455df1531cfd0355` does not emit the
+wrapper-only `reconciliation_required` field. After validating the
+actual producer status, terminal outcome, pipeline identity, boolean
+uncertainty and missing-evidence list, the wrapper supplies an explicit
+normalized reconciliation flag. An explicit True, uncertainty, or
+nonempty missing evidence forces reconciliation; missing/malformed
+uncertainty or missing-evidence list is rejected. Wrapper-generated
+timeout/abnormal-exit recovery stays uncertain. The common classifier
+accepts actual `request-error` failures before any pipeline exists and
+requires no missing evidence for terminal success.
+
+Regression tests use an exact-body copy of image-build's accepted
+`_base_result` contract (without a reconciliation flag), with status
+cases corresponding to `_pipeline_summary` and the producer's request
+exception path. They exercise both observers, completed and failed
+request outcomes, pending/unknown/missing-evidence cases, and genuine
+wrapper timeout recovery. Separate tests cover legacy and normalized
+original claims across matching nonterminal inspection, absent/status-
+only/identical/conflicting later polls, subsequent terminal inspection,
+upgrading old typed/reconciled observations and simultaneous conflicting
+first polls at the actual request-lock boundary.
+
+Only the new checksum-bound command packs both reviewed fixed Python
+bootstrap sources; no script supplied by a caller is accepted. The
+original protected 32 KiB limit and Task C original send-once rules are
+unchanged. These are disposable source tests, not native acceptance.
+
 ## Retained old receipt: incomplete integrity is not success
 
 The **already sent** Project-current wrapper reported the digest and
