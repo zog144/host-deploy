@@ -492,9 +492,9 @@ def test_exact_reviewed_source_tuple_is_required_by_selection(tmp_path, monkeypa
     selected, *_ = fixture_selection(tmp_path, monkeypatch)
     assert selected["sources"] == runtime.SELECTED_SOURCES
     expected = {
-        "root-control": "a672f007b33f83bf70970e3a571fd443366bd93f",
-        "box-control": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
-        "image-build": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
+        "root-control": "35fc1ea8969c97a00cdb4b3c18ecb47bf1f83bbb",
+        "box-control": "b5903779e72ea852a125a268dcd35189339dc4ae",
+        "image-build": "d42703b9e4f7aedce2b9959aab855485add2795a",
     }
     assert {k: v["revision"] for k, v in runtime.SELECTED_SOURCES.items()} == expected
     for role in sorted(expected):
@@ -1032,3 +1032,99 @@ def test_guard_must_be_last_dropin_to_prevent_condition_reset(tmp_path):
     with pytest.raises(composition.CompositionHold,
                        match="ordered after protective startup guard"):
         composition.verify_transaction_guard(directory, release)
+
+
+
+# Earlier reviewed tuple is historical evidence, not a permitted mixed
+# selection for the new compiler candidate.
+_PREVIOUS_SOURCES = {
+    "root-control": {
+        "revision": "a672f007b33f83bf70970e3a571fd443366bd93f",
+        "source_tree_sha256": "c9475afdc6545adc963203f1ef00f77bd5aa542e2bf6337f660a5b64d0800989",
+    },
+    "box-control": {
+        "revision": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
+        "source_tree_sha256": "9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00",
+    },
+    "image-build": {
+        "revision": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
+        "source_tree_sha256": "f17598d995888927e66504d2c1ca65ae675c1efb6ac1208e7de1ce9cdd409688",
+    },
+}
+
+
+@pytest.mark.parametrize("mask", range(1, 8))
+def test_every_previous_and_current_source_tuple_mixture_holds(tmp_path, monkeypatch, mask):
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    assert runtime.validate(selection) == selection
+    for index, role in enumerate(sorted(runtime.COMPONENTS)):
+        if mask & (1 << index):
+            selection["sources"][role] = copy.deepcopy(_PREVIOUS_SOURCES[role])
+    with pytest.raises(runtime.RuntimeHold, match="pinned tuple"):
+        runtime.validate(selection)
+
+
+def test_actual_boot_a_checkouts_pass_and_mixed_checkouts_hold(tmp_path, monkeypatch):
+    repo = Path(__file__).resolve().parents[1]
+    current = {role: repo / "companions" / role for role in runtime.COMPONENTS}
+    previous = {role: repo / "companions" / ("previous-" + role)
+                for role in runtime.COMPONENTS}
+    if not all((path / ".git").exists() for path in [*current.values(), *previous.values()]):
+        pytest.skip("exact old and new companion checkouts supplied by source CI")
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    assert runtime.inspect_sources(selection, current)["status"] == "exact-source-bytes-verified"
+    assert {role: runtime.source_tree_sha256(path) for role, path in previous.items()} == _PREVIOUS_SOURCES
+    for mask in range(1, 8):
+        mixed = dict(current)
+        for index, role in enumerate(sorted(runtime.COMPONENTS)):
+            if mask & (1 << index):
+                mixed[role] = previous[role]
+        with pytest.raises(runtime.RuntimeHold, match="source revision or SHA256 differs"):
+            runtime.inspect_sources(selection, mixed)
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="root-owned disposable installed runtime")
+def test_selected_boot_a_module_bytes_and_record_reject_old_installation(tmp_path, monkeypatch):
+    repo = Path(__file__).resolve().parents[1]
+    paths = {
+        "root-control": "src/zog/root_control/build.py",
+        "box-control": "box-control/src/zog/box_control/build_jobs.py",
+        "image-build": "src/zog/image_build/box_control_adapter.py",
+    }
+    current = {role: repo / "companions" / role / rel for role, rel in paths.items()}
+    previous = {role: repo / "companions" / ("previous-" + role) / rel
+                for role, rel in paths.items()}
+    if not all(path.is_file() for path in [*current.values(), *previous.values()]):
+        pytest.skip("exact old/new companion module bytes supplied by source CI")
+    selection, *_ = fixture_selection(tmp_path, monkeypatch)
+    named = {item["role"]: item for item in selection["files"]}
+    for role, path in current.items():
+        module = named[role + "-module"]
+        data = path.read_bytes()
+        Path(module["path"]).write_bytes(data)
+        module.update(sha256=_sha(data), size=len(data))
+        record = named[role + "-record"]
+        relative = Path(module["path"]).relative_to(Path(record["path"]).parent.parent)
+        encoded = base64.urlsafe_b64encode(bytes.fromhex(module["sha256"])).decode("ascii").rstrip("=")
+        raw = (str(relative) + ",sha256=" + encoded + "," + str(len(data)) + "\n").encode()
+        Path(record["path"]).write_bytes(raw)
+        record.update(sha256=_sha(raw), size=len(raw))
+    selection["installed_tree_sha256"] = runtime._retained_tree_sha256(
+        Path(runtime.RELEASES) / selection["release_id"])
+    # These are actual upstream module bytes in an approved disposable
+    # inventory and RECORD fixture, not a real installed wheel or live service.
+    runtime.inspect_installed(selection, phase="staged")
+    changed = []
+    for role, path in previous.items():
+        if path.read_bytes() == current[role].read_bytes():
+            continue
+        changed.append(role)
+        installed = Path(named[role + "-module"]["path"])
+        installed.write_bytes(path.read_bytes())
+        try:
+            with pytest.raises(runtime.RuntimeHold):
+                runtime.inspect_installed(selection, phase="staged")
+        finally:
+            installed.write_bytes(current[role].read_bytes())
+    assert changed, "at least one critical module differs between selected tuples"
+    runtime.inspect_installed(selection, phase="staged")
