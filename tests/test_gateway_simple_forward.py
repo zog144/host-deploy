@@ -134,6 +134,8 @@ def forwarding(tmp_path, monkeypatch):
             "producer_status": receipt["result"]["status"],
             "result_sha256": "a" * 64,
             "result_bytes": 100,
+            "receipt_sha256": __import__("hashlib").sha256(json.dumps(
+                receipt, sort_keys=True).encode()).hexdigest(),
             "raw_result_digest_verified": True,
             "selected_project_observation_required": True,
             "producer": {
