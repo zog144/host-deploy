@@ -27,7 +27,7 @@ def _canonical(value):
 # Copied from image-build remote_operations.py::_base_result at exact
 # accepted revision 50698663f3ffc7058c85748a455df1531cfd0355 (body unchanged).
 # Keep wrapper-only reconciliation_required OUT of this producer fixture.
-_PRODUCER_BASE = "RESULT_SCHEMA = \"image-build-remote-result-v1\"\nMAX_MISSING = 64\ndef _base_result(\n    request,\n    *,\n    status,\n    terminal_outcome,\n    uncertainty=False,\n    failure=None,\n    missing_evidence=None,\n    allowed_next_operations=None,\n    pipeline_id=None,\n):\n    return {\n        \"schema\": RESULT_SCHEMA,\n        \"operation_id\": request[\"operation_id\"],\n        \"operation_type\": request[\"operation\"],\n        \"source_repository\": request[\"source\"][\"repository\"],\n        \"source_revision\": request[\"source\"][\"revision\"],\n        \"recipe_identity\": None,\n        \"pipeline_id\": pipeline_id,\n        \"attempt_ids\": [],\n        \"selected_generation\": None,\n        \"package\": None,\n        \"stage\": None,\n        \"phase\": None,\n        \"status\": status,\n        \"terminal_outcome\": terminal_outcome,\n        \"failure\": failure,\n        \"controller_jobs\": [],\n        \"log_locators\": [],\n        \"artifacts\": {},\n        \"provenance\": {},\n        \"uncertainty\": bool(uncertainty),\n        \"missing_evidence\": list(missing_evidence or [])[:MAX_MISSING],\n        \"allowed_next_operations\": list(allowed_next_operations or []),\n        \"predecessor\": request.get(\"predecessor\"),\n    }\n"
+_PRODUCER_BASE = "RESULT_SCHEMA = \"image-build-remote-result-v1\"\nMAX_MISSING = 24\ndef _base_result(\n    request,\n    *,\n    status,\n    terminal_outcome,\n    uncertainty=False,\n    failure=None,\n    missing_evidence=None,\n    allowed_next_operations=None,\n    pipeline_id=None,\n):\n    return {\n        \"schema\": RESULT_SCHEMA,\n        \"operation_id\": request[\"operation_id\"],\n        \"operation_type\": request[\"operation\"],\n        \"source_repository\": request[\"source\"][\"repository\"],\n        \"source_revision\": request[\"source\"][\"revision\"],\n        \"recipe_identity\": None,\n        \"pipeline_id\": pipeline_id,\n        \"attempt_ids\": [],\n        \"selected_generation\": None,\n        \"package\": None,\n        \"stage\": None,\n        \"phase\": None,\n        \"status\": status,\n        \"terminal_outcome\": terminal_outcome,\n        \"failure\": failure,\n        \"controller_jobs\": [],\n        \"log_locators\": [],\n        \"artifacts\": {},\n        \"provenance\": {},\n        \"uncertainty\": bool(uncertainty),\n        \"missing_evidence\": list(missing_evidence or [])[:MAX_MISSING],\n        \"allowed_next_operations\": list(allowed_next_operations or []),\n        \"predecessor\": request.get(\"predecessor\"),\n    }\n"
 
 
 def receipt_fixture(tmp_path, *, request_id="a" * 32,
@@ -88,6 +88,16 @@ def receipt_fixture(tmp_path, *, request_id="a" * 32,
             + " result['attempt_ids']=[attempt] if result['pipeline_id'] else []\n"
             " print(json.dumps(result))\n"
         )
+        if producer_case == "request-error":
+            # The real producer's exception path returns _base_result
+            # before any pipeline exists; do not seed a fake pipeline.
+            module.write_text(
+                "import json,sys\nfrom pathlib import Path\n" + _PRODUCER_BASE +
+                "def main():\n"
+                " req=json.loads(Path(sys.argv[-1]).read_text())\n"
+                " print(json.dumps(_base_result(req,status='failed',"
+                "terminal_outcome='request-error',failure={'type':'ImageBuildError',"
+                "'reason':'validated request rejected'},allowed_next_operations=[])))\n")
     git(source, "add", ".")
     git(source, "commit", "-qm", "sha256 recipe snapshot for parser")
     spec, record = selected(root, controller, historic=False)
@@ -779,5 +789,63 @@ def test_original_receipt_claim_creation_is_atomic_under_request_lock(tmp_path):
         "claim"] == winner
     assert json.loads((directory / "dispatch-observation.json").read_text())[
         "observation"] == winner
+    assert load_dispatch(gateway, request["request_id"]) == frozen
+    assert not (directory / "remote-result.json").exists()
+
+
+
+@pytest.mark.parametrize("format", ["legacy", "normalized"])
+@pytest.mark.parametrize("old_latest", ["typed", "reconciled"])
+def test_upgrade_requires_authenticated_original_readback_without_erasing_old_evidence(
+        tmp_path, monkeypatch, format, old_latest):
+    request = approved()
+    _, binding, receipt, _ = receipt_fixture(
+        tmp_path, request_id=request["request_id"])
+    if format == "legacy":
+        receipt = _legacy(receipt)
+    gateway = tmp_path / "gateway"
+    frozen = _gateway_with_frozen_original(gateway, request, binding)
+    _observe_original(gateway, request, binding, receipt, "direct", monkeypatch)
+    directory = gateway / "requests" / request["request_id"]
+    claim_path = directory / "original-ssm-receipt-claim.json"
+    latest_path = directory / "dispatch-observation.json"
+    original = json.loads(claim_path.read_text())["claim"]
+    # Simulate the previous source version's on-disk layout in disposable
+    # fixtures only. No native evidence is removed by the new code.
+    claim_path.unlink()
+    latest = json.loads(latest_path.read_text())
+    if old_latest == "typed":
+        latest["observation"].pop("receipt_sha256")
+    else:
+        latest["observation"] = {
+            "schema": "host-deploy-direct-ssm-observation-v1",
+            "status": "reconciled-project",
+            "command_id": frozen["command_id"],
+            "inspection_command_id": "retained-read-only",
+            "compiler_instance_id": target()["instance_id"],
+            "producer": original["producer"],
+        }
+    latest_path.write_text(json.dumps(latest))
+    prior = latest_path.read_bytes()
+    class Absent:
+        def __init__(self, config):
+            assert config == target()
+        def inspect_command(self, command_id):
+            assert command_id == frozen["command_id"]
+            return None
+    execution.observe_submitted(gateway, request["request_id"], host_factory=Absent)
+    assert not claim_path.exists()
+    assert latest_path.read_bytes() == prior
+    foreign = copy.deepcopy(receipt)
+    foreign["result"]["pipeline_id"] = "e" * 32
+    if format == "normalized":
+        foreign = _rehash(foreign)
+    with pytest.raises(RuntimeError):
+        _observe_original(gateway, request, binding, foreign, "direct", monkeypatch)
+    assert not claim_path.exists()
+    assert latest_path.read_bytes() == prior
+    _observe_original(gateway, request, binding, receipt, "direct", monkeypatch)
+    assert json.loads(claim_path.read_text())["claim"] == original
+    assert latest_path.read_bytes() == prior
     assert load_dispatch(gateway, request["request_id"]) == frozen
     assert not (directory / "remote-result.json").exists()
