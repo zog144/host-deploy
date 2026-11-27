@@ -1050,7 +1050,7 @@ def observe_submitted(gateway_root, request_id, *, host_factory=Host, at=None):
             type(observed) is not dict
             or observed.get("CommandId") != record["command_id"]
             or observed.get("InstanceId") != host_configuration["instance_id"]):
-        raise RuntimeError("SSM original CommandId or compiler instance differs")
+        raise RuntimeError("SSM original CommandId or compiler instance identity differs")
     if binding["schema"] == 4:
         return observe_project_command(gateway_root, request_id, record, binding,
                                        host_configuration, observed, at=at)
@@ -1082,7 +1082,7 @@ def observe_project_command(root, request_id, record, binding, configuration,
             type(observed) is not dict
             or observed.get("CommandId") != record["command_id"]
             or observed.get("InstanceId") != configuration["instance_id"]):
-        raise RuntimeError("SSM original CommandId or compiler instance differs")
+        raise RuntimeError("SSM original CommandId or compiler instance identity differs")
     if observed is None:
         return record_project_poll(root, request_id, observation=None, at=at)
     status = observed.get("Status")
@@ -1098,6 +1098,10 @@ def observe_project_command(root, request_id, record, binding, configuration,
     try:
         receipt = (parser or parse_receipt)(
             observed.get("StandardOutputContent", ""), binding)
+        if (type(receipt) is not dict or receipt.get("schema") != RECEIPT_SCHEMA
+                or receipt.get("request_id") != request_id
+                or receipt.get("remote_request_sha256") != binding["remote_request_sha256"]):
+            raise RuntimeError("producer result differs from original operation")
         claim = (claim_factory or project_receipt_observation)(
             receipt, binding, record["command_id"], configuration["instance_id"])
     except Exception:
