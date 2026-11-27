@@ -968,7 +968,7 @@ def project_current_completion(receipt):
         if credible and (
                 (owned_pipeline and type(outcome) is str
                  and outcome not in ("", "success"))
-                or (pipeline is None and outcome in (None, "failed"))):
+                or (pipeline is None and outcome in (None, "failed", "request-error"))):
             return "failed"
         return "recovery_blocked"
     if status == "released":
