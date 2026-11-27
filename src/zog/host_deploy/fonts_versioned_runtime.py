@@ -31,20 +31,20 @@ SELECTIONS = "/var/lib/zog/compiler-runtime/selections"
 ROOT_CONTROL_BUILD_STATE = "/var/lib/zog/build-resources"
 COMPONENTS = frozenset({"root-control", "box-control", "image-build"})
 # Actual clean Git checkout SHA256 inventories measured by the exact-revision
-# CI on 2026-11-21. These are source bytes, NOT installed module/RECORD hashes.
+# CI #46078519403 on 2026-11-27. These are source bytes, NOT installed module/RECORD hashes.
 # Each new candidate requires an explicit reviewed source change to these pins.
 SELECTED_SOURCES = {
     "root-control": {
-        "revision": "a672f007b33f83bf70970e3a571fd443366bd93f",
-        "source_tree_sha256": "c9475afdc6545adc963203f1ef00f77bd5aa542e2bf6337f660a5b64d0800989",
+        "revision": "35fc1ea8969c97a00cdb4b3c18ecb47bf1f83bbb",
+        "source_tree_sha256": "ede1ddd9c1c23c8e385d4e118f973105925f400a21440dae17d9eb7919b1f672",
     },
     "box-control": {
-        "revision": "ad61fa6a4e9c3176149720868cb008e0512dbec9",
-        "source_tree_sha256": "9bd5484b47e80d96569c7dad4a15b61061919bf013bb0e40e810b906b9c1df00",
+        "revision": "b5903779e72ea852a125a268dcd35189339dc4ae",
+        "source_tree_sha256": "46e0b09fe35a0aff54e5bcf49e4f855b6091705e14723b39df63137b392b5380",
     },
     "image-build": {
-        "revision": "0eeb8a1cc73ae2b8410e29865c36ea1e0643b75a",
-        "source_tree_sha256": "f17598d995888927e66504d2c1ca65ae675c1efb6ac1208e7de1ce9cdd409688",
+        "revision": "d42703b9e4f7aedce2b9959aab855485add2795a",
+        "source_tree_sha256": "580f478d12858f8cef083736169da61f319f65e7ed4014455328a678c4b3eaaf",
     },
 }
 MODULE_PATH_SUFFIXES = {
